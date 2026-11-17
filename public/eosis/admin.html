@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin eOSIS</title><link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="auth-page">
+<section class="auth-card" id="adminLoginCard">
+  <a class="back" href="index.html">← Kembali</a>
+  <div class="school-brand compact"><div class="logo-box"><img data-school-logo alt="Logo sekolah"></div><div class="school-name" data-school-name>SMAN 7 MAROS</div></div>
+  <div class="brand">eOSIS Admin</div><h1>Panel Admin</h1>
+  <p class="muted">Kelola pemilihan melalui sesi admin aktif Super App.</p>
+  <form id="adminLoginForm">
+    <p class="small-note">Masuk ke Super App dengan akun aktif ber-role Super Admin, Kepala Sekolah, atau Operator.</p>
+    <button class="btn primary full" type="submit">Verifikasi Sesi Super App</button><p id="adminMessage" class="message" aria-live="polite"></p>
+  </form>
+</section>
+
+<section class="dashboard hidden" id="dashboard">
+<header class="admin-header">
+  <div class="school-brand"><div class="logo-box"><img data-school-logo alt="Logo sekolah"></div><div><div class="school-name" data-school-name>SMAN 7 MAROS</div><div class="eyebrow">eOSIS ADMIN</div></div></div>
+  <div class="header-actions"><span id="statusBadge" class="status-pill">...</span><button id="adminLogout" class="btn danger small">Keluar</button></div>
+</header>
+
+<nav class="tabs" id="adminTabs">
+  <button class="tab active" data-tab="dashboardTab">Dashboard</button>
+  <button class="tab" data-tab="candidateTab">Kandidat</button>
+  <button class="tab" data-tab="voterTab">Pemilih & Kelas</button>
+  <button class="tab" data-tab="settingsTab">Sekolah & Pengaturan</button>
+  <button class="tab" data-tab="syncTab">Database & Sinkronisasi</button>
+</nav>
+<div id="globalMessage" class="message"></div>
+
+<section id="dashboardTab" class="tab-panel">
+  <div class="stats">
+    <div class="stat"><span>Total Pemilih</span><strong id="totalSiswa">0</strong></div>
+    <div class="stat"><span>Sudah Memilih</span><strong id="sudahMemilih">0</strong></div>
+    <div class="stat"><span>Belum Memilih</span><strong id="belumMemilih">0</strong></div>
+    <div class="stat"><span>Total Suara</span><strong id="totalSuara">0</strong></div>
+  </div>
+  <div class="grid-2">
+    <div class="panel"><div class="section-title"><div><h2>Grafik Suara</h2><p class="muted">Jumlah suara tiap pasangan.</p></div><button id="refreshBtn" class="btn secondary small">↻ Refresh</button></div><canvas id="voteChart" height="260"></canvas></div>
+    <div class="panel"><h2>Persentase Suara</h2><canvas id="voteDoughnut" height="260"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="section-title"><div><h2>Hasil Pemilihan</h2><p class="muted">Data hasil diambil langsung dari Supabase.</p></div>
+      <div class="actions"><button id="exportExcelBtn" class="btn secondary small">⬇ Excel</button><button id="exportPdfBtn" class="btn primary small">⬇ PDF Resmi</button></div>
+    </div>
+    <div id="resultsList" class="results-list"></div>
+  </div>
+  <div class="panel danger-panel">
+    <h2>Kontrol Pemilihan</h2><p class="muted">Tutup pemilihan agar siswa tidak dapat login dan mengirim suara.</p>
+    <div class="actions"><button id="toggleVotingBtn" class="btn primary">...</button><button id="resetBtn" class="btn danger">Reset Semua Hasil</button></div>
+    <p class="small-note">Reset menghapus data suara, mengembalikan semua pemilih menjadi belum memilih, dan mengosongkan waktu memilih.</p>
+  </div>
+</section>
+
+<section id="candidateTab" class="tab-panel hidden">
+  <div class="grid-2">
+    <div class="panel"><h2 id="candidateFormTitle">Tambah Kandidat</h2>
+      <form id="candidateForm">
+        <input type="hidden" id="candidateId">
+        <label>No. Urut</label><input id="candidateNo" type="number" min="1" required>
+        <label>Nama Ketua</label><input id="candidateKetua" required>
+        <label>Nama Wakil</label><input id="candidateWakil" required>
+        <label>Visi</label><textarea id="candidateVisi" rows="4"></textarea>
+        <label>Misi</label><textarea id="candidateMisi" rows="5"></textarea>
+        <label>Slogan</label><input id="candidateSlogan">
+        <label>Foto Kandidat</label>
+        <label class="modern-file-picker" for="candidateFoto">
+          <span class="modern-file-icon">+</span>
+          <span><strong>Pilih foto kandidat</strong><small id="candidatePhotoName">PNG, JPG, atau JPEG</small></span>
+          <input id="candidateFoto" type="file" accept="image/*">
+        </label>
+        <div id="candidatePhotoPreview" class="image-preview hidden"></div>
+        <div class="actions"><button class="btn primary" type="submit">Simpan Kandidat</button><button id="cancelCandidate" class="btn secondary" type="button">Batal</button></div>
+        <p id="candidateMessage" class="message"></p>
+      </form>
+    </div>
+    <div class="panel"><h2>Daftar Kandidat</h2><p class="muted">Data langsung tampil di halaman pemilih.</p><div id="adminCandidates" class="admin-candidates"></div></div>
+  </div>
+</section>
+
+<section id="voterTab" class="tab-panel hidden">
+  <div class="grid-2">
+    <div class="panel">
+      <div class="section-title"><div><h2>Kelas</h2><p class="muted">Kelas yang tersedia terhubung dengan data siswa.</p></div><button id="refreshClassesBtn" class="btn secondary small">↻</button></div>
+      <form id="classForm"><label>Nama Kelas</label><input id="className" placeholder="Contoh: XII IPA 1" required><button class="btn primary full" type="submit">Tambahkan Kelas</button><p id="classMessage" class="message"></p></form>
+      <hr><div id="classList"></div>
+    </div>
+    <div class="panel">
+      <h2>Import Data Pemilih</h2>
+      <div class="notice">
+        <strong>Sumber utama: Data Induk Super App</strong>
+        <p>Sinkronkan siswa berstatus Active yang berada pada kelas tahun ajaran aktif. Status suara yang sudah ada tetap dipertahankan.</p>
+        <button id="syncDataIndukBtn" class="btn primary full" type="button">Sinkronkan dari Data Induk</button>
+        <p id="syncDataIndukMessage" class="message" aria-live="polite"></p>
+      </div>
+      <p class="small-note">Impor Excel di bawah tetap tersedia sebagai opsi manual.</p>
+      <p class="muted">Format Excel wajib: <b>NISN, Nama, Kelas, Tanggal Lahir, Jenis Kelamin</b>.</p>
+      <div class="actions"><button id="templateBtn" class="btn secondary" type="button">⬇ Template Excel</button></div>
+      <label class="modern-file-picker" for="studentFile">
+        <span class="modern-file-icon">+</span>
+        <span><strong>Pilih file Excel pemilih</strong><small id="studentFileName">XLSX, XLS, atau CSV</small></span>
+        <input id="studentFile" type="file" accept=".xlsx,.xls,.csv">
+      </label>
+      <div id="fileSelectedInfo" class="small-note"></div>
+      <button id="generateImportBtn" class="btn primary full" type="button" disabled>Generate Preview</button>
+      <div id="importInfo" class="notice hidden"></div>
+      <div id="importPreview" class="table-wrap"></div>
+      <button id="importBtn" class="btn primary full" type="button" disabled>Import / Sinkronkan ke Supabase</button>
+      <p id="importMessage" class="message"></p>
+      <p class="small-note">Setelah Generate, tabel menampilkan Status Hak Suara dan Waktu Memilih dari database jika data sebelumnya sudah ada.</p>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="section-title"><div><h2>Daftar Pemilih Tersinkron</h2><p class="muted">Status hak suara dan waktu memilih berasal dari Supabase.</p></div><button id="refreshVotersBtn" class="btn secondary small">↻ Refresh Data</button></div>
+    <div id="voterRegistry" class="table-wrap"></div>
+  </div>
+</section>
+
+<section id="settingsTab" class="tab-panel hidden">
+  <div class="panel"><h2>Identitas Sekolah, Periode & Kop PDF</h2><p class="muted">Semua nilai di bawah ini digunakan oleh halaman publik dan PDF hasil.</p>
+    <form id="settingsForm">
+      <div class="grid-2">
+        <div>
+          <label>Nama Sekolah</label><input id="schoolNameInput" required>
+          <label>Nama pada Kop</label><input id="kopNameInput">
+          <label>Subjudul Kop</label><input id="kopSubtitleInput">
+          <label>Alamat</label><textarea id="kopAddressInput" rows="3"></textarea>
+          <label>Kontak</label><input id="kopContactInput">
+          <h3>Masa Bakti Kandidat Terpilih</h3>
+          <div class="grid-2"><div><label>Mulai</label><input id="masaBaktiMulai" type="date"></div><div><label>Selesai</label><input id="masaBaktiSelesai" type="date"></div></div>
+          <h3>Penetapan Hasil</h3>
+          <label>Ditetapkan di</label><input id="ditetapkanDi" placeholder="Contoh: Maros">
+          <label>Tanggal ditetapkan</label><input id="tanggalDitetapkan" type="date">
+        </div>
+        <div>
+          <label>Logo Sekolah</label>
+          <label class="modern-file-picker" for="schoolLogoInput">
+            <span class="modern-file-icon">+</span>
+            <span><strong>Pilih logo sekolah</strong><small id="schoolLogoName">PNG, JPG, atau JPEG</small></span>
+            <input id="schoolLogoInput" type="file" accept="image/*">
+          </label>
+          <div id="schoolLogoPreview" class="image-preview large hidden"></div>
+          <p class="small-note">Logo diperkecil otomatis sebelum disimpan.</p>
+          <h3>Penandatangan</h3>
+          <label>Pembina OSIS — Nama</label><input id="pembinaNama">
+          <label>Pembina OSIS — NIP</label><input id="pembinaNip">
+          <label>Ketua Panitia — Nama</label><input id="ketuaPanitiaNama">
+          <label>Ketua Panitia — NISN</label><input id="ketuaPanitiaNisn">
+          <label>Kepala Sekolah — Nama</label><input id="kepalaSekolahNama">
+          <label>Kepala Sekolah — NIP</label><input id="kepalaSekolahNip">
+        </div>
+      </div>
+      <div class="actions"><button class="btn primary" type="submit">Simpan Pengaturan</button><button id="previewPdfBtn" class="btn secondary" type="button">Preview/Unduh PDF</button></div>
+      <p id="settingsMessage" class="message"></p>
+    </form>
+  </div>
+
+</section>
+
+<section id="syncTab" class="tab-panel hidden">
+  <div class="panel">
+    <div class="section-title"><div><h2>Supabase Database & Sinkronisasi</h2><p class="muted">Pemeriksaan dilakukan melalui RPC aman, bukan akses tabel langsung dari browser.</p></div><button id="syncBtn" class="btn primary small">Cek Sinkronisasi</button></div>
+    <div id="syncResult" class="sync-grid"><div class="empty">Klik "Cek Sinkronisasi".</div></div>
+    <pre id="syncRaw" class="code-box hidden"></pre>
+  </div>
+</section>
+
+</section></main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
+<script type="module" src="js/admin.js"></script>
+</body></html>

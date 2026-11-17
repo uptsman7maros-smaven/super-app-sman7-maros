@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SMAVEN Learn - Pilih Kelas</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f4f8fc;color:#183153;font-family:"Segoe UI",Arial,sans-serif}
+    header{display:flex;align-items:center;gap:12px;padding:18px 28px;background:white;border-bottom:1px solid #dbe5f1}
+    .mark{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,#176bca,#22b7c7);color:white;font-weight:900}
+    header strong,header small{display:block}header strong{font-size:18px}header small{color:#667792}
+    main{max-width:1050px;margin:auto;padding:50px 24px}.hero{text-align:center}.hero h1{margin-bottom:8px;font-size:38px}.hero p{color:#667792}
+    .classes{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:32px}.card{min-height:250px;padding:28px;border:1px solid #dbe5f1;border-radius:22px;background:white;box-shadow:0 16px 40px rgba(31,76,124,.09)}
+    .class-no{display:grid;place-items:center;width:62px;height:62px;border-radius:18px;background:#eaf4ff;color:#176bca;font-size:28px;font-weight:900}
+    .card h2{margin:18px 0 6px}.card p{min-height:42px;color:#667792;line-height:1.45}.subject{display:block;width:100%;margin-top:12px;padding:13px;border:0;border-radius:11px;background:#176bca;color:white;text-decoration:none;text-align:center;font-weight:800}
+    .card.x{border-top:5px solid #22b7c7}.card.xi{border-top:5px solid #ff8066}.card.xii{border-top:5px solid #ffd166}
+    .card.disabled{opacity:.65}.soon{display:block;padding:13px;border-radius:11px;background:#edf2f7;color:#667792;text-align:center;font-weight:800}
+    @media(max-width:700px){main{padding:28px 16px}.hero h1{font-size:29px}.classes{grid-template-columns:1fr}.card{min-height:auto}}
+  </style>
+</head>
+<body>
+  <header><div class="mark">S7</div><div><strong>SMAVEN Learn</strong><small>SUPER APP SMAN 7 MAROS</small></div></header>
+  <main>
+    <section class="hero">
+      <h1>Pilih jenjang kelas</h1>
+      <p>Jelajahi materi interaktif yang disiapkan untuk setiap kelas.</p>
+      <div class="classes">
+        <article class="card x"><div class="class-no">X</div><h2>Kelas X</h2><p>Fase E • Eksponen, Logaritma, dan konsep dasar Matematika.</p><a class="subject" href="eksponen-logaritma/index.html">Matematika: Eksponen &amp; Logaritma</a></article>
+        <article class="card xi"><div class="class-no">XI</div><h2>Kelas XI</h2><p>Materi baru akan ditambahkan bertahap pada modul ini.</p><span class="soon">Belum ada materi</span></article>
+        <article class="card xii"><div class="class-no">XII</div><h2>Kelas XII</h2><p>Materi Bahasa Inggris Narrative Text tersedia.</p><a class="subject" href="narrative-text/index.html#/beranda">Bahasa Inggris: Narrative Text</a></article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

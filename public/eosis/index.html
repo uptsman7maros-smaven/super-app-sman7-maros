@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eOSIS - Pemilihan Ketua OSIS</title><link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="landing">
+    <section class="hero-card">
+      <div class="school-brand">
+        <div class="logo-box"><img data-school-logo alt="Logo sekolah"></div>
+        <div><div class="eyebrow">SISTEM PEMILIHAN DIGITAL</div><div class="school-name" data-school-name>SMAN 7 MAROS</div></div>
+      </div>
+      <div class="brand">eOSIS</div>
+      <div class="status-row"><span data-voting-status class="status-pill open">Memuat status...</span></div><div class="small-note" id="publicPeriod"></div>
+      <span class="badge">PEMILIHAN KETUA DAN WAKIL KETUA OSIS</span>
+      <h1>Suaramu, Pilihanmu,<br><span>Masa Depan Sekolahmu.</span></h1>
+      <p>Gunakan hak suara dengan bijak. Setiap siswa hanya dapat memilih satu kali.</p>
+      <div id="closedNotice" class="notice hidden">Pemilihan sedang ditutup oleh admin. Silakan menunggu pengumuman dari panitia.</div>
+      <div class="actions">
+        <a id="startVoteBtn" class="btn primary" href="login.html">Mulai Memilih</a>
+        <a class="btn secondary" href="admin.html">Panel Admin</a>
+      </div>
+      <div class="info-row"><div><strong>1×</strong><small>Hak suara</small></div><div><strong>🔒</strong><small>Terjaga</small></div><div><strong>✓</strong><small>Terdata</small></div></div>
+    </section>
+  </main>
+  <script type="module">
+    import { loadBranding } from './js/branding.js';
+    try { const s = await loadBranding(); if (s.masa_bakti_mulai || s.masa_bakti_selesai) document.getElementById('publicPeriod').textContent = `Masa Bakti: ${s.masa_bakti_mulai || '-'} s.d. ${s.masa_bakti_selesai || '-'}`; if (!s.pemilihan_aktif) { document.getElementById('startVoteBtn').classList.add('disabled'); document.getElementById('startVoteBtn').removeAttribute('href'); document.getElementById('closedNotice').classList.remove('hidden'); } } catch(e) { console.error(e); }
+  </script>
+</body></html>

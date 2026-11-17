@@ -1,0 +1,10 @@
+.inv-read-only .inv-hero-actions .inv-btn-light,
+.inv-read-only .inv-panel-heading .inv-btn-primary,
+.inv-read-only .inv-quick-grid,
+.inv-read-only .inv-heading-actions,
+.inv-read-only .inv-issue select,
+.inv-read-only .inv-small-btn,
+.inv-read-only .inv-row-actions button[title="Edit aset"],
+.inv-read-only .inv-panel .inv-btn.inv-full {
+  display: none !important;
+}

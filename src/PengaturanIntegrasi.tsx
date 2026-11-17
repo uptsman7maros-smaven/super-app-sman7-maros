@@ -1,0 +1,373 @@
+import React, { useCallback, useEffect, useState } from "react";
+import { supabase } from "./lib/supabase";
+import { useSchoolContext } from "./context/useSchoolContext";
+import { logAppActivity } from "./services/activityLogService";
+import {
+  getMaintenanceStatus,
+  subscribeToMaintenanceStatus,
+} from "./services/maintenanceService";
+import type { ModuleSetting, SchoolSettings } from "./services/masterDataService";
+import "./PengaturanIntegrasi.css";
+
+type SchoolSettingsForm = Omit<SchoolSettings, "id"> & { id?: string };
+type ServiceItem = { id: string; service_name: string; service_url: string; status: string; notes: string };
+type ActivityItem = {
+  id?: string;
+  created_at?: string;
+  actor_label?: string;
+  actor_id?: string;
+  action?: string;
+  module_key?: string;
+  details?: string;
+};
+
+const initialSettings: SchoolSettingsForm = {
+  school_name: "SMAN 7 Maros",
+  npsn: "40308320",
+  academic_year: "2026/2027",
+  logo_url: "",
+  letterhead: ""
+};
+
+export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpdated?: () => void }) {
+  const {
+    currentUser,
+    schoolSettings,
+    activeAcademicYear,
+    moduleSettings,
+    contextError,
+    contextLoading,
+    refreshSchoolContext,
+  } = useSchoolContext();
+  const [tab, setTab] = useState("identitas");
+  const [settingsDraft, setSettingsDraft] = useState<SchoolSettingsForm | null>(null);
+  const settings = settingsDraft ?? (schoolSettings
+    ? {
+      ...schoolSettings,
+      academic_year: activeAcademicYear?.name ?? schoolSettings.academic_year,
+    }
+    : initialSettings);
+  const modules: ModuleSetting[] = moduleSettings;
+  const [services, setServices] = useState<ServiceItem[]>([]);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [newService, setNewService] = useState({ service_name: "", service_url: "", notes: "" });
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState("");
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [maintenanceError, setMaintenanceError] = useState("");
+  const isSuperAdmin = currentUser?.role === "super_admin";
+
+  const notify = (s: string) => { setMessage(s); window.setTimeout(() => setMessage(""), 3500); };
+  const auditSettings = async (action: string, details: string): Promise<string> => {
+    try {
+      await logAppActivity({
+        actorId: currentUser?.id,
+        actorLabel: currentUser?.full_name || currentUser?.username,
+        action,
+        moduleKey: "Pengaturan",
+        details,
+      });
+      return "";
+    } catch (error) {
+      return `Perubahan tersimpan, tetapi audit aktivitas gagal: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
+
+  const loadAll = useCallback(async () => {
+    setBusy(true);
+    try {
+      const [sv, a] = await Promise.all([
+        supabase.from("app_service_registry").select("*").order("service_name"),
+        supabase.from("app_activity_logs").select("*").order("created_at", { ascending: false }).limit(50)
+      ]);
+      if (sv.data) setServices(sv.data as ServiceItem[]);
+      if (a.data) setActivity(a.data as ActivityItem[]);
+      const errors = [sv.error, a.error].filter(Boolean);
+      if (errors.length) notify(`Sebagian data belum dapat dimuat. Pastikan tabel tersedia dan akses sesuai. ${errors[0]!.message}`);
+    } catch (error) {
+      notify(error instanceof Error ? `Data pengaturan gagal dimuat: ${error.message}` : "Data pengaturan gagal dimuat.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadAll(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAll]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setMaintenanceLoading(true);
+      setMaintenanceError("");
+      void getMaintenanceStatus()
+        .then((status) => {
+          if (!active) return;
+          setMaintenanceEnabled(status.is_active);
+          setMaintenanceMessage(status.message);
+        })
+        .catch((error: unknown) => {
+          if (!active) return;
+          setMaintenanceError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          if (active) setMaintenanceLoading(false);
+        });
+    }, 0);
+    const unsubscribe = subscribeToMaintenanceStatus(
+      (status) => {
+        if (!active) return;
+        setMaintenanceEnabled(status.is_active);
+        setMaintenanceMessage(status.message);
+        setMaintenanceError("");
+      },
+      (error) => {
+        if (active) setMaintenanceError(error.message);
+      },
+    );
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [currentUser?.id, isSuperAdmin]);
+
+  async function saveSettings(e: React.FormEvent) {
+    e.preventDefault(); setBusy(true);
+    try {
+      const { error } = await supabase.from("school_settings").upsert({
+        ...settings, updated_at: new Date().toISOString()
+      });
+      if (error) throw error;
+      const auditWarning = await auditSettings("Identitas sekolah diperbarui", `Nama sekolah: ${settings.school_name}`);
+      notify(auditWarning || "Identitas sekolah berhasil disimpan.");
+      await refreshSchoolContext();
+      setSettingsDraft(null);
+      await loadAll();
+    } catch (error) {
+      notify(error instanceof Error ? `Gagal menyimpan: ${error.message}` : "Identitas sekolah gagal disimpan.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleModule(item: ModuleSetting) {
+    try {
+      const { error } = await supabase.from("app_module_settings").update({ is_enabled: !item.is_enabled }).eq("id", item.id);
+      if (error) throw error;
+      const auditWarning = await auditSettings(
+        item.is_enabled ? "Modul dinonaktifkan" : "Modul diaktifkan",
+        item.label,
+      );
+      if (onModulesUpdated) {
+        await onModulesUpdated();
+      } else {
+        await refreshSchoolContext();
+      }
+      await loadAll();
+      notify(auditWarning || `${item.label} diperbarui.`);
+    } catch (error) {
+      notify(error instanceof Error ? `Gagal mengubah modul: ${error.message}` : "Modul gagal diperbarui.");
+    }
+  }
+
+  async function addService(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      const { error } = await supabase.from("app_service_registry").insert({ ...newService, status: "Belum diverifikasi" });
+      if (error) throw error;
+      const auditWarning = await auditSettings("Layanan integrasi ditambahkan", newService.service_name);
+      setNewService({ service_name: "", service_url: "", notes: "" });
+      await loadAll();
+      notify(auditWarning || "Layanan ditambahkan.");
+    } catch (error) {
+      notify(error instanceof Error ? `Gagal menambahkan layanan: ${error.message}` : "Layanan gagal ditambahkan.");
+    }
+  }
+
+  async function removeService(id: string) {
+    if (!window.confirm("Hapus entri layanan ini?")) return;
+    try {
+      const { error } = await supabase.from("app_service_registry").delete().eq("id", id);
+      if (error) throw error;
+      const auditWarning = await auditSettings("Layanan integrasi dihapus", `ID layanan ${id}`);
+      await loadAll();
+      notify(auditWarning || "Layanan dihapus.");
+    } catch (error) {
+      notify(error instanceof Error ? `Gagal menghapus: ${error.message}` : "Layanan gagal dihapus.");
+    }
+  }
+
+  async function saveMaintenanceSettings(e: React.FormEvent) {
+    e.preventDefault();
+    if (!isSuperAdmin || !currentUser) {
+      setMaintenanceError("Hanya Super Admin yang dapat mengubah status pemeliharaan.");
+      return;
+    }
+
+    const trimmedMessage = maintenanceMessage.trim();
+    if (!trimmedMessage) {
+      setMaintenanceError("Isi pesan pemeliharaan sebelum menyimpan.");
+      return;
+    }
+
+    setMaintenanceSaving(true);
+    setMaintenanceError("");
+    try {
+      const { data, error } = await supabase
+        .from("app_maintenance_status")
+        .update({
+          is_active: maintenanceEnabled,
+          message: trimmedMessage,
+          updated_at: new Date().toISOString(),
+          updated_by: currentUser.id,
+        })
+        .eq("id", 1)
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("Status pemeliharaan tidak berubah. Periksa izin akun dan migrasi database.");
+
+      const savedStatus = await getMaintenanceStatus();
+      setMaintenanceEnabled(savedStatus.is_active);
+      setMaintenanceMessage(savedStatus.message);
+      const auditWarning = await auditSettings(
+        "Status pemeliharaan aplikasi diperbarui",
+        savedStatus.is_active ? "Pemberitahuan pemeliharaan ditampilkan" : "Pemberitahuan pemeliharaan dinonaktifkan",
+      );
+      notify(auditWarning || (savedStatus.is_active
+        ? "Pemberitahuan pemeliharaan ditampilkan untuk seluruh pengguna."
+        : "Pemberitahuan pemeliharaan dinonaktifkan."));
+    } catch (error) {
+      setMaintenanceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setMaintenanceSaving(false);
+    }
+  }
+
+  async function createBackupManifest() {
+    const payload = {
+      generated_at: new Date().toISOString(),
+      note: "Manifest metadata saja. Backup penuh database harus dibuat dari Supabase Dashboard.",
+      school_settings: settings, modules, services
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `manifest-backup-superapp-${new Date().toISOString().slice(0,10)}.json`; a.click();
+    URL.revokeObjectURL(url);
+    notify("Manifest metadata diunduh. Ini bukan backup penuh database.");
+  }
+
+  const tabs = [
+    ["identitas", "Identitas sekolah"], ["modul", "Modul & menu"], ["integrasi", "Pusat integrasi"],
+    ["aktivitas", "Log aktivitas"], ["backup", "Backup & sistem"]
+  ];
+
+  return <div className="pi-wrap">
+    <header className="pi-hero">
+      <div className="pi-orb pi-orb-one" /><div className="pi-orb pi-orb-two" />
+      <div className="pi-hero-content">
+        <span className="pi-eyebrow">PUSAT KENDALI SUPER APP</span>
+        <h1>Pengaturan & Integrasi</h1>
+        <p>Kelola identitas sekolah, modul, layanan, dan pemantauan sistem dalam satu tempat.</p>
+        <div className="pi-hero-pills"><span>● Supabase</span><span>● Modular</span><span>● SMAN 7 Maros</span></div>
+      </div>
+      <div className="pi-hero-icon">⚙️</div>
+    </header>
+
+    <div className="pi-stat-grid">
+      <div className="pi-stat purple"><span>Modul aktif</span><strong>{modules.filter(x => x.is_enabled).length}</strong><small>Dari {modules.length} terdaftar</small></div>
+      <div className="pi-stat blue"><span>Layanan tercatat</span><strong>{services.length}</strong><small>Di pusat integrasi</small></div>
+      <div className="pi-stat green"><span>Nama sekolah</span><strong className="pi-school-stat">{settings.school_name || "Belum diatur"}</strong><small>NPSN {settings.npsn || "—"}</small></div>
+    </div>
+
+    <nav className="pi-tabs">{tabs.map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}</nav>
+    {message && <div className="pi-toast" role="status">{message}</div>}
+    {contextError && <div className="pi-toast" role="alert">{contextError}</div>}
+    {(busy || contextLoading) && <div className="pi-loading"><span /> Memuat atau menyimpan data…</div>}
+
+    {tab === "identitas" && <section className="pi-panel pi-animate">
+      <div className="pi-section-title"><div><span className="pi-kicker">PROFIL SEKOLAH</span><h2>Identitas & kop surat</h2></div><span className="pi-icon-chip">🏫</span></div>
+      <form onSubmit={saveSettings} className="pi-form">
+        <label>Nama sekolah<input value={settings.school_name} onChange={e => setSettingsDraft({...settings, school_name:e.target.value})} required /></label>
+        <label>NPSN<input value={settings.npsn} onChange={e => setSettingsDraft({...settings, npsn:e.target.value})} /></label>
+        <label>Tahun ajaran<input value={settings.academic_year} onChange={e => setSettingsDraft({...settings, academic_year:e.target.value})} placeholder="2026/2027" /></label>
+        <label>URL logo sekolah<input value={settings.logo_url} onChange={e => setSettingsDraft({...settings, logo_url:e.target.value})} placeholder="https://... atau URL Supabase Storage" /></label>
+        <label className="pi-wide">Teks kop surat<textarea rows={4} value={settings.letterhead} onChange={e => setSettingsDraft({...settings, letterhead:e.target.value})} placeholder="Nama instansi, alamat, telepon, email..." /></label>
+        {settings.logo_url && <div className="pi-logo-preview"><img src={settings.logo_url} alt="Pratinjau logo sekolah" onError={e => (e.currentTarget.style.display = "none")} /><span>Pratinjau logo</span></div>}
+        <div className="pi-wide pi-actions"><button className="pi-primary" disabled={busy}>Simpan identitas</button><button type="button" className="pi-secondary" onClick={() => window.print()}>Cetak pratinjau</button></div>
+      </form>
+    </section>}
+
+    {tab === "modul" && <section className="pi-panel pi-animate">
+      <div className="pi-section-title"><div><span className="pi-kicker">KONFIGURASI APLIKASI</span><h2>Modul & menu aktif</h2><p>Status tersinkron dengan navigasi. Modul nonaktif disembunyikan dari menu; modul yang belum tersedia tetap tidak dapat dibuka.</p></div><span className="pi-icon-chip">🧩</span></div>
+      {modules.length === 0 ? <div className="pi-empty">Belum ada modul terdaftar atau akses tabel belum tersedia.</div> : <div className="pi-module-grid">{modules.map(m => <div className="pi-module" key={m.id}><div className="pi-module-top"><span className="pi-module-dot">{m.is_enabled ? "✓" : "–"}</span><span className={m.is_enabled ? "pi-status on" : "pi-status off"}>{m.is_enabled ? "Aktif" : "Nonaktif"}</span></div><h3>{m.label}</h3><p>Kunci: <code>{m.module_key}</code></p><button className={m.is_enabled ? "pi-toggle enabled" : "pi-toggle"} onClick={() => void toggleModule(m)}>{m.is_enabled ? "Nonaktifkan" : "Aktifkan"}</button></div>)}</div>}
+    </section>}
+
+    {tab === "integrasi" && <section className="pi-panel pi-animate">
+      <div className="pi-section-title"><div><span className="pi-kicker">REGISTRY LAYANAN</span><h2>Pusat integrasi</h2><p>Daftarkan URL layanan dan modul eksternal. Status layanan belum diperiksa otomatis.</p></div><span className="pi-icon-chip">🔗</span></div>
+      <form className="pi-form pi-service-form" onSubmit={addService}>
+        <label>Nama layanan<input required value={newService.service_name} onChange={e => setNewService({...newService,service_name:e.target.value})} placeholder="Contoh: LMS Sekolah" /></label>
+        <label>URL layanan<input required type="url" value={newService.service_url} onChange={e => setNewService({...newService,service_url:e.target.value})} placeholder="https://..." /></label>
+        <label className="pi-wide">Keterangan<input value={newService.notes} onChange={e => setNewService({...newService,notes:e.target.value})} placeholder="Kegunaan atau penanggung jawab" /></label>
+        <div className="pi-wide"><button className="pi-primary">Tambah layanan</button></div>
+      </form>
+      <div className="pi-service-list">{services.map(s => <div className="pi-service" key={s.id}><div className="pi-service-symbol">↗</div><div className="pi-service-info"><strong>{s.service_name}</strong><a href={s.service_url} target="_blank" rel="noreferrer">{s.service_url}</a><small>{s.notes || "Tidak ada keterangan"} · {s.status}</small></div><button className="pi-danger" onClick={() => void removeService(s.id)}>Hapus</button></div>)}</div>
+    </section>}
+
+    {tab === "aktivitas" && <section className="pi-panel pi-animate">
+      <div className="pi-section-title"><div><span className="pi-kicker">AUDIT & KEAMANAN</span><h2>Log aktivitas</h2><p>Menampilkan log yang sudah ditulis ke tabel audit. Log otomatis membutuhkan integrasi tambahan pada aksi-aksi modul.</p></div><span className="pi-icon-chip">🛡️</span></div>
+      {activity.length === 0 ? <div className="pi-empty">Belum ada log aktivitas atau akses tabel belum tersedia.</div> : <div className="pi-table-scroll"><table className="pi-table"><thead><tr><th>Waktu</th><th>Pengguna</th><th>Aksi</th><th>Modul</th><th>Detail</th></tr></thead><tbody>{activity.map((a,i) => <tr key={a.id || i}><td>{a.created_at ? new Date(a.created_at).toLocaleString("id-ID") : "—"}</td><td>{a.actor_label || a.actor_id || "Sistem"}</td><td>{a.action}</td><td>{a.module_key || "—"}</td><td>{a.details || "—"}</td></tr>)}</tbody></table></div>}
+    </section>}
+
+    {tab === "backup" && <section className="pi-panel pi-animate">
+      <div className="pi-section-title"><div><span className="pi-kicker">KEANDALAN SISTEM</span><h2>Backup & pemantauan</h2><p>Gunakan backup database resmi untuk pemulihan penuh. Ekspor di bawah hanya berisi metadata pengaturan dan registry.</p></div><span className="pi-icon-chip">💾</span></div>
+      <div className="pi-backup-grid"><div className="pi-backup-card"><span>📦</span><h3>Ekspor metadata</h3><p>Unduh pengaturan sekolah, status modul, dan daftar layanan dalam format JSON.</p><button className="pi-primary" onClick={() => void createBackupManifest()}>Unduh manifest JSON</button></div><div className="pi-backup-card warning"><span>🔐</span><h3>Backup penuh database</h3><p>Buka dashboard Supabase dan gunakan fasilitas backup/ekspor database sesuai paket dan akses proyek Anda.</p><a className="pi-secondary link-button" href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Buka Supabase Dashboard ↗</a></div><div className="pi-backup-card"><span>🩺</span><h3>Status koneksi</h3><p>Memuat status dari keberhasilan akses tabel, bukan pemeriksaan uptime layanan eksternal.</p><button className="pi-secondary" onClick={() => void loadAll()}>Periksa koneksi database</button></div></div>
+      <section className="maintenance-settings" aria-labelledby="maintenance-settings-title">
+        <h3 id="maintenance-settings-title">Pemberitahuan pemeliharaan aplikasi</h3>
+        <p>Aktifkan saat ada perbaikan atau perubahan penting. Pesan akan tampil untuk semua warga sekolah dan diperbarui langsung; aplikasi tetap dapat diakses.</p>
+        {isSuperAdmin ? (
+          <form onSubmit={(e) => void saveMaintenanceSettings(e)}>
+            <label className="maintenance-toggle">
+              <input
+                type="checkbox"
+                checked={maintenanceEnabled}
+                onChange={(e) => setMaintenanceEnabled(e.target.checked)}
+                disabled={maintenanceLoading || maintenanceSaving}
+              />
+              Tampilkan pemberitahuan pemeliharaan
+            </label>
+            <label>
+              Pesan untuk pengguna
+              <textarea
+                rows={3}
+                value={maintenanceMessage}
+                onChange={(e) => setMaintenanceMessage(e.target.value)}
+                placeholder="Contoh: Aplikasi sedang diperbaiki. Silakan coba kembali beberapa saat lagi."
+                required
+                disabled={maintenanceLoading || maintenanceSaving}
+              />
+            </label>
+            {maintenanceError && <p className="maintenance-error" role="alert">{maintenanceError}</p>}
+            <div className="maintenance-actions">
+              <button className="pi-primary" disabled={maintenanceLoading || maintenanceSaving}>
+                {maintenanceLoading ? "Memuat status..." : maintenanceSaving ? "Menyimpan..." : "Simpan status"}
+              </button>
+              <small>Perubahan hanya dapat dilakukan oleh Super Admin.</small>
+            </div>
+          </form>
+        ) : (
+          <p>Pengelolaan pemberitahuan ini hanya tersedia untuk Super Admin.</p>
+        )}
+      </section>
+      <div className="pi-note"><strong>Catatan:</strong> manifest JSON bukan backup penuh. Jangan menyimpan service-role key atau kredensial rahasia di browser maupun file ekspor.</div>
+    </section>}
+    <footer className="pi-footer">Super App SMAN 7 Maros <span>•</span> Pusat Pengaturan & Integrasi</footer>
+  </div>;
+}

@@ -1,0 +1,36 @@
+.lib-no-catalog[data-tab="katalog"] .lib-actions .lib-primary,
+.lib-no-catalog[data-tab="anggota"] .lib-actions .lib-primary,
+.lib-read-only .lib-actions .lib-primary,
+.lib-read-only .lib-return,
+.lib-read-only .lib-reminder button {
+  display: none;
+}
+
+.lib-student .lib-tabs {
+  display: none;
+}
+
+.lib-student .lib-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lib-student .lib-stat:nth-child(n + 3) {
+  display: none;
+}
+
+.lib-student-hint {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid #dfe8ff;
+  border-radius: 12px;
+  color: #4a5d91;
+  background: #f2f6ff;
+  font-size: 12px;
+}
+
+.lib-student-hint svg {
+  flex: 0 0 auto;
+  color: #6554c7;
+}

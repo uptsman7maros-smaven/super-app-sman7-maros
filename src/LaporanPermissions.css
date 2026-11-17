@@ -1,0 +1,11 @@
+.la-read-only .la-quick-panel,
+.la-read-only .la-panel-head .la-btn-primary,
+.la-read-only .la-delete {
+  display: none;
+}
+
+.la-read-only-notice {
+  border: 1px solid #dce5f8;
+  background: #f1f6ff;
+  color: #35558a;
+}

@@ -1,0 +1,9 @@
+.ak-read-only .ak-hero-actions button:first-child,
+.ak-read-only .ak-empty button,
+.ak-read-only .ak-record-actions button {
+  display: none;
+}
+
+.ak-no-delete .ak-record-actions button:last-child {
+  display: none;
+}
