@@ -109,7 +109,7 @@ export default function KesiswaanBK({
   const config = SECTION_BY_KEY[active];
   const isSensitive = config.private === true;
   const canSeePrivateNotes = role === "super_admin" || role === "guru_bk";
-  const canManageAssignments = role === "super_admin" || role === "operator";
+  const canManageAssignments = role === "super_admin" || role === "operator" || role === "guru_bk";
   const canSeeAlerts = role === "guru_bk" || role === "super_admin" || role === "operator";
   const canSeeSection = moduleSections.some(section => section.key === active)
     && (active !== "Rencana Karir" || canSeePrivateNotes);
