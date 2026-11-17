@@ -8,6 +8,8 @@ export type MaintenanceStatus = {
   updated_by: string | null;
 };
 
+let maintenanceChannelId = 0;
+
 function isMaintenanceStatus(value: unknown): value is MaintenanceStatus {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
@@ -38,7 +40,7 @@ export function subscribeToMaintenanceStatus(
   onError: (error: Error) => void,
 ) {
   const channel = supabase
-    .channel("app-maintenance-status")
+    .channel(`app-maintenance-status-${++maintenanceChannelId}`)
     .on(
       "postgres_changes",
       {
