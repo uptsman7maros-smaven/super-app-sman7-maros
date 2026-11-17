@@ -9,6 +9,8 @@ type LoginProps = {
   allowedRoles?: string[];
   loginTheme: LoginTheme;
   onThemeChange: (theme: LoginTheme) => void;
+  maintenanceActive: boolean;
+  maintenanceMessage: string;
   onLoginSuccess: (user: {
     id: string;
     username: string;
@@ -21,6 +23,8 @@ export default function Login({
   allowedRoles = [],
   loginTheme,
   onThemeChange,
+  maintenanceActive,
+  maintenanceMessage,
   onLoginSuccess,
 }: LoginProps) {
   const [username, setUsername] = useState("");
@@ -132,6 +136,13 @@ export default function Login({
         throw new Error("Akun ini tidak memiliki akses untuk portal login yang dipilih.");
       }
 
+      if (maintenanceActive && profile.role !== "super_admin") {
+        const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+        if (signOutError) throw signOutError;
+        setErrorMessage(maintenanceMessage);
+        return;
+      }
+
       onLoginSuccess({
         id: data.user.id,
         username: data.user.username,
@@ -158,24 +169,6 @@ export default function Login({
       <div className="login-card-watermark" aria-hidden="true">
         <img src="/login-school-photo.jpg" alt="" />
       </div>
-      <div className="login-theme-picker" aria-label="Pilih warna halaman login">
-        <span>Warna tema</span>
-        <div className="login-theme-options">
-          {loginThemes.map((theme) => (
-            <button
-              key={theme.id}
-              type="button"
-              className={loginTheme === theme.id ? "active" : ""}
-              style={{ "--theme-preview": theme.color } as React.CSSProperties}
-              onClick={() => selectLoginTheme(theme.id)}
-              aria-label={`Gunakan tema ${theme.label}`}
-              aria-pressed={loginTheme === theme.id}
-              title={theme.label}
-            />
-          ))}
-        </div>
-      </div>
-
       <section className="login-showcase" aria-label="Portal SMAN 7 Maros">
         <div className="login-showcase-backdrop" aria-hidden="true" />
         <div className="login-showcase-content">
@@ -207,6 +200,15 @@ export default function Login({
         <p className="login-card-subtitle">
           Login {moduleName} untuk mengakses layanan digital sekolah.
         </p>
+        {maintenanceActive && (
+          <div className="login-maintenance-notice" role="status">
+            <strong>Mode pemeliharaan aktif</strong>
+            <span>
+              Super Admin dapat masuk melalui portal Super App untuk mengelola
+              pemeliharaan. Akses pengguna lain sementara dibatasi.
+            </span>
+          </div>
+        )}
 
         <form onSubmit={handleLogin} className="login-form">
           <label htmlFor="username">{identifierLabel}</label>
@@ -259,6 +261,23 @@ export default function Login({
         <p className="login-footer">
           Akses hanya untuk akun sekolah yang telah diaktifkan administrator.
         </p>
+        <div className="login-theme-picker" aria-label="Pilih warna halaman login">
+          <span>Warna tema</span>
+          <div className="login-theme-options">
+            {loginThemes.map((theme) => (
+              <button
+                key={theme.id}
+                type="button"
+                className={loginTheme === theme.id ? "active" : ""}
+                style={{ "--theme-preview": theme.color } as React.CSSProperties}
+                onClick={() => selectLoginTheme(theme.id)}
+                aria-label={`Gunakan tema ${theme.label}`}
+                aria-pressed={loginTheme === theme.id}
+                title={theme.label}
+              />
+            ))}
+          </div>
+        </div>
       </section>
     </main>
   );

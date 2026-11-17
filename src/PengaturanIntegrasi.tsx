@@ -331,7 +331,7 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
       <div className="pi-backup-grid"><div className="pi-backup-card"><span>📦</span><h3>Ekspor metadata</h3><p>Unduh pengaturan sekolah, status modul, dan daftar layanan dalam format JSON.</p><button className="pi-primary" onClick={() => void createBackupManifest()}>Unduh manifest JSON</button></div><div className="pi-backup-card warning"><span>🔐</span><h3>Backup penuh database</h3><p>Buka dashboard Supabase dan gunakan fasilitas backup/ekspor database sesuai paket dan akses proyek Anda.</p><a className="pi-secondary link-button" href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Buka Supabase Dashboard ↗</a></div><div className="pi-backup-card"><span>🩺</span><h3>Status koneksi</h3><p>Memuat status dari keberhasilan akses tabel, bukan pemeriksaan uptime layanan eksternal.</p><button className="pi-secondary" onClick={() => void loadAll()}>Periksa koneksi database</button></div></div>
       <section className="maintenance-settings" aria-labelledby="maintenance-settings-title">
         <h3 id="maintenance-settings-title">Pemberitahuan pemeliharaan aplikasi</h3>
-        <p>Aktifkan saat ada perbaikan atau perubahan penting. Pesan akan tampil untuk semua warga sekolah dan diperbarui langsung; aplikasi tetap dapat diakses.</p>
+        <p>Aktifkan saat ada perbaikan atau pembaruan. Pengguna selain Super Admin akan terkunci dari aplikasi dan melihat pesan ini; Super Admin tetap dapat masuk untuk menonaktifkan mode pemeliharaan.</p>
         {isSuperAdmin ? (
           <form onSubmit={(e) => void saveMaintenanceSettings(e)}>
             <label className="maintenance-toggle">
@@ -349,7 +349,7 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
                 rows={3}
                 value={maintenanceMessage}
                 onChange={(e) => setMaintenanceMessage(e.target.value)}
-                placeholder="Contoh: Aplikasi sedang diperbaiki. Silakan coba kembali beberapa saat lagi."
+                placeholder="Contoh: Aplikasi sedang dalam perbaikan atau pembaruan. Silakan cek kembali beberapa saat lagi."
                 required
                 disabled={maintenanceLoading || maintenanceSaving}
               />

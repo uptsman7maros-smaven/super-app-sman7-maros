@@ -31,6 +31,61 @@
   border-color: #efc5c1;
 }
 
+.maintenance-lock-screen {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  background: #f5f7f5;
+  color: #173d36;
+}
+
+.maintenance-lock-card {
+  width: min(520px, calc(100% - 32px));
+  box-sizing: border-box;
+  margin: auto;
+  padding: 36px;
+  border: 1px solid #e1e9e4;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(23, 61, 54, .1);
+  text-align: center;
+}
+
+.maintenance-lock-icon {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 16px;
+  background: #eaf4ef;
+  color: #0b6951;
+  font-size: 25px;
+}
+
+.maintenance-lock-card h1 {
+  margin: 18px 0 10px;
+  font-size: 24px;
+}
+
+.maintenance-lock-card p {
+  color: #526b66;
+  line-height: 1.6;
+}
+
+.maintenance-lock-error {
+  color: #a32626 !important;
+}
+
+.maintenance-lock-card button {
+  margin-top: 12px;
+  padding: 11px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: #0b6951;
+  color: #fff;
+  font-weight: 700;
+}
+
 .maintenance-settings {
   margin-top: 20px;
   padding: 20px;

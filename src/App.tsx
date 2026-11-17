@@ -79,6 +79,11 @@ import { useSchoolContext } from "./context/useSchoolContext";
 import { logAppActivity } from "./services/activityLogService";
 import MaintenanceBanner from "./MaintenanceBanner";
 import {
+  getMaintenanceStatus,
+  subscribeToMaintenanceStatus,
+  type MaintenanceStatus,
+} from "./services/maintenanceService";
+import {
   loadDashboardFeed,
   type DashboardActivity,
   type DashboardFeed,
@@ -500,6 +505,8 @@ function AppContent() {
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
   const [sessionRetry, setSessionRetry] = useState(0);
+  const [maintenanceStatus, setMaintenanceStatus] = useState<MaintenanceStatus | null>(null);
+  const [maintenanceStatusLoaded, setMaintenanceStatusLoaded] = useState(false);
   const [dashboardStats, setDashboardStats] = useState(initialDashboardStats);
   const [dashboardRefreshing, setDashboardRefreshing] = useState(false);
   const [dashboardReload, setDashboardReload] = useState(0);
@@ -552,7 +559,41 @@ function AppContent() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
-  
+
+useEffect(() => {
+  let active = true;
+  let receivedRealtimeUpdate = false;
+
+  void getMaintenanceStatus()
+    .then((status) => {
+      if (active && !receivedRealtimeUpdate) setMaintenanceStatus(status);
+    })
+    .catch((error: unknown) => {
+      console.error("Status pemeliharaan untuk akses gagal dimuat:", error);
+    })
+    .finally(() => {
+      if (active) setMaintenanceStatusLoaded(true);
+    });
+
+  const unsubscribe = subscribeToMaintenanceStatus(
+    (status) => {
+      receivedRealtimeUpdate = true;
+      if (active) {
+        setMaintenanceStatus(status);
+        setMaintenanceStatusLoaded(true);
+      }
+    },
+    (error) => {
+      console.error("Sinkronisasi mode pemeliharaan untuk akses gagal:", error);
+    },
+  );
+
+  return () => {
+    active = false;
+    unsubscribe();
+  };
+}, []);
+
 useEffect(() => {
   if (!toast) return;
 
@@ -1539,6 +1580,20 @@ useEffect(() => {
   };
 }, [sessionRetry, setCurrentUser]);
 
+async function signOutFromMaintenanceLock() {
+  try {
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Keluar dari aplikasi saat pemeliharaan gagal:", error);
+    setAuthError(
+      error instanceof Error
+        ? error.message
+        : "Tidak dapat keluar dari aplikasi. Silakan coba kembali.",
+    );
+  }
+}
+
 useEffect(() => {
   if (!currentUser) {
     setDashboardStats(initialDashboardStats);
@@ -1970,11 +2025,11 @@ const selectedReadyStudentCount = studentGeneratorRows.filter(
   (row) => row.status === "ready" && studentGeneratorSelectedIds.includes(row.id),
 ).length;
 
-  if (!authReady) {
+  if (!authReady || !maintenanceStatusLoaded) {
   return (
     <div className="auth-loading">
       <MaintenanceBanner />
-      Memeriksa sesi login...
+      Memeriksa sesi dan status pemeliharaan...
     </div>
   );
 }
@@ -2029,6 +2084,8 @@ if (!currentUser) {
         moduleName={portal.label === "Super App" ? "Super App SMAN 7 MAROS" : `Portal ${portal.label}`}
         allowedRoles={portal.roles}
         loginTheme={loginTheme}
+        maintenanceActive={maintenanceStatus?.is_active ?? false}
+        maintenanceMessage={maintenanceStatus?.message ?? "Aplikasi sedang dalam perbaikan atau pembaruan. Silakan cek kembali beberapa saat lagi."}
         onThemeChange={setLoginTheme}
         onLoginSuccess={(user) => {
           setAuthError("");
@@ -2037,6 +2094,24 @@ if (!currentUser) {
         }}
       />
     </div>
+  );
+}
+
+if (maintenanceStatus?.is_active && currentUser.role !== "super_admin") {
+  return (
+    <main className="maintenance-lock-screen">
+      <MaintenanceBanner />
+      <section className="maintenance-lock-card" role="status">
+        <span className="maintenance-lock-icon" aria-hidden="true">⚙</span>
+        <h1>Aplikasi sedang dalam perbaikan</h1>
+        <p>{maintenanceStatus.message}</p>
+        <p>Silakan cek kembali beberapa saat lagi.</p>
+        {authError && <p className="maintenance-lock-error" role="alert">{authError}</p>}
+        <button type="button" onClick={() => void signOutFromMaintenanceLock()}>
+          Keluar dari aplikasi
+        </button>
+      </section>
+    </main>
   );
 }
 
