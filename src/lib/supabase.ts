@@ -38,6 +38,16 @@ function isProtectedSupabaseRequest(url: URL) {
   );
 }
 
+function isPublicMaintenanceStatusRead(
+  url: URL,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) {
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  return method.toUpperCase() === "GET"
+    && url.pathname.endsWith("/rest/v1/app_maintenance_status");
+}
+
 function isRefreshTokenRequest(input: RequestInfo | URL) {
   const requestUrl = typeof input === "string"
     ? input
@@ -126,7 +136,10 @@ async function authenticatedFetch(
     return fetchAuthRequest(input, init);
   }
 
-  if (!isProtectedSupabaseRequest(parsedUrl)) {
+  if (
+    !isProtectedSupabaseRequest(parsedUrl) ||
+    isPublicMaintenanceStatusRead(parsedUrl, input, init)
+  ) {
     return fetch(input, init);
   }
 
