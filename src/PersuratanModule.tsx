@@ -81,7 +81,7 @@ const nav: NavItem[] = [
   { label: 'Disposisi', icon: BookOpen, key: 'dispositions' },
   { label: 'Format Surat', icon: FileText, key: 'templates' },
 ]
-const roleLabels: Record<LetterRole, string> = { administrator:'Administrator Super App', operator:'Operator Persuratan', guru_staf:'Guru / Tendik', pemohon:'Siswa', staf_tu:'Staf Tata Usaha', kepala_tu:'Kepala Tata Usaha', kepala_sekolah:'Kepala Sekolah' }
+const roleLabels: Record<LetterRole, string> = { administrator:'Administrator Super App', operator:'Operator Persuratan', guru_staf:'Guru / Tendik / Guru BK', pemohon:'Siswa', staf_tu:'Staf Tata Usaha', kepala_tu:'Kepala Tata Usaha', kepala_sekolah:'Kepala Sekolah' }
 const rolePageAccess: Record<LetterRole, Page[]> = {
   administrator:nav.map(item=>item.key),
   operator:['dashboard','create','requests','issued','archive','incoming','outgoing','dispositions','templates'],

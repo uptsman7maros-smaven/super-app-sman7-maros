@@ -400,6 +400,8 @@ const roleAccess: Record<string, string[]> = {
   ],
   guru_bk: [
     "Dashboard",
+    "Absensi Digital",
+    "Persuratan",
     "Bimbingan dan Konseling",
   ],
   siswa: [
@@ -463,6 +465,8 @@ const dashboardQuickActions: Record<string, DashboardQuickAction[]> = {
   ],
   guru_bk: [
     { module: "Bimbingan dan Konseling", title: "Peringatan & Kasus BK", description: "Tindak lanjuti antrean BK", icon: HeartHandshake, color: "purple" },
+    { module: "Absensi Digital", title: "Absensi Saya", description: "Catat dan pantau kehadiran pribadi", icon: CalendarCheck, color: "green" },
+    { module: "Persuratan", title: "Ajukan Surat", description: "Buat dan lacak pengajuan surat", icon: Mail, color: "blue" },
   ],
   siswa: [
     { module: "Akademik", title: "Tugas dan Agenda", description: "Lihat pembelajaran kelas", icon: GraduationCap, color: "blue" },

@@ -230,7 +230,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const scanTimer = useRef<number | null>(null);
   const loadRequestRef = useRef(0);
   const role = currentUser?.role ?? userRole;
-  const isSelfService = ["siswa", "guru", "tendik"].includes(role);
+  const isSelfService = ["siswa", "guru", "guru_bk", "tendik"].includes(role);
   const isTeacher = role === "guru";
   const isAdminMonitor = role === "super_admin";
   const canManageAttendance = ["super_admin", "operator"].includes(role);
@@ -259,7 +259,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         if (!isLinked || !identifier) {
           throw new Error(role === "siswa"
             ? "Data siswa untuk akun ini tidak ditemukan di Data Induk."
-            : "Akun guru/tendik belum ditautkan ke Data Induk.");
+            : "Akun guru/BK/tendik belum ditautkan ke Data Induk.");
         }
 
         if (active) {
@@ -1220,7 +1220,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           <div className="attendance-person-card">
             <div className="attendance-person-avatar"><UserCheck size={21}/></div>
             <div className="attendance-person-details">
-              <span>{role === "siswa" ? "SISWA" : "GURU / TENDIK"}</span>
+              <span>{role === "siswa" ? "SISWA" : role === "guru_bk" ? "GURU BK" : "GURU / TENDIK"}</span>
               <strong>{identityLoading ? "Memuat identitas..." : identity?.name ?? "Identitas belum terhubung"}</strong>
               {identity && <small>{identity.identifier}{identity.className ? ` · Kelas ${identity.className}` : ""}</small>}
             </div>

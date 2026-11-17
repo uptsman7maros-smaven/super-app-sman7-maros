@@ -25,6 +25,7 @@ as $$
     when 'staff_tata_usaha' then 'staf_tu'
     when 'kepala_sekolah' then 'kepala_sekolah'
     when 'guru' then 'guru_staf'
+    when 'guru_bk' then 'guru_staf'
     when 'tendik' then 'guru_staf'
     when 'siswa' then 'pemohon'
     else null
