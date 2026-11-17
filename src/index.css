@@ -565,6 +565,29 @@ a { color: inherit; text-decoration: none; }
   .toast { right: 12px; bottom: 12px; }
 }
 
+@media (max-width: 600px) {
+  .login-portal-tabs {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: fit-content;
+    max-width: calc(100% - 24px);
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 10px auto;
+    transform: none;
+  }
+
+  .login-portal-tabs button {
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+
+  .login-portal-shell .maintenance-banner {
+    position: relative;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

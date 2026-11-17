@@ -129,6 +129,7 @@
 
 .maintenance-settings textarea {
   width: 100%;
+  box-sizing: border-box;
   resize: vertical;
   border: 1px solid #dfe3f0;
   border-radius: 11px;
@@ -159,6 +160,42 @@
 .maintenance-settings .maintenance-actions small {
   color: #707894;
   font-size: 11px;
+}
+
+.maintenance-disable-button {
+  color: #b4425d;
+  background: #fff0f3;
+  border-color: #f1d2d9;
+}
+
+@media (max-width: 600px) {
+  .maintenance-banner {
+    align-items: flex-start;
+    gap: 6px 10px;
+    padding: 11px 14px;
+    font-size: 12px;
+  }
+
+  .maintenance-lock-card {
+    padding: 28px 20px;
+  }
+
+  .maintenance-lock-card h1 {
+    font-size: 21px;
+  }
+
+  .maintenance-settings {
+    padding: 16px;
+  }
+
+  .maintenance-settings .maintenance-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .maintenance-settings .maintenance-actions button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 640px) {

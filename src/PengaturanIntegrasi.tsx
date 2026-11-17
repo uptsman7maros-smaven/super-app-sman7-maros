@@ -204,8 +204,7 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
     }
   }
 
-  async function saveMaintenanceSettings(e: React.FormEvent) {
-    e.preventDefault();
+  async function saveMaintenanceSettings(enabledOverride?: boolean) {
     if (!isSuperAdmin || !currentUser) {
       setMaintenanceError("Hanya Super Admin yang dapat mengubah status pemeliharaan.");
       return;
@@ -223,7 +222,7 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
       const { data, error } = await supabase
         .from("app_maintenance_status")
         .update({
-          is_active: maintenanceEnabled,
+          is_active: enabledOverride ?? maintenanceEnabled,
           message: trimmedMessage,
           updated_at: new Date().toISOString(),
           updated_by: currentUser.id,
@@ -333,7 +332,7 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
         <h3 id="maintenance-settings-title">Pemberitahuan pemeliharaan aplikasi</h3>
         <p>Aktifkan saat ada perbaikan atau pembaruan. Pengguna selain Super Admin akan terkunci dari aplikasi dan melihat pesan ini; Super Admin tetap dapat masuk untuk menonaktifkan mode pemeliharaan.</p>
         {isSuperAdmin ? (
-          <form onSubmit={(e) => void saveMaintenanceSettings(e)}>
+          <form onSubmit={(e) => { e.preventDefault(); void saveMaintenanceSettings(); }}>
             <label className="maintenance-toggle">
               <input
                 type="checkbox"
@@ -359,6 +358,16 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
               <button className="pi-primary" disabled={maintenanceLoading || maintenanceSaving}>
                 {maintenanceLoading ? "Memuat status..." : maintenanceSaving ? "Menyimpan..." : "Simpan status"}
               </button>
+              {maintenanceEnabled && (
+                <button
+                  type="button"
+                  className="pi-secondary maintenance-disable-button"
+                  disabled={maintenanceLoading || maintenanceSaving}
+                  onClick={() => void saveMaintenanceSettings(false)}
+                >
+                  {maintenanceSaving ? "Menonaktifkan..." : "Nonaktifkan pemeliharaan"}
+                </button>
+              )}
               <small>Perubahan hanya dapat dilakukan oleh Super Admin.</small>
             </div>
           </form>

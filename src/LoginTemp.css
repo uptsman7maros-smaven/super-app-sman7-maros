@@ -416,7 +416,7 @@
   .login-school-seal img { width: 92px; height: 92px; }
   .login-showcase h1 { font-size: 43px; }
   .login-tagline, .login-identity, .login-batik, .login-floating-shape { display: none; }
-  .login-card { margin: -18px 18px 28px; max-width: 520px; padding-top: 34px; }
+  .login-card { width: auto; margin: -18px 18px 28px; max-width: 520px; padding-top: 34px; }
 }
 
 @media (max-width: 520px) {

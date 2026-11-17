@@ -79,7 +79,7 @@ function informationPageForRole(role: string) {
   if (role === "siswa" || role === "guru" || role === "tendik" || role === "staff_tata_usaha") {
     return role === "siswa" || role === "guru" ? "Akademik" : "Persuratan";
   }
-  if (role === "guru_bk") return "Kesiswaan & BK";
+  if (role === "guru_bk") return "Bimbingan dan Konseling";
   return "Laporan & Analitik";
 }
 
@@ -349,7 +349,7 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         fieldText(row, "title", "Peringatan absensi"),
         `${fieldText(row, "student_name", "Siswa")} · ${fieldText(row, "attendance_date")}`,
         "BK",
-        "Kesiswaan & BK",
+        "Bimbingan dan Konseling",
         fieldDate(row, "attendance_date"),
       )),
     );
@@ -365,7 +365,7 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         "Kasus BK perlu tindak lanjut",
         `${fieldText(row, "nama_siswa", "Siswa")} · ${fieldText(row, "status_kasus", "Terbuka")}`,
         "BK",
-        "Kesiswaan & BK",
+        "Bimbingan dan Konseling",
         fieldDate(row, "tanggal_kontrol"),
       )),
     );

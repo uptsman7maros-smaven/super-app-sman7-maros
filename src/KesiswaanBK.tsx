@@ -69,11 +69,14 @@ function fieldValue(row: KbRow, key: string, kind?: string) {
 export default function KesiswaanBK({
   currentUser,
   userRole,
+  module = "kesiswaan",
 }: {
   currentUser: SchoolUser;
   userRole: string;
+  module?: "kesiswaan" | "bimbingan-konseling";
 }) {
-  const [active, setActive] = useState<SectionKey>("Prestasi");
+  const isCounselingModule = module === "bimbingan-konseling";
+  const [active, setActive] = useState<SectionKey>(() => isCounselingModule ? "Catatan BK" : "Prestasi");
   const [view, setView] = useState<ViewMode>("data");
   const role = (userRole || currentUser.role) as UserRole;
   const [students, setStudents] = useState<StudentOption[]>([]);
@@ -100,11 +103,16 @@ export default function KesiswaanBK({
   const [notice, setNotice] = useState("");
   const rowsRequestId = useRef(0);
 
+  const moduleSections = SECTION_CONFIGS.filter(section => isCounselingModule
+    ? ["Catatan BK", "Jadwal BK", "Rujukan BK", "Rencana Karir"].includes(section.key)
+    : ["Prestasi", "Ekstrakurikuler", "Perizinan", "OSIS & Kegiatan"].includes(section.key));
   const config = SECTION_BY_KEY[active];
   const isSensitive = config.private === true;
   const canSeePrivateNotes = role === "super_admin" || role === "guru_bk";
   const canManageAssignments = role === "super_admin" || role === "operator";
   const canSeeAlerts = role === "guru_bk" || role === "super_admin" || role === "operator";
+  const canSeeSection = moduleSections.some(section => section.key === active)
+    && (active !== "Rencana Karir" || canSeePrivateNotes);
   const studentById = useMemo(() => new Map(students.map(student => [student.id, student])), [students]);
   const statsFilters = useMemo(() => ({
     ...EMPTY_FILTERS,
@@ -360,8 +368,10 @@ export default function KesiswaanBK({
       <div className="kb-hero">
         <div>
           <span className="kb-eyebrow">SUPER APP · SMAN 7 MAROS</span>
-          <h1>Kesiswaan <em>& BK</em></h1>
-          <p>Pusat pengelolaan prestasi, pembinaan, layanan konseling, perizinan, dan kegiatan siswa.</p>
+          <h1>{isCounselingModule ? <>Bimbingan <em>& Konseling</em></> : "Kesiswaan"}</h1>
+          <p>{isCounselingModule
+            ? "Kelola layanan konseling, rujukan, penjadwalan, dan tindak lanjut siswa secara terarah."
+            : "Kelola prestasi, ekstrakurikuler, perizinan, dan kegiatan siswa."}</p>
         </div>
         <div className="kb-hero-icon">✦</div>
       </div>
@@ -371,12 +381,13 @@ export default function KesiswaanBK({
         academicYearId={filters.academicYearId}
         academicYears={academicYears}
         semester={filters.semester}
+        module={module}
       />
       {error && <div className="kb-alert" role="alert">{error}</div>}
       {notice && <div className="kb-success" role="status">{notice}</div>}
 
-      <nav className="kb-tabs" aria-label="Bagian Kesiswaan dan BK">
-        {SECTION_CONFIGS.filter(section => section.key !== "Rencana Karir" || canSeePrivateNotes).map(section => (
+      <nav className="kb-tabs" aria-label={isCounselingModule ? "Bagian Bimbingan dan Konseling" : "Bagian Kesiswaan"}>
+        {moduleSections.filter(section => section.key !== "Rencana Karir" || canSeePrivateNotes).map(section => (
           <button
             key={section.key}
             className={view === "data" && active === section.key ? "active" : ""}
@@ -384,13 +395,13 @@ export default function KesiswaanBK({
             onClick={() => selectSection(section.key)}
           >{section.key}</button>
         ))}
-        {canSeeAlerts && <button className={view === "alerts" ? "active" : ""} type="button" onClick={() => setView("alerts")}>
+        {isCounselingModule && canSeeAlerts && <button className={view === "alerts" ? "active" : ""} type="button" onClick={() => setView("alerts")}>
           🔔 Peringatan Absensi{stats.unreadAlerts ? ` (${stats.unreadAlerts})` : ""}
         </button>}
-        {canManageAssignments && <button className={view === "assignments" ? "active" : ""} type="button" onClick={() => setView("assignments")}>👥 Penugasan Guru BK</button>}
+        {isCounselingModule && canManageAssignments && <button className={view === "assignments" ? "active" : ""} type="button" onClick={() => setView("assignments")}>👥 Penugasan Guru BK</button>}
       </nav>
 
-      {view === "data" && <>
+      {view === "data" && canSeeSection && <>
         {isSensitive && <div className="kb-privacy">🔐 Catatan BK bersifat rahasia. Akses rinci dibatasi oleh RLS berdasarkan peran dan penugasan.</div>}
         {isSensitive && !canSeePrivateNotes ? (
           <section className="kb-panel">
@@ -473,7 +484,9 @@ export default function KesiswaanBK({
         onCancel={() => setRowToDelete(null)}
         onConfirm={() => void confirmDelete()}
       />
-      <p className="kb-foot">Kesiswaan & BK · SMAN 7 Maros · Lindungi data pribadi siswa dan catatan konseling.</p>
+      <p className="kb-foot">{isCounselingModule
+        ? "Bimbingan & Konseling · SMAN 7 Maros · Lindungi data pribadi siswa dan catatan konseling."
+        : "Kesiswaan · SMAN 7 Maros · Kelola data siswa secara bertanggung jawab."}</p>
     </main>
   );
 }

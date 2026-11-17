@@ -170,7 +170,8 @@ const apps: AppItem[] = [
   { name: "Keuangan", description: "Anggaran dan laporan keuangan", icon: Wallet, color: "#0D91B5", bg: "#DDF6FC", category: "Administrasi" },
   { name: "Akademik", description: "Jadwal, nilai, dan pembelajaran", icon: GraduationCap, color: "#5C66DC", bg: "#E9EAFF", category: "Akademik" },
   { name: "SMAVEN Learn", description: "Interactive Learning Experience", icon: BrainCircuit, color: "#246BFD", bg: "#E7F0FF", category: "Akademik" },
-  { name: "Kesiswaan & BK", description: "Prestasi dan layanan siswa", icon: HeartHandshake, color: "#D34B99", bg: "#FFE6F4", category: "Layanan" },
+  { name: "Kesiswaan", description: "Prestasi, perizinan, dan kegiatan siswa", icon: Users, color: "#D34B99", bg: "#FFE6F4", category: "Layanan" },
+  { name: "Bimbingan dan Konseling", description: "Layanan konseling dan tindak lanjut siswa", icon: HeartHandshake, color: "#7357A5", bg: "#EEE8FA", category: "Layanan" },
   { name: "Pemilihan OSIS", description: "Pemilihan dan hasil suara", icon: Vote, color: "#35966A", bg: "#DFF6E8", category: "Layanan" },
   { name: "Laporan & Analitik", description: "Statistik dan laporan sekolah", icon: ChartNoAxesCombined, color: "#C05B24", bg: "#FFEBDD", category: "Administrasi" },
   { name: "Pengguna", description: "Akun, peran, dan hak akses", icon: ShieldCheck, color: "#566477", bg: "#E9EDF3", category: "Sistem" },
@@ -186,7 +187,8 @@ const moduleStatuses: Record<string, AppStatus> = {
   "Keuangan": "active",
   "Akademik": "active",
   "SMAVEN Learn": "active",
-  "Kesiswaan & BK": "active",
+  "Kesiswaan": "active",
+  "Bimbingan dan Konseling": "active",
   "Pemilihan OSIS": "active",
   "Laporan & Analitik": "active",
   "Pengguna": "active",
@@ -206,7 +208,8 @@ const navGroups = [
   { label: "AKADEMIK & LAYANAN", items: [
     { label: "Akademik", icon: GraduationCap },
     { label: "SMAVEN Learn", icon: BrainCircuit },
-    { label: "Kesiswaan & BK", icon: HeartHandshake },
+    { label: "Kesiswaan", icon: Users },
+    { label: "Bimbingan dan Konseling", icon: HeartHandshake },
     { label: "Pemilihan OSIS", icon: Vote },
     { label: "Laporan & Analitik", icon: ChartNoAxesCombined },
   ]},
@@ -343,7 +346,8 @@ const roleAccess: Record<string, string[]> = {
     "Keuangan",
     "Akademik",
     "SMAVEN Learn",
-    "Kesiswaan & BK",
+    "Kesiswaan",
+    "Bimbingan dan Konseling",
     "Pemilihan OSIS",
     "Laporan & Analitik",
     "Pengguna",
@@ -358,7 +362,8 @@ const roleAccess: Record<string, string[]> = {
     "Keuangan",
     "Akademik",
     "SMAVEN Learn",
-    "Kesiswaan & BK",
+    "Kesiswaan",
+    "Bimbingan dan Konseling",
     "Pemilihan OSIS",
     "Laporan & Analitik",
   ],
@@ -371,7 +376,8 @@ const roleAccess: Record<string, string[]> = {
     "Inventaris",
     "Akademik",
     "SMAVEN Learn",
-    "Kesiswaan & BK",
+    "Kesiswaan",
+    "Bimbingan dan Konseling",
     "Pemilihan OSIS",
     "Laporan & Analitik",
   ],
@@ -388,12 +394,13 @@ const roleAccess: Record<string, string[]> = {
     "Absensi Digital",
     "Akademik",
     "SMAVEN Learn",
-    "Kesiswaan & BK",
+    "Kesiswaan",
+    "Bimbingan dan Konseling",
     "Perpustakaan",
   ],
   guru_bk: [
     "Dashboard",
-    "Kesiswaan & BK",
+    "Bimbingan dan Konseling",
   ],
   siswa: [
     "Dashboard",
@@ -434,7 +441,7 @@ const dashboardQuickActions: Record<string, DashboardQuickAction[]> = {
     { module: "Data Induk", title: "Data Induk", description: "Data siswa, guru, dan kelas", icon: ClipboardList, color: "blue" },
     { module: "Absensi Digital", title: "Absensi Digital", description: "Kehadiran sekolah", icon: CalendarCheck, color: "green" },
     { module: "Persuratan", title: "Persuratan Digital", description: "Kelola dokumen sekolah", icon: Mail, color: "purple" },
-    { module: "Kesiswaan & BK", title: "Kesiswaan & BK", description: "Prestasi dan layanan siswa", icon: HeartHandshake, color: "blue" },
+    { module: "Kesiswaan", title: "Kesiswaan", description: "Prestasi dan kegiatan siswa", icon: Users, color: "blue" },
   ],
   kepala_sekolah: [
     { module: "Absensi Digital", title: "Absensi Digital", description: "Ringkasan kehadiran", icon: CalendarCheck, color: "green" },
@@ -452,10 +459,10 @@ const dashboardQuickActions: Record<string, DashboardQuickAction[]> = {
     { module: "Akademik", title: "Akademik", description: "Tugas dan agenda mengajar", icon: GraduationCap, color: "blue" },
     { module: "Absensi Digital", title: "Absensi Digital", description: "Catat kehadiran", icon: CalendarCheck, color: "green" },
     { module: "Persuratan", title: "Persuratan Digital", description: "Ajukan surat sekolah", icon: Mail, color: "purple" },
-    { module: "Kesiswaan & BK", title: "Rujukan & BK", description: "Tindak lanjut kebutuhan siswa", icon: HeartHandshake, color: "blue" },
+    { module: "Bimbingan dan Konseling", title: "Rujukan & BK", description: "Tindak lanjut kebutuhan siswa", icon: HeartHandshake, color: "blue" },
   ],
   guru_bk: [
-    { module: "Kesiswaan & BK", title: "Peringatan & Kasus BK", description: "Tindak lanjuti antrean BK", icon: HeartHandshake, color: "purple" },
+    { module: "Bimbingan dan Konseling", title: "Peringatan & Kasus BK", description: "Tindak lanjuti antrean BK", icon: HeartHandshake, color: "purple" },
   ],
   siswa: [
     { module: "Akademik", title: "Tugas dan Agenda", description: "Lihat pembelajaran kelas", icon: GraduationCap, color: "blue" },
@@ -926,6 +933,7 @@ const createStudentAccountsFromDataInduk = async () => {
 const moduleEnabledOverrides = useMemo(() => {
   const normalizeModuleName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
   const nextSettings: Record<string, boolean> = {};
+  const legacyModuleName = normalizeModuleName("Kesiswaan & BK");
 
   for (const setting of moduleSettings) {
     const identifiers = [setting.label, setting.module_key, setting.route_key]
@@ -933,6 +941,16 @@ const moduleEnabledOverrides = useMemo(() => {
       .map(normalizeModuleName);
     const app = apps.find((item) => identifiers.includes(normalizeModuleName(item.name)));
     if (app) nextSettings[app.name] = setting.is_enabled;
+  }
+
+  const legacySetting = moduleSettings.find((setting) =>
+    [setting.label, setting.module_key, setting.route_key]
+      .filter((value): value is string => typeof value === "string")
+      .some((value) => normalizeModuleName(value) === legacyModuleName)
+  );
+  if (legacySetting) {
+    nextSettings.Kesiswaan ??= legacySetting.is_enabled;
+    nextSettings["Bimbingan dan Konseling"] ??= legacySetting.is_enabled;
   }
 
   return nextSettings;
@@ -2144,7 +2162,8 @@ const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "Persuratan": <PersuratanModule currentUser={currentUser} onBack={() => setActivePage("Dashboard")} />,
   "Akademik": <Akademik currentUser={currentUser} userRole={currentUser.role} />,
   "SMAVEN Learn": <SmavenLearn currentUser={currentUser} userRole={currentUser.role} userName={currentUser.full_name} />,
-  "Kesiswaan & BK": <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} />,
+  "Kesiswaan": <KesiswaanBK key="kesiswaan" currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" />,
+  "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" />,
   "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} />,
   "Laporan & Analitik": <LaporanAnalitik userRole={currentUser.role} />,
   "Pengaturan": <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} />,
@@ -2580,9 +2599,13 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
      <motion.div key="akademik" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
        <Akademik currentUser={currentUser} userRole={currentUser.role} />
      </motion.div>
-) : activePage === "Kesiswaan & BK" ? (
-     <motion.div key="kesiswaan-bk" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} />
+) : activePage === "Kesiswaan" ? (
+     <motion.div key="kesiswaan" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
+       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" />
+     </motion.div>
+) : activePage === "Bimbingan dan Konseling" ? (
+     <motion.div key="bimbingan-konseling" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
+       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" />
      </motion.div>
 ) : activePage === "Pemilihan OSIS" ? (
      <motion.div key="pemilihan-osis" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
