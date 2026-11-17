@@ -2077,7 +2077,7 @@ if (!currentUser) {
   const portals = [
     { id: "super_app" as const, label: "Super App", roles: [] },
     { id: "siswa" as const, label: "Siswa", roles: ["siswa"] },
-    { id: "guru" as const, label: "Guru", roles: ["guru"] },
+    { id: "guru" as const, label: "Guru / Guru BK", roles: ["guru", "guru_bk"] },
     { id: "tendik" as const, label: "Tendik / Staff", roles: ["staff_tata_usaha", "kepala_tata_usaha", "tendik"] },
   ];
   const portal = portals.find((item) => item.id === loginPortal) ?? portals[0];
