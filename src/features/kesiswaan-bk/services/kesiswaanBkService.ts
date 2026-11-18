@@ -4,6 +4,7 @@ import type {
   AcademicYearOption,
   AssignmentStudent,
   AttendanceBkAlert,
+  ClassOption,
   CounselorOption,
   KbRow,
   PageResult,
@@ -12,6 +13,7 @@ import type {
   SectionFormValue,
   StudentOption,
   StudentProfile,
+  SchoolHeader,
   SummaryStats,
   UserRole,
 } from "../types";
@@ -21,6 +23,7 @@ type RelatedClass = {
   name: string;
   academic_year_id: string | null;
   homeroom_teacher_id: string | null;
+  grade_level: number | null;
   academic_year: { name: string } | { name: string }[] | null;
 };
 
@@ -46,7 +49,18 @@ function toStudentOption(
   counselorProfileId: string | null,
   teacherNames: Map<string, string> = new Map(),
 ): StudentOption {
-  const classRow = relationOne(row.class as RelatedClass | RelatedClass[] | null);
+  const classRow = relationOne(row.class as RelatedClass | RelatedClass[] | null) ?? (
+    typeof row.class_id === "string" && typeof row.class_name === "string"
+      ? {
+          id: row.class_id,
+          name: row.class_name,
+          academic_year_id: typeof row.academic_year_id === "string" ? row.academic_year_id : null,
+          homeroom_teacher_id: null,
+          grade_level: typeof row.grade_level === "number" ? row.grade_level : null,
+          academic_year: typeof row.academic_year === "string" ? { name: row.academic_year } : null,
+        }
+      : null
+  );
   const academicYear = relationOne(classRow?.academic_year ?? null);
   return {
     id: String(row.id),
@@ -61,26 +75,54 @@ function toStudentOption(
     academic_year_id: classRow?.academic_year_id ?? null,
     academic_year: academicYear?.name ?? null,
     counselor_profile_id: counselorProfileId,
-    counselor_name: counselorProfileId ? teacherNames.get(counselorProfileId) ?? null : null,
+    counselor_name: counselorProfileId
+      ? String(row.counselor_name ?? teacherNames.get(counselorProfileId) ?? "") || null
+      : null,
+    parent_phone: typeof row.parent_phone === "string" ? row.parent_phone : null,
+    profile_id: typeof row.profile_id === "string" ? row.profile_id : null,
+    grade_level: classRow?.grade_level ?? null,
   };
 }
 
-export async function loadStudentsAndYears(): Promise<{
+export async function loadStudentsAndYears(role: UserRole): Promise<{
   students: StudentOption[];
   academicYears: AcademicYearOption[];
+  classes: ClassOption[];
 }> {
-  const [studentsResult, yearsResult, assignmentsResult, teachersResult] = await Promise.all([
+  if (role === "siswa") {
+    const [contextResult, yearsResult] = await Promise.all([
+      supabase.rpc("kb_student_self_context"),
+      supabase.from("academic_years").select("id,name,is_active").order("start_date", { ascending: false }),
+    ]);
+    throwOnError(contextResult.error);
+    throwOnError(yearsResult.error);
+    const context = Array.isArray(contextResult.data) ? contextResult.data[0] : contextResult.data;
+    const students = context
+      ? [toStudentOption(context as Record<string, unknown>, typeof context.counselor_profile_id === "string" ? context.counselor_profile_id : null)]
+      : [];
+    return {
+      students,
+      academicYears: (yearsResult.data ?? []) as AcademicYearOption[],
+      classes: context?.class_id && context?.class_name
+        ? [{ id: String(context.class_id), name: String(context.class_name), grade_level: Number(context.grade_level ?? 0), academic_year_id: String(context.academic_year_id ?? "") }]
+        : [],
+    };
+  }
+
+  const [studentsResult, yearsResult, assignmentsResult, teachersResult, classesResult] = await Promise.all([
     supabase.from("students")
-      .select("id,nisn,full_name,status,birth_date,gender,class_id,class:classes!students_class_id_fkey(id,name,academic_year_id,homeroom_teacher_id,academic_year:academic_years(name))")
+      .select("id,profile_id,parent_phone,nisn,full_name,status,birth_date,gender,class_id,class:classes!students_class_id_fkey(id,name,grade_level,academic_year_id,homeroom_teacher_id,academic_year:academic_years(name))")
       .order("full_name"),
     supabase.from("academic_years").select("id,name,is_active").order("start_date", { ascending: false }),
     supabase.from("attendance_bk_assignments").select("student_id,counselor_profile_id"),
     supabase.from("teachers").select("profile_id,full_name").not("profile_id", "is", null),
+    supabase.from("classes").select("id,name,grade_level,academic_year_id").order("grade_level").order("name"),
   ]);
   throwOnError(studentsResult.error);
   throwOnError(yearsResult.error);
   throwOnError(assignmentsResult.error);
   throwOnError(teachersResult.error);
+  throwOnError(classesResult.error);
 
   const counselorByStudent = new Map(
     (assignmentsResult.data ?? []).map(row => [row.student_id, row.counselor_profile_id]),
@@ -94,6 +136,22 @@ export async function loadStudentsAndYears(): Promise<{
       toStudentOption(student, counselorByStudent.get(student.id) ?? null, teacherNames),
     ),
     academicYears: (yearsResult.data ?? []) as AcademicYearOption[],
+    classes: (classesResult.data ?? []) as ClassOption[],
+  };
+}
+
+export async function loadSchoolHeader(): Promise<SchoolHeader> {
+  const { data, error } = await supabase.from("school_settings")
+    .select("school_name,npsn,letterhead,academic_year")
+    .order("id")
+    .limit(1)
+    .maybeSingle();
+  throwOnError(error);
+  return {
+    school_name: data?.school_name || "SMAN 7 Maros",
+    npsn: data?.npsn || "",
+    letterhead: data?.letterhead || "",
+    academic_year: data?.academic_year || "",
   };
 }
 
@@ -111,14 +169,20 @@ export async function loadSectionRows(
 
   if (filters.classId && config.fields.some(field => field.key === "student_id")) {
     const classStudentIds = students.filter(student => student.class_id === filters.classId).map(student => student.id);
-    if (classStudentIds.length === 0) return { rows: [], count: 0 };
-    query = query.in("student_id", classStudentIds);
+    if (config.fields.some(field => field.key === "class_id")) {
+      const classCondition = `class_id.eq.${filters.classId}`;
+      const studentCondition = classStudentIds.length ? `student_id.in.(${classStudentIds.join(",")})` : "";
+      query = query.or([classCondition, studentCondition].filter(Boolean).join(","));
+    } else {
+      if (classStudentIds.length === 0) return { rows: [], count: 0 };
+      query = query.in("student_id", classStudentIds);
+    }
   }
 
   const search = normalizeSearch(filters.search);
   if (search) {
     const textFields = config.fields
-      .filter(field => field.kind !== "date" && field.kind !== "time" && field.kind !== "student")
+      .filter(field => field.kind !== "date" && field.kind !== "time" && field.kind !== "student" && field.kind !== "class")
       .map(field => `${field.key}.ilike.*${search}*`);
     const studentIds = students.filter(student => studentMatches(student, search)).map(student => student.id);
     if (studentIds.length > 0 && config.fields.some(field => field.key === "student_id")) {
@@ -151,13 +215,19 @@ export async function loadAllSectionRows(
     if (config.dateField && filters.dateTo) query = query.lte(config.dateField, filters.dateTo);
     if (filters.classId && config.fields.some(field => field.key === "student_id")) {
       const ids = students.filter(student => student.class_id === filters.classId).map(student => student.id);
-      if (ids.length === 0) return [];
-      query = query.in("student_id", ids);
+      if (config.fields.some(field => field.key === "class_id")) {
+        const conditions = [`class_id.eq.${filters.classId}`];
+        if (ids.length) conditions.push(`student_id.in.(${ids.join(",")})`);
+        query = query.or(conditions.join(","));
+      } else {
+        if (ids.length === 0) return [];
+        query = query.in("student_id", ids);
+      }
     }
     const search = normalizeSearch(filters.search);
     if (search) {
       const conditions = config.fields
-        .filter(field => field.kind !== "date" && field.kind !== "time" && field.kind !== "student")
+        .filter(field => field.kind !== "date" && field.kind !== "time" && field.kind !== "student" && field.kind !== "class")
         .map(field => `${field.key}.ilike.*${search}*`);
       const matchingStudents = students.filter(student => studentMatches(student, search)).map(student => student.id);
       if (matchingStudents.length > 0 && config.fields.some(field => field.key === "student_id")) {
@@ -339,7 +409,9 @@ export async function saveSectionRecord(
   config: SectionConfig,
   form: SectionFormValue,
   students: StudentOption[],
+  classes: ClassOption[],
   academicYears: AcademicYearOption[],
+  academicYearId: string,
   semester: string,
   recordId: string | null,
 ) {
@@ -354,7 +426,8 @@ export async function saveSectionRecord(
       : value || "";
   }
   const student = students.find(item => item.id === form.student_id);
-  const yearId = student?.academic_year_id ?? form.academic_year_id ?? "";
+  const classYearId = classes.find(item => item.id === form.class_id)?.academic_year_id;
+  const yearId = student?.academic_year_id ?? classYearId ?? form.academic_year_id ?? academicYearId;
   payload.academic_year_id = yearId || null;
   payload.academic_year = student?.academic_year ?? academicYears.find(year => year.id === yearId)?.name ?? null;
   payload.semester = semester ? Number(semester) : null;
@@ -364,6 +437,21 @@ export async function saveSectionRecord(
   }
   if (config.key === "Catatan BK") {
     payload.source_alert_id = form.source_alert_id || null;
+    payload.created_by = session.user.id;
+    payload.target_type = form.target_type || "Siswa";
+    payload.student_id = form.target_type === "Siswa" ? form.student_id || null : null;
+    payload.class_id = form.target_type === "Kelas"
+      ? form.class_id || null
+      : form.target_type === "Siswa"
+        ? student?.class_id ?? null
+        : null;
+    payload.counselor_profile_id = student?.counselor_profile_id ?? session.user.id;
+    payload.sasaran = form.target_type === "Siswa"
+      ? student?.full_name ?? ""
+      : form.target_type === "Kelas"
+        ? form.class_id ?? ""
+        : form.target_type ?? "";
+    payload.status_kasus = form.status_kasus || "Terbuka";
   }
   if (config.key === "Rujukan BK") {
     payload.reporter_profile_id = session.user.id;

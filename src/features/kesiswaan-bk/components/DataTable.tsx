@@ -1,11 +1,13 @@
 import { PAGE_SIZE } from "../constants";
-import type { AcademicYearOption, KbRow, QueryFilters, SectionConfig, StudentOption } from "../types";
+import type { AcademicYearOption, ClassOption, KbRow, QueryFilters, SchoolHeader, SectionConfig, StudentOption } from "../types";
 
 type Props = {
   config: SectionConfig;
   rows: KbRow[];
   students: StudentOption[];
+  classes: ClassOption[];
   academicYears: AcademicYearOption[];
+  schoolHeader: SchoolHeader;
   filters: QueryFilters;
   count: number;
   page: number;
@@ -16,6 +18,7 @@ type Props = {
   onDelete: (row: KbRow) => void;
   onOpenProfile: (student: StudentOption) => void;
   onExport: () => void;
+  onExportExcel: () => void;
   onPrint: () => void;
 };
 
@@ -28,7 +31,9 @@ export default function DataTable({
   config,
   rows,
   students,
+  classes,
   academicYears,
+  schoolHeader,
   filters,
   count,
   page,
@@ -39,11 +44,9 @@ export default function DataTable({
   onDelete,
   onOpenProfile,
   onExport,
+  onExportExcel,
   onPrint,
 }: Props) {
-  const classes = [...new Map(
-    students.filter(student => student.class_id).map(student => [student.class_id as string, student.class_name]),
-  ).entries()];
   const studentById = new Map(students.map(student => [student.id, student]));
 
   function linkedStudent(row: KbRow) {
@@ -55,6 +58,13 @@ export default function DataTable({
 
   return (
     <section className="kb-panel kb-data-panel">
+      <header className="kb-print-header">
+        {schoolHeader.letterhead && <p>{schoolHeader.letterhead}</p>}
+        <h1>{schoolHeader.school_name}</h1>
+        {schoolHeader.npsn && <p>NPSN {schoolHeader.npsn}</p>}
+        <hr />
+        <h2>{config.key === "Catatan BK" ? "Agenda Harian Bimbingan dan Konseling" : `Laporan ${config.key}`}</h2>
+      </header>
       <div className="kb-panel-heading">
         <div><span className="kb-eyebrow">DAFTAR TERCATAT</span><h2>Data {config.key}</h2></div>
         <input
@@ -81,7 +91,7 @@ export default function DataTable({
           <label>Kelas
             <select value={filters.classId} onChange={event => onFiltersChange({ classId: event.target.value })}>
               <option value="">Semua kelas</option>
-              {classes.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+              {classes.map(classOption => <option key={classOption.id} value={classOption.id}>{classOption.name}</option>)}
             </select>
           </label>
         )}
@@ -91,6 +101,7 @@ export default function DataTable({
         </>}
         <div className="kb-export-actions">
           <button className="kb-secondary" type="button" onClick={onExport} disabled={loading}>Ekspor CSV</button>
+          <button className="kb-secondary" type="button" onClick={onExportExcel} disabled={loading}>Ekspor Excel</button>
           <button className="kb-secondary" type="button" onClick={onPrint}>Cetak</button>
         </div>
       </div>
@@ -112,7 +123,10 @@ export default function DataTable({
                           : displayValue(row.nama_siswa)}
                       </td>;
                     }
-                    return <td key={field.key} data-label={field.label}>{displayValue(row[field.key])}</td>;
+                    const value = field.key === "class_id"
+                      ? classes.find(item => item.id === row.class_id)?.name ?? ""
+                      : row[field.key];
+                    return <td key={field.key} data-label={field.label}>{displayValue(value)}</td>;
                   })}
                   <td className="kb-action-cell"><div>
                     <button className="kb-mini" type="button" onClick={() => onEdit(row)}>Ubah</button>
@@ -130,6 +144,10 @@ export default function DataTable({
           <button className="kb-secondary" type="button" disabled={page === 0 || loading} onClick={() => onPageChange(page - 1)}>Sebelumnya</button>
           <button className="kb-secondary" type="button" disabled={(page + 1) * PAGE_SIZE >= count || loading} onClick={() => onPageChange(page + 1)}>Berikutnya</button>
         </div>
+      </div>
+      <div className="kb-signatures">
+        <p>Mengetahui,<br />Kepala Sekolah</p><p>Guru Bimbingan dan Konseling</p>
+        <div /><div /><span>(........................................)</span><span>(........................................)</span>
       </div>
     </section>
   );

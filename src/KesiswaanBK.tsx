@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import * as XLSX from "xlsx";
 import "./KesiswaanBK.css";
 import AttendanceAlertsPanel from "./features/kesiswaan-bk/components/AttendanceAlertsPanel";
 import ConfirmModal from "./features/kesiswaan-bk/components/ConfirmModal";
@@ -8,6 +9,7 @@ import DataTable from "./features/kesiswaan-bk/components/DataTable";
 import SectionForm from "./features/kesiswaan-bk/components/SectionForm";
 import StatsHeader from "./features/kesiswaan-bk/components/StatsHeader";
 import StudentProfileDrawer from "./features/kesiswaan-bk/components/StudentProfileDrawer";
+import CounselingWorkflowPanel, { type CounselingWorkspaceTab } from "./features/kesiswaan-bk/components/CounselingWorkflowPanel";
 import { SECTION_BY_KEY, SECTION_CONFIGS } from "./features/kesiswaan-bk/constants";
 import {
   deleteSectionRecord,
@@ -15,7 +17,9 @@ import {
   loadAttendanceAlerts,
   loadCounselorAssignments,
   loadSectionRows,
+  loadSchoolHeader,
   loadStudentsAndYears,
+  loadAllSectionRows,
   loadSummaryStats,
   markAttendanceAlertRead,
   saveCounselorAssignment,
@@ -25,6 +29,7 @@ import type {
   AcademicYearOption,
   AssignmentStudent,
   AttendanceBkAlert,
+  ClassOption,
   CounselorOption,
   KbRow,
   QueryFilters,
@@ -32,6 +37,7 @@ import type {
   SectionKey,
   StudentOption,
   SummaryStats,
+  SchoolHeader,
   UserRole,
   ViewMode,
 } from "./features/kesiswaan-bk/types";
@@ -79,8 +85,19 @@ export default function KesiswaanBK({
   const [active, setActive] = useState<SectionKey>(() => isCounselingModule ? "Catatan BK" : "Prestasi");
   const [view, setView] = useState<ViewMode>("data");
   const role = (userRole || currentUser.role) as UserRole;
+  const [workflowTab, setWorkflowTab] = useState<CounselingWorkspaceTab>(
+    () => role === "siswa" ? "Curhat ke Guru BK" : "Konsultasi BK",
+  );
+  const [rplPrefillTopic, setRplPrefillTopic] = useState("");
   const [students, setStudents] = useState<StudentOption[]>([]);
   const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
+  const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [schoolHeader, setSchoolHeader] = useState<SchoolHeader>({
+    school_name: "SMAN 7 Maros",
+    npsn: "",
+    letterhead: "",
+    academic_year: "",
+  });
   const [rows, setRows] = useState<KbRow[]>([]);
   const [count, setCount] = useState(0);
   const [filters, setFilters] = useState<QueryFilters>(EMPTY_FILTERS);
@@ -105,11 +122,28 @@ export default function KesiswaanBK({
 
   const moduleSections = SECTION_CONFIGS.filter(section => isCounselingModule
     ? ["Catatan BK", "Jadwal BK", "Rujukan BK", "Rencana Karir"].includes(section.key)
-    : ["Prestasi", "Ekstrakurikuler", "Perizinan", "OSIS & Kegiatan"].includes(section.key));
+    : ["Prestasi", "Ekstrakurikuler", "Perizinan", "OSIS & Kegiatan"].includes(section.key))
+    .filter(() => !isCounselingModule || ["guru_bk", "super_admin", "operator"].includes(role));
   const config = SECTION_BY_KEY[active];
   const isSensitive = config.private === true;
   const canSeePrivateNotes = role === "super_admin" || role === "guru_bk";
   const canManageAssignments = role === "super_admin" || role === "operator" || role === "guru_bk";
+  const workflowTabs: CounselingWorkspaceTab[] = role === "siswa"
+    ? ["Curhat ke Guru BK", "Angket Kebutuhan Siswa", "Pengajuan Konsultasi"]
+    : role === "guru_bk"
+      ? [
+          "Konsultasi BK",
+          "Kunjungan Rumah",
+          "Generator RPL",
+          "Daftar Siswa Asuh",
+          "Kotak Masuk Curhat",
+          "Angket Kebutuhan Siswa",
+        ]
+      : role === "super_admin"
+        ? ["Konsultasi BK", "Kunjungan Rumah", "Generator RPL", "Daftar Siswa Asuh", "Angket Kebutuhan Siswa"]
+        : role === "operator"
+          ? ["Generator RPL", "Daftar Siswa Asuh", "Angket Kebutuhan Siswa"]
+      : [];
   const canSeeAlerts = role === "guru_bk" || role === "super_admin" || role === "operator";
   const canSeeSection = moduleSections.some(section => section.key === active)
     && (active !== "Rencana Karir" || canSeePrivateNotes);
@@ -160,17 +194,23 @@ export default function KesiswaanBK({
 
   useEffect(() => {
     let activeEffect = true;
-    void loadStudentsAndYears().then(result => {
+    void loadStudentsAndYears(role).then(result => {
       if (!activeEffect) return;
       setStudents(result.students);
       setAcademicYears(result.academicYears);
+      setClasses(result.classes);
       const currentYear = result.academicYears.find(year => year.is_active);
       if (currentYear) setFilters(current => current.academicYearId ? current : { ...current, academicYearId: currentYear.id });
     }).catch(loadError => {
       if (activeEffect) setError(messageOf(loadError, "Data siswa dan tahun ajaran gagal dimuat."));
     });
+    void loadSchoolHeader().then(header => {
+      if (activeEffect) setSchoolHeader(header);
+    }).catch(loadError => {
+      if (activeEffect) setError(messageOf(loadError, "Identitas sekolah gagal dimuat."));
+    });
     return () => { activeEffect = false; };
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void refreshRows(); }, filters.search ? 280 : 0);
@@ -230,8 +270,21 @@ export default function KesiswaanBK({
   function selectSection(section: SectionKey) {
     setActive(section);
     setView("data");
-    setForm({});
+    setForm(section === "Catatan BK"
+      ? {
+          target_type: "Siswa",
+          tanggal: new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Makassar" }),
+          status_kasus: "Terbuka",
+        }
+      : {});
     setEditingId(null);
+    setNotice("");
+    setError("");
+  }
+
+  function selectWorkflowTab(tab: CounselingWorkspaceTab) {
+    setWorkflowTab(tab);
+    setView("workflow");
     setNotice("");
     setError("");
   }
@@ -244,6 +297,7 @@ export default function KesiswaanBK({
     setForm(kind === "note"
       ? {
           student_id: alert.student_id,
+          target_type: "Siswa",
           tanggal: alert.attendance_date,
           bidang_layanan: "Pribadi",
           jenis_layanan: "Konseling Individu",
@@ -283,9 +337,19 @@ export default function KesiswaanBK({
       setError("Pilih siswa dari daftar yang tersedia.");
       return;
     }
+    if (config.key === "Catatan BK") {
+      if (form.target_type === "Siswa" && !form.student_id) {
+        setError("Pilih siswa dari Data Induk untuk sasaran individu.");
+        return;
+      }
+      if (form.target_type === "Kelas" && !form.class_id) {
+        setError("Pilih kelas dari Data Induk.");
+        return;
+      }
+    }
     setSaving(true);
     try {
-      await saveSectionRecord(config, form, students, academicYears, filters.semester, editingId);
+      await saveSectionRecord(config, form, students, classes, academicYears, filters.academicYearId, filters.semester, editingId);
       setNotice(editingId ? "Data berhasil diperbarui." : "Data berhasil ditambahkan.");
       setForm({});
       setEditingId(null);
@@ -363,6 +427,27 @@ export default function KesiswaanBK({
     }
   }
 
+  async function exportExcel() {
+    setError("");
+    try {
+      const exportRows = await loadAllSectionRows(config, filters, students);
+      const formatted = exportRows.map(row => Object.fromEntries(config.fields.map(field => [
+        field.label,
+        field.key === "student_id"
+          ? students.find(student => student.id === row.student_id)?.full_name ?? String(row.nama_siswa ?? "")
+          : field.key === "class_id"
+            ? classes.find(classOption => classOption.id === row.class_id)?.name ?? ""
+            : String(row[field.key] ?? ""),
+      ])));
+      const sheet = XLSX.utils.json_to_sheet(formatted);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, config.key.slice(0, 31));
+      XLSX.writeFile(workbook, `${config.table}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (exportError) {
+      setError(messageOf(exportError, "Ekspor Excel gagal."));
+    }
+  }
+
   return (
     <main className="kb-shell">
       <div className="kb-hero">
@@ -393,16 +478,42 @@ export default function KesiswaanBK({
             className={view === "data" && active === section.key ? "active" : ""}
             type="button"
             onClick={() => selectSection(section.key)}
-          >{section.key}</button>
+          >{section.key === "Catatan BK" ? "Agenda Harian & Catatan BK" : section.key}</button>
         ))}
+        {workflowTabs.map(tab => <button
+          key={tab}
+          className={view === "workflow" && workflowTab === tab ? "active" : ""}
+          type="button"
+          onClick={() => selectWorkflowTab(tab)}
+        >{tab}</button>)}
         {isCounselingModule && canSeeAlerts && <button className={view === "alerts" ? "active" : ""} type="button" onClick={() => setView("alerts")}>
           🔔 Peringatan Absensi{stats.unreadAlerts ? ` (${stats.unreadAlerts})` : ""}
         </button>}
         {isCounselingModule && canManageAssignments && <button className={view === "assignments" ? "active" : ""} type="button" onClick={() => setView("assignments")}>👥 Penugasan Guru BK</button>}
       </nav>
 
+      {view === "workflow" && workflowTabs.includes(workflowTab) && (
+        <CounselingWorkflowPanel
+          key={workflowTab}
+          tab={workflowTab}
+          role={role}
+          currentUser={currentUser}
+          students={students}
+          classes={classes}
+          academicYears={academicYears}
+          schoolHeader={schoolHeader}
+          initialRplTopic={rplPrefillTopic}
+          onCreateRplFromTopic={topic => {
+            setRplPrefillTopic(topic);
+            setWorkflowTab("Generator RPL");
+            setView("workflow");
+            setNotice(`Topik RPL diisi dari angket: ${topic}`);
+          }}
+        />
+      )}
+
       {view === "data" && canSeeSection && <>
-        {isSensitive && <div className="kb-privacy">🔐 Catatan BK bersifat rahasia. Akses rinci dibatasi oleh RLS berdasarkan peran dan penugasan.</div>}
+        {isSensitive && <div className="kb-privacy">🔐 Agenda BK memuat informasi privat. Catatan rahasia hanya terlihat bagi Guru BK pengasuh dan Super Admin.</div>}
         {isSensitive && !canSeePrivateNotes ? (
           <section className="kb-panel">
             <div className="kb-panel-heading"><div><span className="kb-eyebrow">RINGKASAN SAJA</span><h2>Status kasus BK</h2></div></div>
@@ -413,6 +524,7 @@ export default function KesiswaanBK({
             config={config}
             form={form}
             students={students}
+            classes={classes}
             academicYears={academicYears}
             academicYearId={filters.academicYearId}
             semester={filters.semester}
@@ -429,6 +541,7 @@ export default function KesiswaanBK({
             config={config}
             rows={rows}
             students={students}
+            classes={classes}
             academicYears={academicYears}
             filters={filters}
             count={count}
@@ -440,7 +553,9 @@ export default function KesiswaanBK({
             onDelete={setRowToDelete}
             onOpenProfile={student => setSelectedStudentId(student.id)}
             onExport={() => void exportCsv()}
+            onExportExcel={() => void exportExcel()}
             onPrint={() => window.print()}
+            schoolHeader={schoolHeader}
           />
         </>}
       </>}

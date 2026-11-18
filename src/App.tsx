@@ -411,6 +411,7 @@ const roleAccess: Record<string, string[]> = {
     "SMAVEN Learn",
     "Pemilihan OSIS",
     "Perpustakaan",
+    "Bimbingan dan Konseling",
   ],
   staff_tata_usaha: [
     "Dashboard",
@@ -471,6 +472,7 @@ const dashboardQuickActions: Record<string, DashboardQuickAction[]> = {
   siswa: [
     { module: "Akademik", title: "Tugas dan Agenda", description: "Lihat pembelajaran kelas", icon: GraduationCap, color: "blue" },
     { module: "Absensi Digital", title: "Absensi Saya", description: "Pantau kehadiran pribadi", icon: CalendarCheck, color: "green" },
+    { module: "Bimbingan dan Konseling", title: "Bimbingan & Konseling", description: "Curhat, angket kebutuhan, dan pengajuan konsultasi", icon: HeartHandshake, color: "purple" },
     { module: "Perpustakaan", title: "Perpustakaan", description: "Katalog dan peminjaman buku", icon: BookOpen, color: "purple" },
     { module: "SMAVEN Learn", title: "SMAVEN Learn", description: "Buka materi pembelajaran", icon: BrainCircuit, color: "blue" },
   ],

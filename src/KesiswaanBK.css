@@ -666,23 +666,386 @@
   }
 
   .kb-data-panel,
-  .kb-data-panel * {
+  .kb-data-panel *,
+  .kb-workflow-panel,
+  .kb-workflow-panel * {
     visibility: visible !important;
   }
 
-  .kb-data-panel {
+  .kb-data-panel,
+  .kb-workflow-panel {
     position: absolute;
     inset: 0;
     width: 100%;
     border: 0;
     box-shadow: none;
+    color: #111;
+    background: #fff;
   }
 
-  .kb-data-panel .kb-panel-heading input,
+  .kb-print-header {
+    display: block !important;
+    text-align: center;
+    color: #111;
+    page-break-after: avoid;
+  }
+
+  .kb-print-header h1,
+  .kb-print-header h2 {
+    margin: 3px 0;
+  }
+
+  .kb-signatures {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px 80px;
+    margin: 48px 30px 0;
+    color: #111;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .kb-workflow-panel .kb-form,
+  .kb-workflow-panel .kb-akpd-student,
+  .kb-workflow-panel .kb-panel-heading button,
+  .kb-workflow-panel .kb-workflow-list button,
+  .kb-workflow-panel .kb-curhat-layout,
+  .kb-workflow-panel .kb-workflow-student-layout > .kb-workflow-list,
+  .kb-workflow-panel .kb-checkbox-label,
+  .kb-data-panel .kb-form,
+  .kb-data-panel .kb-panel-heading button,
+  .kb-data-panel .kb-mini,
+  .kb-data-panel .kb-search {
+    display: none !important;
+  }
+
+  .kb-workflow-panel table {
+    width: 100%;
+    min-width: 0;
+    border-collapse: collapse;
+    font-size: 10px;
+  }
+
+  .kb-workflow-panel th,
+  .kb-workflow-panel td {
+    border: 1px solid #777;
+    padding: 6px;
+    color: #111;
+  }
+
+  .kb-workflow-panel .kb-table-wrap {
+    overflow: visible;
+    border: 0;
+  }
+
+  .kb-workflow-panel .kb-panel-heading {
+    display: block;
+  }
+
+  .kb-workflow-panel td input,
+  .kb-workflow-panel td .kb-student-class {
+    display: none !important;
+  }
+
+  .kb-print-value {
+    display: inline !important;
+  }
+
+  .kb-profile-print-data {
+    display: grid !important;
+  }
+
   .kb-data-panel .kb-query-filters,
   .kb-data-panel .kb-action-head,
   .kb-data-panel .kb-action-cell,
   .kb-data-panel .kb-pagination {
     display: none !important;
+  }
+}
+
+.kb-workflow-panel {
+  overflow: hidden;
+}
+
+.kb-print-header,
+.kb-signatures {
+  display: none;
+}
+
+.kb-print-value,
+.kb-profile-print-data {
+  display: none;
+}
+
+.kb-profile-print-data {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #eeedf7;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.kb-profile-print-data div {
+  min-width: 0;
+}
+
+.kb-profile-print-data dt {
+  color: #777b96;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.kb-profile-print-data dd {
+  margin: 3px 0 0;
+  color: #292b45;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.kb-workflow-row-actions {
+  display: grid;
+  gap: 5px;
+  min-width: 130px;
+}
+
+.kb-workflow-panel td input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 115px;
+  margin: 2px 0;
+  border: 1px solid #e5e5f1;
+  border-radius: 8px;
+  padding: 7px;
+  font: inherit;
+}
+
+.kb-date-weekday {
+  color: #777b96;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.kb-workflow-panel .kb-form {
+  margin-bottom: 20px;
+}
+
+.kb-workflow-panel .kb-form label,
+.kb-workflow-panel .kb-akpd-student label,
+.kb-chat-panel label {
+  min-width: 0;
+}
+
+.kb-workflow-panel .kb-form textarea,
+.kb-workflow-panel .kb-akpd-student select,
+.kb-chat-panel textarea,
+.kb-chat-panel select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #e5e5f1;
+  border-radius: 12px;
+  padding: 12px 13px;
+  background: #fcfcff;
+  color: #262642;
+  font: inherit;
+}
+
+.kb-workflow-panel .kb-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.kb-workflow-panel .kb-checkbox-label input {
+  width: 18px;
+  height: 18px;
+  accent-color: #5141ca;
+}
+
+.kb-workflow-list {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.kb-workflow-list > article,
+.kb-workflow-student {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #eeedf7;
+  border-radius: 13px;
+  background: #fff;
+  color: #292b45;
+  text-align: left;
+}
+
+.kb-workflow-list > article > div,
+.kb-workflow-student {
+  min-width: 0;
+}
+
+.kb-workflow-list article strong,
+.kb-workflow-list article small,
+.kb-workflow-student strong,
+.kb-workflow-student span,
+.kb-workflow-student small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.kb-workflow-list article small,
+.kb-workflow-student span,
+.kb-workflow-student small {
+  margin-top: 4px;
+  color: #777b96;
+  font-size: 11px;
+}
+
+.kb-workflow-student {
+  width: 100%;
+  display: grid;
+  cursor: pointer;
+  font: inherit;
+}
+
+.kb-workflow-student:hover,
+.kb-workflow-student.active {
+  border-color: #9d8bea;
+  background: #faf9ff;
+}
+
+.kb-workflow-student-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, .75fr) minmax(0, 1.5fr);
+  gap: 16px;
+}
+
+.kb-workflow-profile {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #eeedf7;
+  border-radius: 16px;
+  background: #fcfcff;
+}
+
+.kb-workflow-profile h3 {
+  margin: 4px 0;
+}
+
+.kb-workflow-profile .kb-form {
+  margin-top: 16px;
+}
+
+.kb-akpd-student {
+  display: grid;
+  gap: 13px;
+  margin-bottom: 22px;
+}
+
+.kb-akpd-student label {
+  display: grid;
+  gap: 8px;
+  color: #4e526d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.kb-curhat-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.kb-chat-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #eeedf7;
+  border-radius: 16px;
+  background: #fafaff;
+}
+
+.kb-chat-panel h3 {
+  margin: 0;
+}
+
+.kb-chat-panel form {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-chat-messages {
+  display: grid;
+  gap: 9px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.kb-chat-messages article {
+  justify-self: start;
+  max-width: 85%;
+  padding: 11px 13px;
+  border: 1px solid #e9e7f6;
+  border-radius: 14px 14px 14px 4px;
+  background: #fff;
+  color: #292b45;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.kb-chat-messages article.mine {
+  justify-self: end;
+  border-color: #d7cdf8;
+  border-radius: 14px 14px 4px 14px;
+  background: #f0ecff;
+}
+
+.kb-chat-messages article small {
+  display: block;
+  margin-top: 6px;
+  color: #777b96;
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  .kb-workflow-student-layout,
+  .kb-curhat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-workflow-list > article {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .kb-workflow-list > article button {
+    width: 100%;
+  }
+
+  .kb-workflow-profile {
+    padding: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kb-workflow-panel *,
+  .kb-workflow-panel *::before,
+  .kb-workflow-panel *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }

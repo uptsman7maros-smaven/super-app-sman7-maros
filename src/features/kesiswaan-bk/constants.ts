@@ -5,13 +5,16 @@ export const BK_SERVICE_AREAS = ["Pribadi", "Sosial", "Belajar", "Karir"] as con
 export const BK_SERVICE_TYPES = [
   "Konseling Individu",
   "Konseling Kelompok",
+  "Bimbingan Klasikal",
+  "Bimbingan Kelompok",
+  "Konsultasi",
   "Mediasi",
-  "Home Visit",
-  "Konferensi Kasus",
-  "Panggilan Orang Tua",
+  "Kunjungan Rumah",
+  "Alih Tangan Kasus",
+  "Layanan Informasi",
 ] as const;
 export const CASE_PRIORITIES = ["Normal", "Pantauan", "Mendesak"] as const;
-export const CASE_STATUSES = ["Terbuka", "Dalam Pendampingan", "Selesai"] as const;
+export const CASE_STATUSES = ["Terbuka", "Dalam Proses", "Dalam Pendampingan", "Selesai"] as const;
 export const PERMISSION_STATUSES = ["Menunggu", "Disetujui", "Ditolak", "Selesai"] as const;
 export const REFERRAL_TYPES = ["Akademik", "Kehadiran", "Perilaku", "Lainnya"] as const;
 export const REFERRAL_STATUSES = ["Perlu Asesmen", "Dalam Pendampingan", "Selesai"] as const;
@@ -48,15 +51,19 @@ export const SECTION_CONFIGS: readonly SectionConfig[] = [
     dateField: "tanggal",
     legacyStudentNameField: "nama_siswa",
     fields: [
-      { key: "student_id", label: "Siswa", required: true, kind: "student" },
-      { key: "tanggal", label: "Tanggal", kind: "date" },
+      { key: "student_id", label: "Siswa (opsional)", kind: "student" },
+      { key: "target_type", label: "Kelas atau sasaran", required: true, kind: "select", options: ["Siswa", "Kelas", "Orang Tua / Wali", "Umum"] },
+      { key: "class_id", label: "Kelas", kind: "class" },
+      { key: "tanggal", label: "Hari / tanggal", required: true, kind: "date" },
+      { key: "waktu_mulai", label: "Waktu mulai", kind: "time" },
+      { key: "waktu_selesai", label: "Waktu selesai", kind: "time" },
       { key: "bidang_layanan", label: "Bidang layanan", kind: "select", options: BK_SERVICE_AREAS },
       { key: "jenis_layanan", label: "Jenis layanan", kind: "select", options: BK_SERVICE_TYPES },
-      { key: "prioritas", label: "Prioritas", kind: "select", options: CASE_PRIORITIES },
-      { key: "status_kasus", label: "Status kasus", kind: "select", options: CASE_STATUSES },
-      { key: "ringkasan", label: "Ringkasan", required: true, kind: "textarea" },
+      { key: "ringkasan", label: "Materi atau kegiatan", required: true, kind: "textarea" },
+      { key: "hasil_dicapai", label: "Hasil yang dicapai", kind: "textarea" },
+      { key: "catatan_rahasia", label: "Catatan rahasia BK", kind: "textarea" },
+      { key: "status_kasus", label: "Status layanan", kind: "select", options: CASE_STATUSES },
       { key: "tindak_lanjut", label: "Tindak lanjut", kind: "textarea" },
-      { key: "tanggal_kontrol", label: "Tanggal kontrol", kind: "date" },
     ],
   },
   {

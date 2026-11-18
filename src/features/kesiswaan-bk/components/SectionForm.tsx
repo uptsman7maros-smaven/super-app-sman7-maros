@@ -1,10 +1,11 @@
 import type { Dispatch, FormEvent, SetStateAction } from "react";
-import type { AcademicYearOption, FieldDefinition, SectionConfig, SectionFormValue, StudentOption } from "../types";
+import type { AcademicYearOption, ClassOption, FieldDefinition, SectionConfig, SectionFormValue, StudentOption } from "../types";
 
 type Props = {
   config: SectionConfig;
   form: SectionFormValue;
   students: StudentOption[];
+  classes: ClassOption[];
   academicYears: AcademicYearOption[];
   academicYearId: string;
   semester: string;
@@ -61,6 +62,7 @@ export default function SectionForm({
   config,
   form,
   students,
+  classes,
   academicYears,
   academicYearId,
   semester,
@@ -85,25 +87,55 @@ export default function SectionForm({
       </div>
       {error && <div className="kb-alert" role="alert">{error}</div>}
       <form onSubmit={onSubmit} className="kb-form">
-        {config.fields.map(field => (
+        {config.fields.filter(field => {
+          if (field.key === "student_id" && config.key === "Catatan BK") return !form.target_type || form.target_type === "Siswa";
+          if (field.key === "class_id" && config.key === "Catatan BK") return form.target_type === "Kelas";
+          return true;
+        }).map(field => (
           <label key={field.key}>
             {field.label}{field.required && <b>*</b>}
             {field.kind === "student" ? (
               <StudentField field={field} form={form} students={students} onChange={updateField} />
+            ) : field.kind === "class" ? (
+              <select value={form[field.key] ?? ""} onChange={event => updateField(field.key, event.target.value)}>
+                <option value="">Pilih kelas...</option>
+                {classes.map(classOption => (
+                  <option key={classOption.id} value={classOption.id}>{classOption.name}</option>
+                ))}
+              </select>
             ) : field.kind === "select" ? (
-              <select required={field.required} value={form[field.key] ?? ""} onChange={event => updateField(field.key, event.target.value)}>
+              <select required={field.required} value={form[field.key] ?? ""} onChange={event => {
+                if (field.key === "target_type") {
+                  onFormChange(current => ({
+                    ...current,
+                    target_type: event.target.value,
+                    student_id: "",
+                    student_id_search: "",
+                    class_id: "",
+                  }));
+                } else {
+                  updateField(field.key, event.target.value);
+                }
+              }}>
                 <option value="">Pilih {field.label.toLowerCase()}...</option>
                 {field.options?.map(option => <option key={option} value={option}>{option}</option>)}
               </select>
             ) : field.kind === "textarea" ? (
               <textarea required={field.required} rows={3} value={form[field.key] ?? ""} onChange={event => updateField(field.key, event.target.value)} />
             ) : (
+              <>
               <input
                 type={field.kind === "date" ? "date" : field.kind === "time" ? "time" : "text"}
                 required={field.required}
                 value={form[field.key] ?? ""}
                 onChange={event => updateField(field.key, event.target.value)}
               />
+              {field.kind === "date" && form[field.key] && (
+                <small className="kb-date-weekday">
+                  {new Date(`${form[field.key]}T00:00:00`).toLocaleDateString("id-ID", { weekday: "long" })}
+                </small>
+              )}
+              </>
             )}
           </label>
         ))}

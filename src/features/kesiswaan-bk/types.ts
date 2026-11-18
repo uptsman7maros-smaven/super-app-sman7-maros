@@ -8,8 +8,8 @@ export type SectionKey =
   | "Rujukan BK"
   | "Rencana Karir";
 
-export type ViewMode = "data" | "alerts" | "assignments";
-export type FieldKind = "text" | "date" | "time" | "textarea" | "select" | "student";
+export type ViewMode = "data" | "alerts" | "assignments" | "workflow";
+export type FieldKind = "text" | "date" | "time" | "textarea" | "select" | "student" | "class";
 export type UserRole =
   | "super_admin"
   | "kepala_sekolah"
@@ -51,9 +51,14 @@ export type StudentOption = {
   academic_year: string | null;
   counselor_profile_id: string | null;
   counselor_name: string | null;
+  parent_phone?: string | null;
+  profile_id?: string | null;
+  grade_level?: number | null;
 };
 
 export type AcademicYearOption = { id: string; name: string; is_active: boolean };
+export type ClassOption = { id: string; name: string; grade_level: number; academic_year_id: string };
+export type SchoolHeader = { school_name: string; npsn: string; letterhead: string; academic_year: string };
 export type CounselorOption = { id: string; name: string };
 export type AssignmentStudent = StudentOption & { counselor_profile_id: string | null };
 
@@ -104,3 +109,96 @@ export type StudentProfile = {
 
 export type SectionFormValue = Record<string, string>;
 export type FollowUpKind = "note" | "schedule";
+
+export type ConsultationRow = {
+  id: string;
+  student_id: string;
+  class_id: string | null;
+  requester_profile_id: string | null;
+  requester_name: string;
+  topic: string;
+  scheduled_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  counselor_profile_id: string | null;
+  status: "Menunggu" | "Terjadwal" | "Selesai";
+  outcome_summary: string | null;
+  follow_up: string | null;
+  source_curhat_thread_id: string | null;
+};
+
+export type HomeVisitRow = {
+  id: string;
+  student_id: string;
+  class_id: string | null;
+  academic_year_id: string | null;
+  semester: number | null;
+  visit_date: string;
+  visit_time: string | null;
+  address: string;
+  people_met: string;
+  counselor_profile_id: string;
+  purpose: string;
+  observations: string;
+  agreement_follow_up: string;
+  auto_agenda: boolean;
+};
+
+export type RplRow = {
+  id: string;
+  title: string;
+  academic_year_id: string | null;
+  target_class: string;
+  service_area: string;
+  content: Record<string, string>;
+  created_at: string;
+};
+
+export type AkpdFormRow = {
+  id: string;
+  title: string;
+  academic_year_id: string;
+  target_grade: string;
+  questions: Array<{ id: string; area: string; text: string }>;
+  is_active: boolean;
+};
+
+export type AkpdResponseRow = {
+  id: string;
+  form_id: string;
+  student_id: string;
+  answers: Record<string, string>;
+  created_at: string;
+};
+
+export type CurhatThreadRow = {
+  id: string;
+  student_id: string;
+  counselor_profile_id: string;
+  subject: string;
+  category: string;
+  urgency: string;
+  status: "Baru" | "Dibaca" | "Ditindaklanjuti" | "Selesai";
+  request_consultation: boolean;
+  unread_by_counselor: boolean;
+  unread_by_student: boolean;
+  created_at: string;
+};
+
+export type CurhatMessageRow = {
+  id: string;
+  thread_id: string;
+  author_profile_id: string;
+  message: string;
+  created_at: string;
+};
+
+export type StudentCounselingProfile = {
+  student_id: string;
+  home_address: string;
+  guardian_name: string;
+  guardian_occupation: string;
+  talents: string;
+  career_plan: string;
+  health_notes: string;
+};
