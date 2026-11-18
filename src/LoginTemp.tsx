@@ -1,8 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabase";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { loginThemes, persistLoginTheme, type LoginTheme } from "./loginThemes";
 import "./LoginTemp.css";
+
+const FALLBACK_SCHOOL_PHOTO = "/login-school-photo.jpg";
+
+const SCHOOL_PHOTOS = [
+  { src: FALLBACK_SCHOOL_PHOTO, caption: "Lingkungan Sekolah" },
+];
 
 type LoginProps = {
   moduleName?: string;
@@ -32,6 +38,49 @@ export default function Login({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [photoIndexes, setPhotoIndexes] = useState({
+    active: 0,
+    previous: 0,
+  });
+
+  useEffect(() => {
+    if (
+      SCHOOL_PHOTOS.length < 2 ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setPhotoIndexes(({ active }) => ({
+        previous: active,
+        active: (active + 1) % SCHOOL_PHOTOS.length,
+      }));
+    }, 5500);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  function selectSchoolPhoto(index: number) {
+    setPhotoIndexes((current) => ({
+      previous: current.active,
+      active: index,
+    }));
+  }
+
+  function handleSchoolPhotoError(
+    event: React.SyntheticEvent<HTMLImageElement>,
+  ) {
+    const image = event.currentTarget;
+    if (image.dataset.fallbackApplied !== "true" && image.getAttribute("src") !== FALLBACK_SCHOOL_PHOTO) {
+      image.dataset.fallbackApplied = "true";
+      image.src = FALLBACK_SCHOOL_PHOTO;
+      return;
+    }
+
+    image.hidden = true;
+  }
+
   function selectLoginTheme(theme: LoginTheme) {
     onThemeChange(theme);
     persistLoginTheme(theme);
@@ -163,36 +212,110 @@ export default function Login({
   return (
     <main className={`login-page login-theme-${loginTheme}`}>
       <div className="login-pattern" aria-hidden="true">
+        <svg className="login-pattern-kawung" viewBox="0 0 180 180">
+          <g fill="none" stroke="currentColor" strokeWidth="1">
+            <ellipse cx="90" cy="48" rx="18" ry="34" />
+            <ellipse cx="90" cy="132" rx="18" ry="34" />
+            <ellipse cx="48" cy="90" rx="34" ry="18" />
+            <ellipse cx="132" cy="90" rx="34" ry="18" />
+            <path d="M90 64v52M64 90h52M73 73l34 34m0-34L73 107" />
+          </g>
+        </svg>
         <span className="login-pattern-corner login-pattern-corner-left" />
         <span className="login-pattern-corner login-pattern-corner-right" />
       </div>
       <div className="login-card-watermark" aria-hidden="true">
-        <img src="/login-school-photo.jpg" alt="" />
+        <img
+          src={FALLBACK_SCHOOL_PHOTO}
+          alt=""
+          onError={handleSchoolPhotoError}
+        />
       </div>
-      <section className="login-showcase" aria-label="Portal SMAN 7 Maros">
+      <section className="login-showcase" aria-label="Portal SMAN 7 MAROS">
+        <div className="login-showcase-slideshow" aria-hidden="true">
+          {SCHOOL_PHOTOS.map((photo, index) => (
+            <img
+              key={photo.src}
+              src={photo.src}
+              alt=""
+              className={`login-showcase-photo${photoIndexes.active === index ? " is-active" : ""}${photoIndexes.previous === index && photoIndexes.active !== index ? " is-previous" : ""}`}
+              onError={handleSchoolPhotoError}
+            />
+          ))}
+        </div>
         <div className="login-showcase-backdrop" aria-hidden="true" />
+        <svg
+          className="login-kawung-ornament"
+          viewBox="0 0 180 180"
+          aria-hidden="true"
+        >
+          <g fill="none" stroke="currentColor" strokeWidth="1">
+            <ellipse cx="90" cy="48" rx="18" ry="34" />
+            <ellipse cx="90" cy="132" rx="18" ry="34" />
+            <ellipse cx="48" cy="90" rx="34" ry="18" />
+            <ellipse cx="132" cy="90" rx="34" ry="18" />
+            <path d="M90 64v52M64 90h52M73 73l34 34m0-34L73 107" />
+            <path d="M90 26v12m0 104v12M26 90h12m104 0h12" />
+          </g>
+        </svg>
         <div className="login-showcase-content">
           <div className="login-school-seal">
             <span className="login-seal-ring" aria-hidden="true" />
-            <img src="/logo-sekolah.png" alt="Logo SMAN 7 Maros" />
+            <img src="/logo-sekolah.png" alt="Logo SMAN 7 MAROS" />
           </div>
           <p className="login-eyebrow">PORTAL DIGITAL SEKOLAH</p>
-          <h1>SMAN 7 Maros</h1>
+          <h1>SMAN 7 MAROS</h1>
           <p className="login-tagline">Berprestasi dalam karya, berakhlak dalam budaya.</p>
           <div className="login-identity" aria-hidden="true">
             <span />
             <strong>MAROS</strong>
             <span />
           </div>
+          <div className="login-photo-gallery" role="group" aria-label="Galeri foto sekolah">
+            {SCHOOL_PHOTOS.map((photo, index) => (
+              <button
+                key={photo.src}
+                type="button"
+                className={`login-photo-thumb${photoIndexes.active === index ? " active" : ""}`}
+                onClick={() => selectSchoolPhoto(index)}
+                aria-label={`Tampilkan foto: ${photo.caption}`}
+                aria-pressed={photoIndexes.active === index}
+              >
+                <img
+                  src={photo.src}
+                  alt=""
+                  onError={handleSchoolPhotoError}
+                />
+                <span className="login-photo-caption">{photo.caption}</span>
+                <span className="login-photo-progress" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="login-batik login-batik-bottom" aria-hidden="true" />
+        <div className="login-batik login-batik-bottom" aria-hidden="true">
+          <svg viewBox="0 0 640 100" preserveAspectRatio="xMidYMax meet">
+            <g fill="none" stroke="currentColor" strokeWidth="1">
+              <path d="M0 50h640M0 64h640M0 78h640" />
+              <path d="M32 50 50 20l18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30zm36 0 18-30 18 30-18 30z" />
+              <path d="M32 50c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0m0 0c0-15 18-15 18 0s18 15 18 0" />
+            </g>
+          </svg>
+        </div>
         <div className="login-floating-shape login-floating-shape-one" aria-hidden="true" />
         <div className="login-floating-shape login-floating-shape-two" aria-hidden="true" />
       </section>
 
       <section className="login-card">
+        {["top-left", "top-right", "bottom-left", "bottom-right"].map((corner) => (
+          <span className={`login-card-corner login-card-corner-${corner}`} key={corner} aria-hidden="true">
+            <svg viewBox="0 0 56 56">
+              <path d="M4 28V4h24M4 15h13M15 4v13M9 9l8 8m-8 0 8-8" />
+              <circle cx="4" cy="4" r="2" />
+            </svg>
+          </span>
+        ))}
         <div className="login-card-mobile-brand">
-          <img src="/logo-sekolah.png" alt="" />
+          <img src="/logo-sekolah.png" alt="Logo SMAN 7 MAROS" />
           <span>SMAN 7 MAROS</span>
         </div>
         <p className="login-card-eyebrow">Selamat datang kembali</p>
@@ -240,6 +363,8 @@ export default function Login({
             />
             <button
               type="button"
+              aria-label={showPassword ? "Sembunyikan password" : "Lihat password"}
+              aria-pressed={showPassword}
               onClick={() => setShowPassword((value) => !value)}
               disabled={loading}
             >
