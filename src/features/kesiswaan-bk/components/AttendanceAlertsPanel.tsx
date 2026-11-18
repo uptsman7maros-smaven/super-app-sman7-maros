@@ -5,7 +5,6 @@ type Props = {
   students: StudentOption[];
   loading: boolean;
   error: string;
-  onRefresh: () => void;
   onMarkRead: (alert: AttendanceBkAlert) => void;
   onFollowUp: (alert: AttendanceBkAlert, kind: "note" | "schedule") => void;
   onOpenProfile: (student: StudentOption) => void;
@@ -16,7 +15,6 @@ export default function AttendanceAlertsPanel({
   students,
   loading,
   error,
-  onRefresh,
   onMarkRead,
   onFollowUp,
   onOpenProfile,
@@ -26,7 +24,6 @@ export default function AttendanceAlertsPanel({
     <section className="kb-panel">
       <div className="kb-panel-heading">
         <div><span className="kb-eyebrow">PEMANTAUAN HARIAN</span><h2>Peringatan absensi siswa</h2></div>
-        <button className="kb-secondary" type="button" onClick={onRefresh} disabled={loading}>{loading ? "Memuat..." : "Muat ulang"}</button>
       </div>
       <p className="kb-attendance-alert-intro">
         Peringatan absensi disandingkan dengan perizinan pada tanggal yang sama. Data izin tetap perlu diverifikasi oleh Guru BK.
@@ -52,8 +49,13 @@ export default function AttendanceAlertsPanel({
                   {alert.has_permission && <span className="kb-permission-badge">Sudah Ada Izin · perlu verifikasi</span>}
                 </div>
                 <div className="kb-alert-actions">
-                  <button className="kb-mini" type="button" onClick={() => onFollowUp(alert, "note")}>Tindak Lanjuti ke Catatan BK</button>
-                  <button className="kb-mini" type="button" onClick={() => onFollowUp(alert, "schedule")}>Jadwalkan Konseling</button>
+                  <details className="kb-row-actions kb-alert-follow-up">
+                    <summary>Tindak lanjut</summary>
+                    <div>
+                      <button className="kb-mini" type="button" onClick={() => onFollowUp(alert, "note")}>Catat ke Agenda BK</button>
+                      <button className="kb-mini" type="button" onClick={() => onFollowUp(alert, "schedule")}>Jadwalkan konsultasi</button>
+                    </div>
+                  </details>
                   {alert.is_read
                     ? <span className="kb-alert-read">Sudah dibaca</span>
                     : <button className="kb-mini" type="button" onClick={() => onMarkRead(alert)}>Tandai dibaca</button>}

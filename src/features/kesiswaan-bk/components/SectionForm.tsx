@@ -27,11 +27,13 @@ function StudentField({
   field,
   form,
   students,
+  required,
   onChange,
 }: {
   field: FieldDefinition;
   form: SectionFormValue;
   students: StudentOption[];
+  required: boolean;
   onChange: (key: string, value: string) => void;
 }) {
   const student = students.find(item => item.id === form[field.key]);
@@ -41,7 +43,7 @@ function StudentField({
     <>
       <input
         list="kb-student-options"
-        required={field.required}
+        required={required}
         value={form[searchKey] ?? (student ? studentLabel(student) : "")}
         onChange={event => {
           const value = event.target.value;
@@ -91,13 +93,17 @@ export default function SectionForm({
           if (field.key === "student_id" && config.key === "Catatan BK") return !form.target_type || form.target_type === "Siswa";
           if (field.key === "class_id" && config.key === "Catatan BK") return form.target_type === "Kelas";
           return true;
-        }).map(field => (
+        }).map(field => {
+          const required = field.required
+            || (config.key === "Catatan BK" && field.key === "student_id" && form.target_type === "Siswa")
+            || (config.key === "Catatan BK" && field.key === "class_id" && form.target_type === "Kelas");
+          return (
           <label key={field.key}>
-            {field.label}{field.required && <b>*</b>}
+            <span className="kb-label-caption">{field.label}{required && <b className="kb-required-mark" aria-hidden="true">*</b>}</span>
             {field.kind === "student" ? (
-              <StudentField field={field} form={form} students={students} onChange={updateField} />
+              <StudentField field={field} form={form} students={students} required={required} onChange={updateField} />
             ) : field.kind === "class" ? (
-              <select value={form[field.key] ?? ""} onChange={event => updateField(field.key, event.target.value)}>
+              <select required={required} value={form[field.key] ?? ""} onChange={event => updateField(field.key, event.target.value)}>
                 <option value="">Pilih kelas...</option>
                 {classes.map(classOption => (
                   <option key={classOption.id} value={classOption.id}>{classOption.name}</option>
@@ -138,7 +144,8 @@ export default function SectionForm({
               </>
             )}
           </label>
-        ))}
+          );
+        })}
         <div className="kb-form-filters">
           <label>Tahun ajaran
             <select value={academicYearId} onChange={event => onAcademicYearChange(event.target.value)}>

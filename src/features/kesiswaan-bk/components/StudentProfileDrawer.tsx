@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { loadStudentProfile } from "../services/kesiswaanBkService";
-import type { StudentProfile, UserRole } from "../types";
+import type { StudentOption, StudentProfile, UserRole } from "../types";
 
 type Props = {
   studentId: string | null;
   role: UserRole;
   onClose: () => void;
+  onCreateNote: (student: StudentOption) => void;
+  onScheduleConsultation: (student: StudentOption) => void;
+  onCreateParentLetter: (student: StudentOption) => void;
 };
 
 function Rows({ title, rows, columns }: { title: string; rows: readonly object[]; columns: string[] }) {
@@ -22,7 +25,7 @@ function Rows({ title, rows, columns }: { title: string; rows: readonly object[]
   );
 }
 
-export default function StudentProfileDrawer({ studentId, role, onClose }: Props) {
+export default function StudentProfileDrawer({ studentId, role, onClose, onCreateNote, onScheduleConsultation, onCreateParentLetter }: Props) {
   const [profile, setProfile] = useState<StudentProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -67,6 +70,18 @@ export default function StudentProfileDrawer({ studentId, role, onClose }: Props
             <span>{profile.attendance.length} rekaman kehadiran</span>
             <span>{profile.counselingNotes.length} catatan BK</span>
           </div>
+          {(role === "guru_bk" || role === "super_admin") && (
+            <div className="kb-profile-actions">
+              <details className="kb-row-actions">
+                <summary>Tindak lanjut</summary>
+                <div>
+                  <button className="kb-mini" type="button" onClick={() => onCreateNote(profile.student)}>Catat layanan BK</button>
+                  <button className="kb-mini" type="button" onClick={() => onScheduleConsultation(profile.student)}>Jadwalkan konsultasi</button>
+                  <button className="kb-mini" type="button" onClick={() => onCreateParentLetter(profile.student)}>Buat surat panggilan</button>
+                </div>
+              </details>
+            </div>
+          )}
           <Rows title="Riwayat kehadiran" rows={profile.attendance} columns={["attendance_date", "session_type", "subject", "status"]} />
           <Rows title="Peringatan absensi" rows={profile.alerts} columns={["attendance_date", "title", "body"]} />
           <Rows title="Prestasi" rows={profile.achievements} columns={["nama_prestasi", "tingkat", "tanggal"]} />

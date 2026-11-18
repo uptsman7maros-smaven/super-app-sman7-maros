@@ -708,6 +708,8 @@
   .kb-workflow-panel .kb-form,
   .kb-workflow-panel .kb-akpd-student,
   .kb-workflow-panel .kb-panel-heading button,
+  .kb-workflow-panel .kb-panel-heading .kb-export-actions,
+  .kb-workflow-panel .kb-row-actions,
   .kb-workflow-panel .kb-workflow-list button,
   .kb-workflow-panel .kb-curhat-layout,
   .kb-workflow-panel .kb-workflow-student-layout > .kb-workflow-list,
@@ -1066,5 +1068,127 @@
   .kb-workflow-panel *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+.kb-label-caption {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.kb-form label .kb-required-mark {
+  margin: 0;
+  color: #c6284f;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.kb-export-actions {
+  flex-wrap: wrap;
+}
+
+.kb-export-format select {
+  min-height: 42px;
+  border: 1px solid #e5e5f1;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fcfcff;
+  color: #262642;
+  font: inherit;
+}
+
+.kb-row-actions {
+  position: relative;
+  display: inline-block;
+  min-width: 88px;
+  text-align: left;
+}
+
+.kb-row-actions > summary {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f1f0fa;
+  color: #5b5b78;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  list-style: none;
+}
+
+.kb-row-actions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kb-row-actions > summary::after {
+  content: "+";
+  margin-left: 7px;
+}
+
+.kb-row-actions[open] > summary::after {
+  content: "-";
+}
+
+.kb-row-actions > summary:focus-visible {
+  outline: 3px solid #9d8bea;
+  outline-offset: 2px;
+}
+
+.kb-row-actions[open] > div {
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid #eeedf7;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 20px #29284f14;
+}
+
+.kb-row-actions > div .kb-mini {
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+}
+
+.kb-alert-follow-up {
+  min-width: 0;
+}
+
+.kb-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.kb-profile-actions .kb-row-actions {
+  min-width: 160px;
+}
+
+.kb-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 760px) {
+  .kb-export-format {
+    flex: 1 1 130px;
+  }
+
+  .kb-export-format select {
+    width: 100%;
   }
 }

@@ -76,10 +76,12 @@ export default function KesiswaanBK({
   currentUser,
   userRole,
   module = "kesiswaan",
+  onOpenParentLetter,
 }: {
   currentUser: SchoolUser;
   userRole: string;
   module?: "kesiswaan" | "bimbingan-konseling";
+  onOpenParentLetter?: (student: StudentOption, context: string) => void;
 }) {
   const isCounselingModule = module === "bimbingan-konseling";
   const [active, setActive] = useState<SectionKey>(() => isCounselingModule ? "Catatan BK" : "Prestasi");
@@ -106,6 +108,8 @@ export default function KesiswaanBK({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rowToDelete, setRowToDelete] = useState<KbRow | null>(null);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+  const [consultationStudentId, setConsultationStudentId] = useState<string | null>(null);
+  const [consultationPrefillTopic, setConsultationPrefillTopic] = useState("");
   const [stats, setStats] = useState<SummaryStats>(EMPTY_STATS);
   const [alerts, setAlerts] = useState<AttendanceBkAlert[]>([]);
   const [assignmentStudents, setAssignmentStudents] = useState<AssignmentStudent[]>([]);
@@ -268,6 +272,8 @@ export default function KesiswaanBK({
   }
 
   function selectSection(section: SectionKey) {
+    setConsultationStudentId(null);
+    setConsultationPrefillTopic("");
     setActive(section);
     setView("data");
     setForm(section === "Catatan BK"
@@ -283,6 +289,10 @@ export default function KesiswaanBK({
   }
 
   function selectWorkflowTab(tab: CounselingWorkspaceTab) {
+    if (tab !== "Konsultasi BK" && tab !== "Pengajuan Konsultasi") {
+      setConsultationStudentId(null);
+      setConsultationPrefillTopic("");
+    }
     setWorkflowTab(tab);
     setView("workflow");
     setNotice("");
@@ -312,6 +322,51 @@ export default function KesiswaanBK({
           hari_tanggal: alert.attendance_date,
           keterangan: `Tindak lanjut peringatan absensi: ${alert.body}`,
         });
+  }
+
+  function startRecordFollowUp(row: KbRow, kind: "note" | "consultation") {
+    const studentId = typeof row.student_id === "string" ? row.student_id : "";
+    const student = studentById.get(studentId);
+    if (!student) {
+      setError("Siswa pada data ini tidak lagi tersedia di Data Induk.");
+      return;
+    }
+
+    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Makassar" });
+    setEditingId(null);
+    setError("");
+    if (kind === "consultation") {
+      setConsultationStudentId(student.id);
+      setConsultationPrefillTopic("Konsultasi tindak lanjut layanan BK");
+      setWorkflowTab("Konsultasi BK");
+      setView("workflow");
+      setNotice("Identitas siswa dan tindak lanjut sudah dibawa ke pengajuan konsultasi.");
+      return;
+    }
+    setView("data");
+    const sourceText = active === "Rujukan BK"
+      ? `Rujukan ${String(row.referral_type ?? "BK")}: ${String(row.summary ?? "")}${row.details ? `\nDetail: ${String(row.details)}` : ""}`
+      : `Tindak lanjut catatan BK: ${String(row.ringkasan ?? "")}`;
+    setActive("Catatan BK");
+    setForm({
+      target_type: "Siswa",
+      student_id: student.id,
+      tanggal: today,
+      bidang_layanan: "Pribadi",
+      jenis_layanan: "Konseling Individu",
+      ringkasan: sourceText,
+      status_kasus: "Dalam Proses",
+    });
+    setNotice("Identitas siswa dan konteks tindak lanjut sudah dibawa ke formulir.");
+  }
+
+  function openParentLetter(student: StudentOption, context = "Undangan konsultasi Bimbingan dan Konseling.") {
+    if (!onOpenParentLetter) {
+      setError("Modul Persuratan belum tersedia. Buka Persuratan dari menu utama.");
+      return;
+    }
+    setSelectedStudentId(null);
+    onOpenParentLetter(student, context);
   }
 
   function editRow(row: KbRow) {
@@ -503,6 +558,8 @@ export default function KesiswaanBK({
           academicYears={academicYears}
           schoolHeader={schoolHeader}
           initialRplTopic={rplPrefillTopic}
+          consultationStudentId={consultationStudentId}
+          consultationPrefillTopic={consultationPrefillTopic}
           onCreateRplFromTopic={topic => {
             setRplPrefillTopic(topic);
             setWorkflowTab("Generator RPL");
@@ -551,6 +608,9 @@ export default function KesiswaanBK({
             onPageChange={setPage}
             onEdit={editRow}
             onDelete={setRowToDelete}
+            onFollowUp={startRecordFollowUp}
+            canCreateParentLetter={Boolean(onOpenParentLetter) && (role === "guru_bk" || role === "super_admin")}
+            onCreateParentLetter={openParentLetter}
             onOpenProfile={student => setSelectedStudentId(student.id)}
             onExport={() => void exportCsv()}
             onExportExcel={() => void exportExcel()}
@@ -566,7 +626,6 @@ export default function KesiswaanBK({
           students={students}
           loading={alertsLoading}
           error=""
-          onRefresh={() => void refreshAlerts()}
           onMarkRead={alert => void markAlertRead(alert)}
           onFollowUp={startAlertFollowUp}
           onOpenProfile={student => setSelectedStudentId(student.id)}
@@ -590,6 +649,29 @@ export default function KesiswaanBK({
         studentId={selectedStudentId}
         role={role}
         onClose={() => setSelectedStudentId(null)}
+        onCreateNote={student => {
+          setSelectedStudentId(null);
+          setConsultationStudentId(null);
+          setConsultationPrefillTopic("");
+          setActive("Catatan BK");
+          setView("data");
+          setEditingId(null);
+          setError("");
+          setNotice("Identitas siswa sudah dibawa ke Agenda Harian BK.");
+          setForm({
+            target_type: "Siswa",
+            student_id: student.id,
+            tanggal: new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Makassar" }),
+            status_kasus: "Terbuka",
+          });
+        }}
+        onScheduleConsultation={student => {
+          setSelectedStudentId(null);
+          setConsultationStudentId(student.id);
+          setConsultationPrefillTopic("");
+          selectWorkflowTab(role === "siswa" ? "Pengajuan Konsultasi" : "Konsultasi BK");
+        }}
+        onCreateParentLetter={student => openParentLetter(student)}
       />}
       <ConfirmModal
         open={rowToDelete !== null}

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
+import type { ReactNode } from "react";
 import type { SchoolUser } from "../../../context/school-context";
+import ReportActions from "./ReportActions";
 import {
   createCurhatThread,
   generateBkAkpdQuestions,
@@ -59,6 +61,8 @@ type Props = {
   academicYears: AcademicYearOption[];
   schoolHeader: SchoolHeader;
   initialRplTopic?: string;
+  consultationStudentId?: string | null;
+  consultationPrefillTopic?: string;
   onCreateRplFromTopic: (topic: string) => void;
 };
 
@@ -148,6 +152,10 @@ function PrintHeader({ header, title }: { header: SchoolHeader; title: string })
   );
 }
 
+function LabelCaption({ children, required = false }: { children: ReactNode; required?: boolean }) {
+  return <span className="kb-label-caption">{children}{required && <b className="kb-required-mark" aria-hidden="true">*</b>}</span>;
+}
+
 function Signatures() {
   return (
     <div className="kb-signatures">
@@ -170,6 +178,8 @@ export default function CounselingWorkflowPanel({
   academicYears,
   schoolHeader,
   initialRplTopic = "",
+  consultationStudentId = null,
+  consultationPrefillTopic = "",
   onCreateRplFromTopic,
 }: Props) {
   const isStudent = role === "siswa";
@@ -205,9 +215,9 @@ export default function CounselingWorkflowPanel({
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [consultForm, setConsultForm] = useState({
-    student_id: student?.id ?? "",
+    student_id: consultationStudentId ?? student?.id ?? "",
     requester_name: currentUser.full_name || currentUser.username,
-    topic: "",
+    topic: consultationPrefillTopic,
     scheduled_date: "",
     start_time: "",
     end_time: "",
@@ -234,6 +244,7 @@ export default function CounselingWorkflowPanel({
   const [questionDraft, setQuestionDraft] = useState("");
   const [formTitle, setFormTitle] = useState("Angket Kebutuhan Peserta Didik");
   const [akpdId, setAkpdId] = useState("");
+  const [akpdYearId, setAkpdYearId] = useState(activeYear);
   const [targetGrade, setTargetGrade] = useState("Semua");
   const [formActive, setFormActive] = useState(true);
   const [selectedForm, setSelectedForm] = useState("");
@@ -455,7 +466,7 @@ export default function CounselingWorkflowPanel({
       <section className="kb-panel kb-workflow-panel">
         <PrintHeader header={schoolHeader} title="Laporan Konsultasi Bimbingan dan Konseling" />
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">JADWAL LAYANAN</span><h2>{isStudent ? "Pengajuan Konsultasi" : "Konsultasi BK"}</h2></div>
-          <div className="kb-export-actions"><button className="kb-secondary" type="button" onClick={() => exportConsultations("xlsx")}>Unduh Excel</button><button className="kb-secondary" type="button" onClick={() => exportConsultations("csv")}>Unduh CSV</button><button className="kb-secondary" type="button" onClick={printReport}>Cetak / PDF</button></div>
+          <ReportActions onExportExcel={() => exportConsultations("xlsx")} onExportCsv={() => exportConsultations("csv")} onPrint={printReport} />
         </div>
         {error && <div className="kb-alert" role="alert">{error}</div>}{notice && <div className="kb-success" role="status">{notice}</div>}
         {(isStudent || canEditStudentProfile) && <form className="kb-form" onSubmit={event => {
@@ -481,9 +492,9 @@ export default function CounselingWorkflowPanel({
             });
           }, "Pengajuan konsultasi berhasil dikirim.");
         }}>
-          {!isStudent && <label>Siswa<select required value={consultForm.student_id} onChange={event => setConsultForm(current => ({ ...current, student_id: event.target.value }))}><option value="">Pilih siswa...</option>{students.map(item => <option key={item.id} value={item.id}>{item.full_name} · {item.class_name}</option>)}</select></label>}
-          <label>Pemohon<input required value={consultForm.requester_name} onChange={event => setConsultForm(current => ({ ...current, requester_name: event.target.value }))} /></label>
-          <label>Topik konsultasi<input required value={consultForm.topic} onChange={event => setConsultForm(current => ({ ...current, topic: event.target.value }))} /></label>
+          {!isStudent && <label><LabelCaption required>Siswa</LabelCaption><select required value={consultForm.student_id} onChange={event => setConsultForm(current => ({ ...current, student_id: event.target.value }))}><option value="">Pilih siswa...</option>{students.map(item => <option key={item.id} value={item.id}>{item.full_name} · {item.class_name}</option>)}</select></label>}
+          <label><LabelCaption required>Pemohon</LabelCaption><input required value={consultForm.requester_name} onChange={event => setConsultForm(current => ({ ...current, requester_name: event.target.value }))} /></label>
+          <label><LabelCaption required>Topik konsultasi</LabelCaption><input required value={consultForm.topic} onChange={event => setConsultForm(current => ({ ...current, topic: event.target.value }))} /></label>
           <label>Tanggal yang diharapkan<input type="date" value={consultForm.scheduled_date} onChange={event => setConsultForm(current => ({ ...current, scheduled_date: event.target.value }))} />{weekday(consultForm.scheduled_date)}</label>
           <label>Waktu mulai<input type="time" value={consultForm.start_time} onChange={event => setConsultForm(current => ({ ...current, start_time: event.target.value }))} /></label>
           <label>Waktu selesai<input type="time" value={consultForm.end_time} onChange={event => setConsultForm(current => ({ ...current, end_time: event.target.value }))} /></label>
@@ -518,15 +529,16 @@ export default function CounselingWorkflowPanel({
                 <input aria-label="Tindak lanjut konsultasi" placeholder="Tindak lanjut" value={draft.follow_up} onChange={event => updateDraft("follow_up", event.target.value)} />
                 <span className="kb-print-value">{draft.outcome_summary} · {draft.follow_up}</span>
               </>}</td>
-              <td>{!isStudent && item.status !== "Selesai" && <div className="kb-workflow-row-actions">
-                <button className="kb-mini" type="button" onClick={() => void runSave(async () => {
+              <td>{!isStudent && item.status !== "Selesai" && <details className="kb-row-actions">
+                <summary>Aksi</summary>
+                <div><button className="kb-mini" type="button" onClick={() => void runSave(async () => {
                   if (!draft.scheduled_date) throw new Error("Pilih tanggal konsultasi sebelum menjadwalkan.");
                   await saveConsultation({ ...item, ...draft, status: "Terjadwal" });
                 }, "Jadwal konsultasi berhasil disimpan.")}>Jadwalkan</button>
                 <button className="kb-mini" type="button" onClick={() => void runSave(async () => {
                   await saveConsultation({ ...item, ...draft, status: "Selesai", outcome_summary: draft.outcome_summary || item.topic });
-                }, "Konsultasi selesai dan dicatat ke Agenda Harian BK.")}>Catat ke Agenda Harian</button>
-              </div>}</td>
+                }, "Konsultasi selesai dan dicatat ke Agenda Harian BK.")}>Selesaikan & catat ke Agenda</button></div>
+              </details>}</td>
             </tr>;
           })}
           {!consultations.length && <tr><td colSpan={6} className="kb-empty">Belum ada pengajuan konsultasi.</td></tr>}
@@ -539,7 +551,9 @@ export default function CounselingWorkflowPanel({
     return (
       <section className="kb-panel kb-workflow-panel">
         <PrintHeader header={schoolHeader} title="Laporan Kunjungan Rumah Peserta Didik" />
-        <div className="kb-panel-heading"><div><span className="kb-eyebrow">HOME VISIT</span><h2>Kunjungan Rumah</h2></div>        <div className="kb-export-actions"><button className="kb-secondary" type="button" onClick={() => downloadExcel("laporan-kunjungan-rumah.xlsx", homeVisitExportRows(visits))}>Unduh Excel</button><button className="kb-secondary" type="button" onClick={() => downloadCsv("laporan-kunjungan-rumah.csv", homeVisitExportRows(visits))}>Unduh CSV</button><button className="kb-secondary" type="button" onClick={printReport}>Cetak / PDF</button></div></div>
+        <div className="kb-panel-heading"><div><span className="kb-eyebrow">HOME VISIT</span><h2>Kunjungan Rumah</h2></div>
+          <ReportActions onExportExcel={() => downloadExcel("laporan-kunjungan-rumah.xlsx", homeVisitExportRows(visits))} onExportCsv={() => downloadCsv("laporan-kunjungan-rumah.csv", homeVisitExportRows(visits))} onPrint={printReport} />
+        </div>
         {error && <div className="kb-alert" role="alert">{error}</div>}{notice && <div className="kb-success" role="status">{notice}</div>}
         <form className="kb-form" onSubmit={event => {
           event.preventDefault();
@@ -565,14 +579,14 @@ export default function CounselingWorkflowPanel({
             });
           }, "Kunjungan rumah berhasil dicatat.");
         }}>
-          <label>Pilih siswa<select required value={visitForm.student_id} onChange={event => setVisitForm(current => ({ ...current, student_id: event.target.value }))}><option value="">Pilih siswa...</option>{students.filter(item => role !== "guru_bk" || item.counselor_profile_id === currentUser.id).map(item => <option key={item.id} value={item.id}>{item.full_name} · {item.nisn} · {item.class_name}</option>)}</select></label>
+          <label><LabelCaption required>Pilih siswa</LabelCaption><select required value={visitForm.student_id} onChange={event => setVisitForm(current => ({ ...current, student_id: event.target.value }))}><option value="">Pilih siswa...</option>{students.filter(item => role !== "guru_bk" || item.counselor_profile_id === currentUser.id).map(item => <option key={item.id} value={item.id}>{item.full_name} · {item.nisn} · {item.class_name}</option>)}</select></label>
           <label>Guru BK pelaksana<input readOnly value={students.find(item => item.id === visitForm.student_id)?.counselor_name ?? ""} placeholder="Penugasan belum tersedia" /></label>
           <label>Nomor WA orang tua<input readOnly value={students.find(item => item.id === visitForm.student_id)?.parent_phone ?? ""} placeholder="Tidak tercatat di Data Induk" /></label>
-          <label>Alamat kunjungan<input required value={visitForm.address} onChange={event => setVisitForm(current => ({ ...current, address: event.target.value }))} /></label>
-          <label>Hari / tanggal<input required type="date" value={visitForm.visit_date} onChange={event => setVisitForm(current => ({ ...current, visit_date: event.target.value }))} />{weekday(visitForm.visit_date)}</label>
+          <label><LabelCaption required>Alamat kunjungan</LabelCaption><input required value={visitForm.address} onChange={event => setVisitForm(current => ({ ...current, address: event.target.value }))} /></label>
+          <label><LabelCaption required>Hari / tanggal</LabelCaption><input required type="date" value={visitForm.visit_date} onChange={event => setVisitForm(current => ({ ...current, visit_date: event.target.value }))} />{weekday(visitForm.visit_date)}</label>
           <label>Waktu kunjungan<input type="time" value={visitForm.visit_time} onChange={event => setVisitForm(current => ({ ...current, visit_time: event.target.value }))} /></label>
-          <label>Pihak yang ditemui<select value={visitForm.people_met} onChange={event => setVisitForm(current => ({ ...current, people_met: event.target.value }))}><option>Ayah</option><option>Ibu</option><option>Wali</option></select></label>
-          <label>Tujuan / latar belakang<textarea required value={visitForm.purpose} onChange={event => setVisitForm(current => ({ ...current, purpose: event.target.value }))} /></label>
+          <label><LabelCaption required>Pihak yang ditemui</LabelCaption><select required value={visitForm.people_met} onChange={event => setVisitForm(current => ({ ...current, people_met: event.target.value }))}><option>Ayah</option><option>Ibu</option><option>Wali</option></select></label>
+          <label><LabelCaption required>Tujuan / latar belakang</LabelCaption><textarea required value={visitForm.purpose} onChange={event => setVisitForm(current => ({ ...current, purpose: event.target.value }))} /></label>
           <label>Hasil observasi & wawancara<textarea value={visitForm.observations} onChange={event => setVisitForm(current => ({ ...current, observations: event.target.value }))} /></label>
           <label>Kesepakatan & tindak lanjut<textarea value={visitForm.agreement_follow_up} onChange={event => setVisitForm(current => ({ ...current, agreement_follow_up: event.target.value }))} /></label>
           <label className="kb-checkbox-label"><input type="checkbox" checked={visitForm.auto_agenda} onChange={event => setVisitForm(current => ({ ...current, auto_agenda: event.target.checked }))} />Otomatis catat ke Agenda Harian BK</label>
@@ -607,9 +621,9 @@ export default function CounselingWorkflowPanel({
             const topic = event.target.value === "Topik kustom" ? "" : event.target.value;
             setRplTopic(topic); setRplTitle(topic);
           }}><option value="">Pilih preset...</option>{RPL_PRESETS.map(topic => <option key={topic}>{topic}</option>)}</select></label>
-          <label>Topik layanan<input required value={rplTopic} onChange={event => { setRplTopic(event.target.value); setRplTitle(event.target.value); }} /></label>
-          <label>Kelas / fase sasaran<select value={rplGrade} onChange={event => setRplGrade(event.target.value)}><option value="">Pilih kelas...</option>{classes.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}<option value="Semua kelas">Semua kelas</option></select></label>
-          <label>Bidang layanan<select value={rplArea} onChange={event => setRplArea(event.target.value)}>{AREA_OPTIONS.map(area => <option key={area}>{area}</option>)}</select></label>
+          <label><LabelCaption required>Topik layanan</LabelCaption><input required value={rplTopic} onChange={event => { setRplTopic(event.target.value); setRplTitle(event.target.value); }} /></label>
+          <label><LabelCaption required>Kelas / fase sasaran</LabelCaption><select required value={rplGrade} onChange={event => setRplGrade(event.target.value)}><option value="">Pilih kelas...</option>{classes.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}<option value="Semua kelas">Semua kelas</option></select></label>
+          <label><LabelCaption required>Bidang layanan</LabelCaption><select required value={rplArea} onChange={event => setRplArea(event.target.value)}>{AREA_OPTIONS.map(area => <option key={area}>{area}</option>)}</select></label>
           <label>Waktu / durasi<input value={rplDuration} onChange={event => setRplDuration(event.target.value)} /></label>
           <label>Tahun ajaran<select value={rplYearId} onChange={event => setRplYearId(event.target.value)}>{academicYears.map(year => <option key={year.id} value={year.id}>{year.name}{year.is_active ? " · Aktif" : ""}</option>)}</select></label>
           <div className="kb-ai-assistant">
@@ -633,6 +647,13 @@ export default function CounselingWorkflowPanel({
       ...question,
       count: formResponses.filter(response => /butuh|sangat|ya/i.test(response.answers[question.id] ?? "")).length,
     })).sort((a, b) => b.count - a.count);
+    const akpdExportRows = topNeed.map(item => ({
+      Bidang: item.area,
+      Pertanyaan: item.text,
+      "Jumlah kebutuhan": item.count,
+      "Jumlah responden": formResponses.length,
+      Persentase: formResponses.length ? `${Math.round(item.count / formResponses.length * 100)}%` : "0%",
+    }));
       const areaSummary = AREA_OPTIONS.map(area => {
         const areaQuestions = topNeed.filter(question => question.area === area);
         const needs = areaQuestions.reduce((sum, question) => sum + question.count, 0);
@@ -659,7 +680,11 @@ export default function CounselingWorkflowPanel({
       <section className="kb-panel kb-workflow-panel">
         <PrintHeader header={schoolHeader} title="Rekap Angket Kebutuhan Peserta Didik" />
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">ASESMEN KEBUTUHAN</span><h2>Angket Kebutuhan Siswa</h2></div>
-          {!isStudent && <div className="kb-export-actions"><button className="kb-secondary" type="button" onClick={() => downloadExcel("rekap-akpd.xlsx", topNeed.map(item => ({ Bidang: item.area, Pertanyaan: item.text, "Jumlah kebutuhan": item.count, Persentase: formResponses.length ? `${Math.round(item.count / formResponses.length * 100)}%` : "0%" })))}>Ekspor Excel</button><button className="kb-secondary" type="button" onClick={() => downloadCsv("rekap-akpd.csv", topNeed.map(item => ({ Bidang: item.area, Pertanyaan: item.text, "Jumlah kebutuhan": item.count, "Jumlah responden": formResponses.length })))}>Ekspor CSV</button><button className="kb-secondary" type="button" onClick={printReport}>Cetak / PDF</button></div>}
+          {!isStudent && <ReportActions
+            onExportExcel={() => downloadExcel("rekap-akpd.xlsx", akpdExportRows)}
+            onExportCsv={() => downloadCsv("rekap-akpd.csv", akpdExportRows)}
+            onPrint={printReport}
+          />}
         </div>
         {error && <div className="kb-alert" role="alert">{error}</div>}{notice && <div className="kb-success" role="status">{notice}</div>}
         {isStudent ? (
@@ -680,7 +705,7 @@ export default function CounselingWorkflowPanel({
             <label>Angket aktif<select value={selectedAkpd.id} onChange={event => setSelectedForm(event.target.value)}>{forms.map(form => <option key={form.id} value={form.id}>{form.title}</option>)}</select></label>
             <p>{selectedAkpd.title} · Tahun ajaran {academicYears.find(year => year.id === selectedAkpd.academic_year_id)?.name ?? "aktif"}</p>
             {studentResponse && <div className="kb-privacy">Jawaban Anda sudah tersimpan. Anda dapat memperbaruinya selama periode angket masih dibuka.</div>}
-            {questions.map(question => <label key={question.id}><span>{question.area} · {question.text}</span><select value={answerDraft[question.id] ?? studentResponse?.answers[question.id] ?? ""} onChange={event => setAnswerDraft(current => ({ ...current, [question.id]: event.target.value }))} required><option value="">Pilih jawaban...</option><option>Sangat membutuhkan bantuan</option><option>Membutuhkan bantuan</option><option>Tidak membutuhkan bantuan</option></select></label>)}
+            {questions.map(question => <label key={question.id}><LabelCaption required>{question.area} · {question.text}</LabelCaption><select value={answerDraft[question.id] ?? studentResponse?.answers[question.id] ?? ""} onChange={event => setAnswerDraft(current => ({ ...current, [question.id]: event.target.value }))} required><option value="">Pilih jawaban...</option><option>Sangat membutuhkan bantuan</option><option>Membutuhkan bantuan</option><option>Tidak membutuhkan bantuan</option></select></label>)}
             <button className="kb-primary" disabled={busy}>{busy ? "Menyimpan..." : "Kirim / perbarui jawaban"}</button>
           </form> : <div className="kb-empty">Belum ada angket aktif yang ditujukan untuk kelas Anda.</div>
         ) : <>
@@ -690,29 +715,31 @@ export default function CounselingWorkflowPanel({
               .filter(parts => parts.length > 1 && parts[1])
               .map((parts, index) => ({ id: `q${index + 1}`, area: parts[0] || "Pribadi", text: parts[1] }));
             void runSave(async () => {
-              await saveAkpdForm({ id: akpdId || undefined, title: formTitle, academic_year_id: activeYear, target_grade: targetGrade, questions: questionList.length ? questionList : AKPD_DEFAULT_QUESTIONS.map((item, index) => ({ ...item, id: `q${index + 1}` })), is_active: formActive });
+              await saveAkpdForm({ id: akpdId || undefined, title: formTitle, academic_year_id: akpdYearId || activeYear, target_grade: targetGrade, questions: questionList.length ? questionList : AKPD_DEFAULT_QUESTIONS.map((item, index) => ({ ...item, id: `q${index + 1}` })), is_active: formActive });
             }, akpdId ? "Angket berhasil diperbarui." : "Angket berhasil disimpan.");
           }}>
-            <label>Nama angket<input required value={formTitle} onChange={event => setFormTitle(event.target.value)} /></label>
-            <label>Tingkat sasaran<select value={targetGrade} onChange={event => setTargetGrade(event.target.value)}><option>Semua</option><option>10</option><option>11</option><option>12</option></select></label>
+            <label><LabelCaption required>Nama angket</LabelCaption><input required value={formTitle} onChange={event => setFormTitle(event.target.value)} /></label>
+            <label><LabelCaption required>Tahun ajaran</LabelCaption><select required value={akpdYearId || activeYear} onChange={event => setAkpdYearId(event.target.value)}><option value="">Pilih tahun ajaran...</option>{academicYears.map(year => <option key={year.id} value={year.id}>{year.name}{year.is_active ? " · Aktif" : ""}</option>)}</select></label>
+            <label><LabelCaption required>Tingkat sasaran</LabelCaption><select required value={targetGrade} onChange={event => setTargetGrade(event.target.value)}><option>Semua</option><option>10</option><option>11</option><option>12</option></select></label>
             <label className="kb-checkbox-label"><input type="checkbox" checked={formActive} onChange={event => setFormActive(event.target.checked)} />Angket aktif</label>
-            <label>Pertanyaan (satu per baris: Bidang | Pertanyaan)<textarea rows={8} value={questionDraft || AKPD_DEFAULT_QUESTIONS.map(item => `${item.area} | ${item.text}`).join("\n")} onChange={event => setQuestionDraft(event.target.value)} /></label>
+            <label><LabelCaption required>Pertanyaan (satu per baris: Bidang | Pertanyaan)</LabelCaption><textarea required rows={8} value={questionDraft || AKPD_DEFAULT_QUESTIONS.map(item => `${item.area} | ${item.text}`).join("\n")} onChange={event => setQuestionDraft(event.target.value)} /></label>
             <div className="kb-ai-assistant">
               <p>Gemini hanya menerima tingkat kelas sasaran, bukan jawaban angket atau identitas siswa.</p>
               <button className="kb-secondary" type="button" disabled={aiBusy} aria-busy={aiBusy} onClick={() => void generateAkpdDraft()}>
                 {aiBusy ? "Menyusun draf..." : "Bantu susun pertanyaan dengan Gemini"}
               </button>
             </div>
-            <div className="kb-actions"><button className="kb-primary" disabled={busy || aiBusy}>{akpdId ? "Simpan perubahan angket" : "Buat angket"}</button><button type="button" className="kb-secondary" onClick={() => { setAkpdId(""); setFormTitle("Angket Kebutuhan Peserta Didik"); setTargetGrade("Semua"); setFormActive(true); setQuestionDraft(""); }}>Angket baru</button></div>
+            <div className="kb-actions"><button className="kb-primary" disabled={busy || aiBusy}>{akpdId ? "Simpan perubahan angket" : "Buat angket"}</button><button type="button" className="kb-secondary" onClick={() => { setAkpdId(""); setFormTitle("Angket Kebutuhan Peserta Didik"); setAkpdYearId(activeYear); setTargetGrade("Semua"); setFormActive(true); setQuestionDraft(""); }}>Angket baru</button></div>
           </form>
           <div className="kb-form">
             <label>Pilih angket untuk rekap<select value={selectedAkpd?.id ?? ""} onChange={event => setSelectedForm(event.target.value)}>{forms.map(form => <option key={form.id} value={form.id}>{form.title} · {form.target_grade}</option>)}</select></label>
             <div className="kb-workflow-list">{areaSummary.map(item => <article key={item.area}><div><strong>{item.area}</strong><small>{item.needs} kebutuhan · {item.percent}% indeks kebutuhan</small></div></article>)}</div>
             <div className="kb-table-wrap"><table className="kb-table"><thead><tr><th>Kelompok</th><th>Jumlah responden</th><th>Jawaban kebutuhan</th></tr></thead><tbody>{[...cohortCounts.entries()].map(([name, value]) => <tr key={name}><td>{name}</td><td>{value.responses}</td><td>{value.needs}</td></tr>)}{cohortCounts.size === 0 && <tr><td colSpan={3} className="kb-empty">Rekap kelompok akan tampil setelah siswa mengisi angket.</td></tr>}</tbody></table></div>
-            <div className="kb-workflow-list">{topNeed.map((item, index) => <article key={item.id}><div><strong>{index + 1}. {item.text}</strong><small>{item.area} · {item.count} dari {formResponses.length} siswa</small></div><button className="kb-mini" type="button" onClick={() => onCreateRplFromTopic(item.text)}>Buat RPL dari topik</button></article>)}</div>
+            {topNeed[0] && <div className="kb-actions"><button className="kb-primary" type="button" onClick={() => onCreateRplFromTopic(topNeed[0].text)}>Buat RPL dari topik teratas</button></div>}
+            <div className="kb-workflow-list">{topNeed.map((item, index) => <article key={item.id}><div><strong>{index + 1}. {item.text}</strong><small>{item.area} · {item.count} dari {formResponses.length} siswa</small></div></article>)}</div>
           </div>
           <div className="kb-table-wrap"><table className="kb-table"><thead><tr><th>Tingkat</th><th>Angket</th><th>Status</th><th>Responden</th><th>Aksi</th></tr></thead><tbody>{forms.map(form => <tr key={form.id}><td>{form.target_grade}</td><td>{form.title}</td><td>{form.is_active ? "Aktif" : "Ditutup"}</td><td>{responses.filter(response => response.form_id === form.id).length}</td><td><button className="kb-mini" type="button" onClick={() => {
-            setAkpdId(form.id); setFormTitle(form.title); setTargetGrade(form.target_grade); setFormActive(form.is_active); setSelectedForm(form.id);
+            setAkpdId(form.id); setFormTitle(form.title); setAkpdYearId(form.academic_year_id); setTargetGrade(form.target_grade); setFormActive(form.is_active); setSelectedForm(form.id);
             setQuestionDraft(form.questions.map(question => `${question.area} | ${question.text}`).join("\n"));
           }}>Edit</button></td></tr>)}</tbody></table></div>
         </>}
@@ -796,10 +823,10 @@ export default function CounselingWorkflowPanel({
             : "Curhat Anda sudah terkirim secara privat.");
         }}>
           <p>Guru BK tujuan: <strong>{assignedCounselor || "Belum ditetapkan"}</strong></p>
-          <label>Subjek<input name="subject" required maxLength={150} /></label>
-          <label>Kategori<select name="category"><option>Pribadi</option><option>Pertemanan/Bullying</option><option>Belajar</option><option>Keluarga</option><option>Lainnya</option></select></label>
-          <label>Tingkat urgensi<select name="urgency"><option>Normal</option><option>Perlu segera</option><option>Darurat</option></select></label>
-          <label>Isi curhat<textarea name="body" required rows={5} maxLength={10000} /></label>
+          <label><LabelCaption required>Subjek</LabelCaption><input name="subject" required maxLength={150} /></label>
+          <label><LabelCaption required>Kategori</LabelCaption><select name="category" required><option>Pribadi</option><option>Pertemanan/Bullying</option><option>Belajar</option><option>Keluarga</option><option>Lainnya</option></select></label>
+          <label><LabelCaption required>Tingkat urgensi</LabelCaption><select name="urgency" required><option>Normal</option><option>Perlu segera</option><option>Darurat</option></select></label>
+          <label><LabelCaption required>Isi curhat</LabelCaption><textarea name="body" required rows={5} maxLength={10000} /></label>
           <label className="kb-checkbox-label"><input type="checkbox" name="consult" />Ajukan jadwal konsultasi tatap muka</label>
           <div className="kb-actions"><button className="kb-primary" disabled={busy || !student?.counselor_profile_id}>{busy ? "Mengirim..." : "Kirim curhat privat"}</button></div>
         </form>}
@@ -818,7 +845,7 @@ export default function CounselingWorkflowPanel({
                 setMessages(await listCurhatMessages(selectedThread.id));
                 setMessageDraft("");
               }, "Balasan terkirim.");
-            }}><label>Balas secara privat<textarea value={messageDraft} onChange={event => setMessageDraft(event.target.value)} required rows={3} /></label><button className="kb-primary" disabled={busy}>Kirim balasan</button></form>
+            }}><label><LabelCaption required>Balas secara privat</LabelCaption><textarea value={messageDraft} onChange={event => setMessageDraft(event.target.value)} required rows={3} /></label><button className="kb-primary" disabled={busy}>Kirim balasan</button></form>
             {!isStudent && <button className="kb-secondary" type="button" onClick={() => {
               setConsultForm(current => ({ ...current, student_id: selectedThread.student_id, requester_name: students.find(item => item.id === selectedThread.student_id)?.full_name ?? "Siswa", topic: `Konsultasi: ${selectedThread.subject}` }));
               void runSave(async () => {
@@ -838,7 +865,7 @@ export default function CounselingWorkflowPanel({
                   source_curhat_thread_id: selectedThread.id,
                 });
               }, "Konsultasi dibuat dari curhat.");
-            }}>Jadwalkan Konsultasi / Catat ke Agenda</button>}
+            }}>Buat pengajuan konsultasi</button>}
           </div>}
         </div>
       </section>

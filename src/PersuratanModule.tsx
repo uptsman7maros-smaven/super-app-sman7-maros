@@ -56,6 +56,14 @@ type CurrentUser = { id?: string; username?: string; role?: string; full_name?: 
 type LetterModal = null | { type: 'template' | 'incoming' | 'notifications' }
 type NavItem = { label: string; icon: LucideIcon; key: Page }
 type LetterForm = Record<string, string>
+type StudentLetterPrefill = {
+  id: string
+  full_name: string
+  nisn: string
+  class_id: string | null
+  class_name: string
+  context: string
+}
 
 function isLetterRole(value: unknown): value is LetterRole {
   return typeof value === 'string' && Object.hasOwn(roleLabels, value)
@@ -112,7 +120,12 @@ const demoTemplates: LetterTemplate[] = [
     {name:'assigned_name',label:'Nama yang ditugaskan',required:true},{name:'assigned_nip',label:'NIP'},{name:'task',label:'Uraian tugas',required:true},{name:'location',label:'Tempat tugas',required:true},{name:'date_range',label:'Waktu pelaksanaan',required:true}
   ]}
 ]
-export default function LettersApp({onBack,currentUser}: { onBack?: () => void; currentUser?: CurrentUser | null }){
+export default function LettersApp({onBack,currentUser,initialStudentPrefill,onStudentPrefillHandled}: {
+  onBack?: () => void;
+  currentUser?: CurrentUser | null;
+  initialStudentPrefill?: StudentLetterPrefill | null;
+  onStudentPrefillHandled?: () => void;
+}){
   const { currentUser: contextUser, schoolSettings } = useSchoolContext()
   const person = contextUser ?? currentUser ?? null
   const [session,setSession]=useState<Session | null>(null), [role,setRole]=useState<LetterRole | null>(null)
@@ -135,6 +148,60 @@ export default function LettersApp({onBack,currentUser}: { onBack?: () => void; 
   const sessionRateLimitError=/\b429\b|rate limit|membatasi pembaruan sesi/i.test(error)
   const roleSourceMigrationError=/letter_current_role|could not find the function/i.test(error)
   const visibleNav=role ? nav.filter((item)=>rolePageAccess[role].includes(item.key)) : []
+
+  useEffect(()=>{
+    if(!initialStudentPrefill||loading||error)return
+    const timerId=window.setTimeout(()=>{
+      if(!initialStudentPrefill)return
+      const template=templates.find(item=>/panggilan/i.test(item.name))
+      const subject=`Surat Panggilan Orang Tua/Wali - ${initialStudentPrefill.full_name}`
+      setPage('create')
+      setForm(previous=>({...previous,subject}))
+      if(!template){
+        setSelectedTemplate('')
+        setRequestData({})
+        setPersonFields({})
+        setToast('Format Surat Panggilan belum tersedia. Hubungi Operator Persuratan agar template dapat digunakan.')
+        window.setTimeout(()=>setToast(''),5000)
+        onStudentPrefillHandled?.()
+        return
+      }
+      const studentOption:PersonOption={
+        id:initialStudentPrefill.id,
+        type:'student',
+        full_name:initialStudentPrefill.full_name,
+        identifier:initialStudentPrefill.nisn,
+        class_id:initialStudentPrefill.class_id,
+        class_name:initialStudentPrefill.class_name,
+        profile_id:null
+      }
+      const data:LetterForm={}
+      const people:Record<string,PersonOption>={}
+      for(const field of template.fields_schema){
+        const fieldKey=`${field.name} ${field.label}`.toLocaleLowerCase('id-ID')
+        if(personFieldType(field)==='student'){
+          people[field.name]=studentOption
+          data[field.name]=studentOption.full_name
+          data[`${field.name}_id`]=studentOption.id
+          data[`${field.name}_identifier`]=studentOption.identifier
+          data[`${field.name}_class_name`]=studentOption.class_name||''
+        }else if(/kelas|class/.test(fieldKey)){
+          data[field.name]=studentOption.class_name||''
+        }else if(/alasan|keperluan|tujuan|perihal|keterangan|agenda|topik/.test(fieldKey)){
+          data[field.name]=initialStudentPrefill.context
+        }else if(/tanggal|hari/.test(fieldKey)){
+          data[field.name]=new Date().toISOString().slice(0,10)
+        }
+      }
+      setSelectedTemplate(template.id)
+      setRequestData(data)
+      setPersonFields(people)
+      setToast('Data siswa dan konteks BK sudah diisi otomatis. Tinjau lalu simpan sebagai draft.')
+      window.setTimeout(()=>setToast(''),5000)
+      onStudentPrefillHandled?.()
+    },0)
+    return ()=>window.clearTimeout(timerId)
+  },[error,initialStudentPrefill,loading,onStudentPrefillHandled,templates])
 
   const acceptSession=useCallback((nextSession:Session|null)=>{
     const nextUserId=nextSession?.user.id??null

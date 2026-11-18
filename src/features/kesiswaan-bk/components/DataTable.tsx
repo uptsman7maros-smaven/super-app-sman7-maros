@@ -1,5 +1,6 @@
 import { PAGE_SIZE } from "../constants";
 import type { AcademicYearOption, ClassOption, KbRow, QueryFilters, SchoolHeader, SectionConfig, StudentOption } from "../types";
+import ReportActions from "./ReportActions";
 
 type Props = {
   config: SectionConfig;
@@ -16,6 +17,9 @@ type Props = {
   onPageChange: (page: number) => void;
   onEdit: (row: KbRow) => void;
   onDelete: (row: KbRow) => void;
+  onFollowUp: (row: KbRow, kind: "note" | "consultation") => void;
+  onCreateParentLetter: (student: StudentOption, context: string) => void;
+  canCreateParentLetter: boolean;
   onOpenProfile: (student: StudentOption) => void;
   onExport: () => void;
   onExportExcel: () => void;
@@ -42,6 +46,9 @@ export default function DataTable({
   onPageChange,
   onEdit,
   onDelete,
+  onFollowUp,
+  onCreateParentLetter,
+  canCreateParentLetter,
   onOpenProfile,
   onExport,
   onExportExcel,
@@ -99,11 +106,7 @@ export default function DataTable({
           <label>Dari tanggal<input type="date" value={filters.dateFrom} onChange={event => onFiltersChange({ dateFrom: event.target.value })} /></label>
           <label>Sampai tanggal<input type="date" value={filters.dateTo} onChange={event => onFiltersChange({ dateTo: event.target.value })} /></label>
         </>}
-        <div className="kb-export-actions">
-          <button className="kb-secondary" type="button" onClick={onExport} disabled={loading}>Ekspor CSV</button>
-          <button className="kb-secondary" type="button" onClick={onExportExcel} disabled={loading}>Ekspor Excel</button>
-          <button className="kb-secondary" type="button" onClick={onPrint}>Cetak</button>
-        </div>
+        <ReportActions onExportCsv={onExport} onExportExcel={onExportExcel} onPrint={onPrint} disabled={loading} />
       </div>
       {loading ? <p className="kb-loading">Memuat data...</p> : rows.length === 0 ? (
         <div className="kb-empty">Belum ada data atau tidak ditemukan.</div>
@@ -113,6 +116,11 @@ export default function DataTable({
             <thead><tr>{config.fields.map(field => <th key={field.key}>{field.label}</th>)}<th className="kb-action-head">Aksi</th></tr></thead>
             <tbody>{rows.map((row, index) => {
               const student = linkedStudent(row);
+              const isReferral = config.key === "Rujukan BK";
+              const hasFollowUp = Boolean(student && (
+                (config.key === "Catatan BK" && String(row.tindak_lanjut ?? "").trim() && row.status_kasus !== "Selesai")
+                || (isReferral && row.status !== "Selesai")
+              ));
               return (
                 <tr key={row.id} style={{ animationDelay: `${Math.min(index * 35, 280)}ms` }}>
                   {config.fields.map(field => {
@@ -128,10 +136,22 @@ export default function DataTable({
                       : row[field.key];
                     return <td key={field.key} data-label={field.label}>{displayValue(value)}</td>;
                   })}
-                  <td className="kb-action-cell"><div>
-                    <button className="kb-mini" type="button" onClick={() => onEdit(row)}>Ubah</button>
-                    <button className="kb-mini danger" type="button" onClick={() => onDelete(row)}>Hapus</button>
-                  </div></td>
+                  <td className="kb-action-cell">
+                    <details className="kb-row-actions">
+                      <summary>Aksi</summary>
+                      <div>
+                        {hasFollowUp && <button className="kb-mini" type="button" onClick={() => onFollowUp(row, isReferral ? "note" : "consultation")}>
+                          {isReferral ? "Catat tindak lanjut" : "Jadwalkan konsultasi"}
+                        </button>}
+                        {student && canCreateParentLetter && (config.key === "Catatan BK" || isReferral) && <button className="kb-mini" type="button" onClick={() => onCreateParentLetter(
+                          student,
+                          "Undangan pertemuan dengan orang tua/wali untuk tindak lanjut layanan BK.",
+                        )}>Buat surat panggilan</button>}
+                        <button className="kb-mini" type="button" onClick={() => onEdit(row)}>Ubah</button>
+                        <button className="kb-mini danger" type="button" onClick={() => onDelete(row)}>Hapus</button>
+                      </div>
+                    </details>
+                  </td>
                 </tr>
               );
             })}</tbody>

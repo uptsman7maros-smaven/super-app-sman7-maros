@@ -515,6 +515,34 @@ function AppContent() {
     contextError,
   } = useSchoolContext();
   const [activePage, setActivePage] = useState("Dashboard");
+  const [parentLetterPrefill, setParentLetterPrefill] = useState<{
+    id: string;
+    full_name: string;
+    nisn: string;
+    class_id: string | null;
+    class_name: string;
+    context: string;
+  } | null>(null);
+  const [letterReturnPage, setLetterReturnPage] = useState("Dashboard");
+  const handleStudentPrefillHandled = useCallback(() => setParentLetterPrefill(null), []);
+  const openParentLetter = useCallback((student: {
+    id: string;
+    full_name: string;
+    nisn: string;
+    class_id: string | null;
+    class_name: string;
+  }, context: string) => {
+    setParentLetterPrefill({
+      id: student.id,
+      full_name: student.full_name,
+      nisn: student.nisn,
+      class_id: student.class_id,
+      class_name: student.class_name,
+      context,
+    });
+    setLetterReturnPage(activePage);
+    setActivePage("Persuratan");
+  }, [activePage]);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
   const [sessionRetry, setSessionRetry] = useState(0);
@@ -2165,11 +2193,11 @@ const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "Perpustakaan": <Perpustakaan userRole={currentUser.role} userId={currentUser.id} username={currentUser.username} />,
   "Inventaris": <Inventaris userRole={currentUser.role} />,
   "Keuangan": <KeuanganDigital userRole={currentUser.role} />,
-  "Persuratan": <PersuratanModule currentUser={currentUser} onBack={() => setActivePage("Dashboard")} />,
+  "Persuratan": <PersuratanModule currentUser={currentUser} onBack={() => setActivePage(letterReturnPage)} initialStudentPrefill={parentLetterPrefill} onStudentPrefillHandled={handleStudentPrefillHandled} />,
   "Akademik": <Akademik currentUser={currentUser} userRole={currentUser.role} />,
   "SMAVEN Learn": <SmavenLearn currentUser={currentUser} userRole={currentUser.role} userName={currentUser.full_name} />,
-  "Kesiswaan": <KesiswaanBK key="kesiswaan" currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" />,
-  "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" />,
+  "Kesiswaan": <KesiswaanBK key="kesiswaan" currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" onOpenParentLetter={openParentLetter} />,
+  "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" onOpenParentLetter={openParentLetter} />,
   "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} />,
   "Laporan & Analitik": <LaporanAnalitik userRole={currentUser.role} />,
   "Pengaturan": <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} />,
@@ -2607,11 +2635,11 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
      </motion.div>
 ) : activePage === "Kesiswaan" ? (
      <motion.div key="kesiswaan" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" />
+       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" onOpenParentLetter={openParentLetter} />
      </motion.div>
 ) : activePage === "Bimbingan dan Konseling" ? (
      <motion.div key="bimbingan-konseling" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" />
+       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" onOpenParentLetter={openParentLetter} />
      </motion.div>
 ) : activePage === "Pemilihan OSIS" ? (
      <motion.div key="pemilihan-osis" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
