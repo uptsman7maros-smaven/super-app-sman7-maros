@@ -14,8 +14,66 @@ type ConsultationInput = Omit<ConsultationRow, "id"> & { id?: string };
 type HomeVisitInput = Omit<HomeVisitRow, "id"> & { id?: string };
 type RplInput = Omit<RplRow, "id" | "created_at"> & { id?: string };
 
+const RPL_DRAFT_FIELDS = [
+  "Tujuan umum",
+  "Tujuan khusus",
+  "Metode dan teknik",
+  "Media / alat",
+  "Tahap awal / pendahuluan",
+  "Tahap inti",
+  "Tahap penutup",
+  "Evaluasi proses",
+  "Evaluasi hasil",
+] as const;
+const AKPD_AREAS = ["Pribadi", "Sosial", "Belajar", "Karir"] as const;
+
 function throwOnError(error: { message: string } | null) {
   if (error) throw new Error(error.message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function invokeBkWritingAssistant(body: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke("bk-writing-assistant", { body });
+  throwOnError(error);
+  if (!isRecord(data) || !isRecord(data.draft)) {
+    throw new Error("Respons asisten AI tidak sesuai format.");
+  }
+  return data.draft;
+}
+
+export async function generateBkRplDraft(input: {
+  topic: string;
+  area: string;
+  targetClass: string;
+  duration: string;
+}) {
+  const draft = await invokeBkWritingAssistant({ action: "rpl", ...input });
+  if (!isRecord(draft.fields)) throw new Error("Draf RPL dari AI tidak lengkap.");
+  const fields: Record<string, string> = {};
+  for (const field of RPL_DRAFT_FIELDS) {
+    if (typeof draft.fields[field] !== "string") throw new Error("Draf RPL dari AI tidak lengkap.");
+    fields[field] = draft.fields[field];
+  }
+  return fields;
+}
+
+export async function generateBkAkpdQuestions(targetGrade: string) {
+  const draft = await invokeBkWritingAssistant({ action: "akpd", targetGrade });
+  if (!Array.isArray(draft.questions)) throw new Error("Draf pertanyaan AKPD dari AI tidak lengkap.");
+  return draft.questions.map(question => {
+    if (
+      !isRecord(question)
+      || typeof question.area !== "string"
+      || !AKPD_AREAS.includes(question.area as (typeof AKPD_AREAS)[number])
+      || typeof question.text !== "string"
+    ) {
+      throw new Error("Draf pertanyaan AKPD dari AI tidak valid.");
+    }
+    return { area: question.area, text: question.text };
+  });
 }
 
 export async function listConsultations(studentId?: string) {

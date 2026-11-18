@@ -50,6 +50,26 @@ npx.cmd supabase functions deploy manage-users
 npx.cmd supabase functions deploy library-digital-book-url
 ```
 
+## Asisten penulisan BK dengan Gemini
+
+Fitur draf RPL dan pertanyaan AKPD memanggil fungsi `bk-writing-assistant`.
+Fungsi hanya menerima topik/bidang/durasi RPL atau tingkat sasaran AKPD; jangan
+pernah memasukkan identitas atau catatan pribadi siswa ke prompt AI. Hasilnya
+adalah draf yang harus ditinjau sebelum disimpan.
+
+1. Buat API key di Google AI Studio.
+2. Simpan key sebagai secret `GEMINI_API_KEY` pada proyek Supabase yang sama
+   dengan aplikasi (Project Settings → Edge Functions → Secrets). Jangan
+   menyimpannya di source code, `.env` frontend, atau variabel `VITE_*`.
+3. Deploy fungsi:
+
+   ```powershell
+   npx.cmd supabase functions deploy bk-writing-assistant --project-ref <project-ref>
+   ```
+
+Fungsi memverifikasi sesi dan membatasi akses ke Guru BK, Super Admin, serta
+Operator aktif. API key hanya dibaca di sisi server.
+
 The function uses the standard `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
 `SUPABASE_SERVICE_ROLE_KEY` environment values provided by Supabase. Keep the
 digital-books bucket private; the function only issues links that expire no

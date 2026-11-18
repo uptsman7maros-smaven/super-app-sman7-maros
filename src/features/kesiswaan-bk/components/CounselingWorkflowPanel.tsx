@@ -3,6 +3,8 @@ import * as XLSX from "xlsx";
 import type { SchoolUser } from "../../../context/school-context";
 import {
   createCurhatThread,
+  generateBkAkpdQuestions,
+  generateBkRplDraft,
   listAkpdForms,
   listAkpdResponses,
   listConsultations,
@@ -201,6 +203,7 @@ export default function CounselingWorkflowPanel({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const [consultForm, setConsultForm] = useState({
     student_id: student?.id ?? "",
     requester_name: currentUser.full_name || currentUser.username,
@@ -355,6 +358,45 @@ export default function CounselingWorkflowPanel({
       setError(saveError instanceof Error ? saveError.message : "Perubahan gagal disimpan.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function generateRplDraft() {
+    if (!rplTopic.trim()) {
+      setError("Isi topik layanan sebelum meminta bantuan AI.");
+      return;
+    }
+    setAiBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const draft = await generateBkRplDraft({
+        topic: rplTopic.trim(),
+        area: rplArea,
+        targetClass: rplGrade,
+        duration: rplDuration,
+      });
+      setRplContent(draft);
+      setNotice("Draf RPL dibuat. Tinjau dan sesuaikan sebelum disimpan.");
+    } catch (draftError) {
+      setError(draftError instanceof Error ? draftError.message : "Draf RPL gagal dibuat.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function generateAkpdDraft() {
+    setAiBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const questions = await generateBkAkpdQuestions(targetGrade);
+      setQuestionDraft(questions.map(question => `${question.area} | ${question.text}`).join("\n"));
+      setNotice("Draf pertanyaan AKPD dibuat. Tinjau dan edit sebelum menyimpan angket.");
+    } catch (draftError) {
+      setError(draftError instanceof Error ? draftError.message : "Draf pertanyaan AKPD gagal dibuat.");
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -570,8 +612,14 @@ export default function CounselingWorkflowPanel({
           <label>Bidang layanan<select value={rplArea} onChange={event => setRplArea(event.target.value)}>{AREA_OPTIONS.map(area => <option key={area}>{area}</option>)}</select></label>
           <label>Waktu / durasi<input value={rplDuration} onChange={event => setRplDuration(event.target.value)} /></label>
           <label>Tahun ajaran<select value={rplYearId} onChange={event => setRplYearId(event.target.value)}>{academicYears.map(year => <option key={year.id} value={year.id}>{year.name}{year.is_active ? " · Aktif" : ""}</option>)}</select></label>
+          <div className="kb-ai-assistant">
+            <p>Gemini hanya menerima topik, bidang, kelas, dan durasi. Jangan masukkan identitas atau kasus pribadi siswa.</p>
+            <button className="kb-secondary" type="button" disabled={aiBusy} aria-busy={aiBusy} onClick={() => void generateRplDraft()}>
+              {aiBusy ? "Menyusun draf..." : "Bantu susun draf dengan Gemini"}
+            </button>
+          </div>
           {RPL_FIELDS.map(field => <label key={field}>{field}<textarea rows={3} value={rplContent[field] ?? ""} onChange={event => setRplContent(current => ({ ...current, [field]: event.target.value }))} /></label>)}
-          <div className="kb-actions"><button className="kb-primary" disabled={busy}>{busy ? "Menyimpan..." : "Simpan RPL"}</button><button className="kb-secondary" type="button" onClick={() => { setRplId(""); setRplTitle(""); setRplTopic(""); setRplContent({}); }}>RPL baru</button></div>
+          <div className="kb-actions"><button className="kb-primary" disabled={busy || aiBusy}>{busy ? "Menyimpan..." : "Simpan RPL"}</button><button className="kb-secondary" type="button" onClick={() => { setRplId(""); setRplTitle(""); setRplTopic(""); setRplContent({}); }}>RPL baru</button></div>
         </form>
         <div className="kb-workflow-list">{rpls.map(row => <article key={row.id}><div><strong>{row.title}</strong><small>{row.target_class} · {row.service_area} · {academicYears.find(year => year.id === row.academic_year_id)?.name ?? "Tahun ajaran"}</small></div><button className="kb-mini" type="button" onClick={() => openRpl(row)}>Buka / edit</button></article>)}{!rpls.length && <div className="kb-empty">Belum ada RPL tersimpan.</div>}</div><Signatures />
       </section>
@@ -649,7 +697,13 @@ export default function CounselingWorkflowPanel({
             <label>Tingkat sasaran<select value={targetGrade} onChange={event => setTargetGrade(event.target.value)}><option>Semua</option><option>10</option><option>11</option><option>12</option></select></label>
             <label className="kb-checkbox-label"><input type="checkbox" checked={formActive} onChange={event => setFormActive(event.target.checked)} />Angket aktif</label>
             <label>Pertanyaan (satu per baris: Bidang | Pertanyaan)<textarea rows={8} value={questionDraft || AKPD_DEFAULT_QUESTIONS.map(item => `${item.area} | ${item.text}`).join("\n")} onChange={event => setQuestionDraft(event.target.value)} /></label>
-            <div className="kb-actions"><button className="kb-primary" disabled={busy}>{akpdId ? "Simpan perubahan angket" : "Buat angket"}</button><button type="button" className="kb-secondary" onClick={() => { setAkpdId(""); setFormTitle("Angket Kebutuhan Peserta Didik"); setTargetGrade("Semua"); setFormActive(true); setQuestionDraft(""); }}>Angket baru</button></div>
+            <div className="kb-ai-assistant">
+              <p>Gemini hanya menerima tingkat kelas sasaran, bukan jawaban angket atau identitas siswa.</p>
+              <button className="kb-secondary" type="button" disabled={aiBusy} aria-busy={aiBusy} onClick={() => void generateAkpdDraft()}>
+                {aiBusy ? "Menyusun draf..." : "Bantu susun pertanyaan dengan Gemini"}
+              </button>
+            </div>
+            <div className="kb-actions"><button className="kb-primary" disabled={busy || aiBusy}>{akpdId ? "Simpan perubahan angket" : "Buat angket"}</button><button type="button" className="kb-secondary" onClick={() => { setAkpdId(""); setFormTitle("Angket Kebutuhan Peserta Didik"); setTargetGrade("Semua"); setFormActive(true); setQuestionDraft(""); }}>Angket baru</button></div>
           </form>
           <div className="kb-form">
             <label>Pilih angket untuk rekap<select value={selectedAkpd?.id ?? ""} onChange={event => setSelectedForm(event.target.value)}>{forms.map(form => <option key={form.id} value={form.id}>{form.title} · {form.target_grade}</option>)}</select></label>
