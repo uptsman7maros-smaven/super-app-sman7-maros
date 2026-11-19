@@ -5,6 +5,7 @@ import {
   type ManagedUser,
 } from "./lib/manageUsers";
 import { logAppActivity } from "./services/activityLogService";
+import DataIndukSekolahPanel from "./DataIndukSekolahPanel";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { createPortal } from "react-dom";
@@ -28,7 +29,7 @@ import {
   UserRoundPlus,
 } from "lucide-react";
 
-type MenuDataInduk = "siswa" | "guru" | "kelas" | "excel" | "riwayat";
+type MenuDataInduk = "siswa" | "guru" | "kelas" | "sekolah" | "excel" | "riwayat";
 
 type ImportStudentRow = {
   source_row: number;
@@ -37,6 +38,14 @@ type ImportStudentRow = {
   class_name: string;
   birth_date: string;
   gender: string;
+  errors: string[];
+};
+
+type ImportTeacherRow = {
+  source_row: number;
+  nip: string;
+  full_name: string;
+  employment_status: string;
   errors: string[];
 };
 
@@ -55,10 +64,14 @@ type Student = {
 
 type Teacher = { id: string; profile_id: string | null; nip: string | null; full_name: string; employment_status: string | null };
 type TeacherSubjectAssignment = { id: string; teacher_id: string; class_id: string; subject: string };
-type AcademicYear = { id: string; name: string; is_active: boolean };
+type TeacherAssignmentSummary = Pick<TeacherSubjectAssignment, "teacher_id" | "class_id" | "subject">;
+type TeacherHomeroomSummary = { id: string; name: string; homeroom_teacher_id: string | null };
+type AcademicYear = { id: string; name: string; is_active: boolean; start_date: string | null; end_date: string | null };
 type ClassRow = { id: string; name: string; grade_level: number; academic_year_id: string; homeroom_teacher_id: string | null; academic_year_name: string; homeroom_teacher_name: string; student_count: number };
+type ClassForm = { name: string; grade_level: string; academic_year_id: string; homeroom_teacher_id: string };
 type BulkMoveStudent = Pick<Student, "id" | "nisn" | "full_name" | "status">;
 type DataIndukSelectOption = { value: string; label: string };
+type BulkAccountProgress = { completed: number; total: number; succeeded: number; failed: string[] };
 type DataIndukAuditEntry = {
   id: number;
   changed_at: string;
@@ -270,12 +283,62 @@ const emptyTeacherForm: TeacherForm = {
 
 const teacherPositionOptions = [
   "Guru Mata Pelajaran",
+  "Guru BK / Konselor",
   "Wakasek Kurikulum",
   "Wakasek Kesiswaan",
   "Wakasek Sarana dan Prasarana",
   "Wakasek Humas",
   "Kepala Sekolah",
+  "Kepala Tata Usaha",
+  "Staff Tata Usaha",
+  "Tenaga Kependidikan (Tendik)",
 ];
+
+const subjectSuggestions = [
+  "Matematika",
+  "Matematika Tingkat Lanjut",
+  "Bahasa Indonesia",
+  "Bahasa Inggris",
+  "Fisika",
+  "Kimia",
+  "Biologi",
+  "Ekonomi",
+  "Sosiologi",
+  "Geografi",
+  "Sejarah",
+  "PPKn",
+  "Pendidikan Agama Islam",
+  "PAI",
+  "PJOK",
+  "Seni Budaya",
+  "Informatika",
+  "Prakarya",
+  "Bahasa Daerah",
+];
+
+const teacherRoleForPosition = (position: string | null) => {
+  switch (position) {
+    case "Guru BK / Konselor":
+      return "guru_bk";
+    case "Kepala Sekolah":
+      return "kepala_sekolah";
+    case "Kepala Tata Usaha":
+      return "kepala_tata_usaha";
+    case "Staff Tata Usaha":
+      return "staff_tata_usaha";
+    case "Tenaga Kependidikan (Tendik)":
+      return "tendik";
+    default:
+      return "guru";
+  }
+};
+
+const emptyClassForm: ClassForm = {
+  name: "",
+  grade_level: "10",
+  academic_year_id: "",
+  homeroom_teacher_id: "",
+};
 
 const formatSupabaseError = (error: unknown) => {
   if (error instanceof Error) return error.message;
@@ -337,9 +400,15 @@ const menuItems = [
     icon: School,
   },
   {
+    id: "sekolah" as const,
+    title: "Sekolah & Sinkron",
+    description: "Profil sekolah, kalender non-KBM, dan sinkronisasi data lintas modul.",
+    icon: School,
+  },
+  {
     id: "excel" as const,
     title: "Impor / Ekspor Excel",
-    description: "Impor data siswa dan ekspor data induk melalui Excel.",
+    description: "Impor data siswa, guru/tendik, dan ekspor data induk melalui Excel.",
     icon: FileSpreadsheet,
   },
   {
@@ -370,6 +439,10 @@ const [studentForm, setStudentForm] =
   useState<StudentForm>(emptyStudentForm);
 const [savingStudent, setSavingStudent] = useState(false);
 const [studentFormError, setStudentFormError] = useState("");
+const [studentClassFilter, setStudentClassFilter] = useState("all");
+const [studentStatusFilter, setStudentStatusFilter] = useState("all");
+const [studentAccountFilter, setStudentAccountFilter] = useState("all");
+const [bulkAccountProgress, setBulkAccountProgress] = useState<BulkAccountProgress | null>(null);
 
 const [classes, setClasses] = useState<
   { id: string; name: string; grade_level: number }[]
@@ -379,10 +452,21 @@ const [importError, setImportError] = useState("");
 const [importing, setImporting] = useState(false);
 const [importFileName, setImportFileName] = useState("");
 const [importValidationComplete, setImportValidationComplete] = useState(false);
+const [teacherImportRows, setTeacherImportRows] = useState<ImportTeacherRow[]>([]);
+const [teacherImportFileName, setTeacherImportFileName] = useState("");
+const [teacherImportError, setTeacherImportError] = useState("");
+const [teacherImportNotice, setTeacherImportNotice] = useState("");
+const [teacherImportValidationComplete, setTeacherImportValidationComplete] = useState(false);
 const [teachers, setTeachers] = useState<Teacher[]>([]);
 const [teacherLoading, setTeacherLoading] = useState(false);
+const [teacherFilterPosition, setTeacherFilterPosition] = useState("all");
+const [teacherFilterStatus, setTeacherFilterStatus] = useState("all");
+const [teacherAssignmentSummary, setTeacherAssignmentSummary] = useState<TeacherAssignmentSummary[]>([]);
+const [teacherHomeroomSummary, setTeacherHomeroomSummary] = useState<TeacherHomeroomSummary[]>([]);
+const [teacherSummaryError, setTeacherSummaryError] = useState("");
 const [teacherAccounts, setTeacherAccounts] = useState<ManagedUser[] | null>(null);
 const [teacherAccountError, setTeacherAccountError] = useState("");
+const [creatingTeacherAccountId, setCreatingTeacherAccountId] = useState<string | null>(null);
 const [studentAccounts, setStudentAccounts] = useState<ManagedUser[] | null>(null);
 const [studentAccountError, setStudentAccountError] = useState("");
 const [creatingStudentAccountId, setCreatingStudentAccountId] = useState<string | null>(null);
@@ -400,10 +484,22 @@ const [newAssignmentSubject, setNewAssignmentSubject] = useState("");
 const [newAssignmentClassId, setNewAssignmentClassId] = useState("");
 
 const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
+const [classTeacherOptions, setClassTeacherOptions] = useState<Array<Pick<Teacher, "id" | "profile_id" | "full_name">>>([]);
 const [classRows, setClassRows] = useState<ClassRow[]>([]);
 const [classLoading, setClassLoading] = useState(false);
 const [classReloadVersion, setClassReloadVersion] = useState(0);
+const [showClassForm, setShowClassForm] = useState(false);
+const [editingClass, setEditingClass] = useState<ClassRow | null>(null);
+const [classForm, setClassForm] = useState<ClassForm>(emptyClassForm);
+const [classFormError, setClassFormError] = useState("");
+const [savingClass, setSavingClass] = useState(false);
+const [showAcademicYearManager, setShowAcademicYearManager] = useState(false);
+const [academicYearForm, setAcademicYearForm] = useState({ name: "", start_date: "", end_date: "" });
+const [academicYearFormError, setAcademicYearFormError] = useState("");
+const [savingAcademicYear, setSavingAcademicYear] = useState(false);
+const [activatingAcademicYearId, setActivatingAcademicYearId] = useState<string | null>(null);
 const [showBulkMove, setShowBulkMove] = useState(false);
+const [bulkMoveMode, setBulkMoveMode] = useState<"move" | "graduate">("move");
 const [bulkSourceYearId, setBulkSourceYearId] = useState("");
 const [bulkSourceClassId, setBulkSourceClassId] = useState("");
 const [bulkDestinationClassId, setBulkDestinationClassId] = useState("");
@@ -504,16 +600,6 @@ useEffect(() => {
   return () => { cancelled = true; };
 }, [activeMenu, userRole]);
 
-const filteredStudents = students.filter((student) => {
-  const keyword = search.trim().toLowerCase();
-
-  return (
-    student.nisn.toLowerCase().includes(keyword) ||
-    student.full_name.toLowerCase().includes(keyword) ||
-    (student.class?.name ?? "").toLowerCase().includes(keyword)
-  );
-});
-
 const getStudentAccountStatus = (student: Student) => {
   if (student.profile_id) return "Sudah Ada Akun";
   if (!studentAccounts) {
@@ -527,6 +613,24 @@ const getStudentAccountStatus = (student: Student) => {
   );
   return hasAccount ? "Sudah Ada Akun" : "Belum Ada Akun";
 };
+
+const filteredStudents = students.filter((student) => {
+  const keyword = search.trim().toLowerCase();
+  const matchesSearch =
+    student.nisn.toLowerCase().includes(keyword) ||
+    student.full_name.toLowerCase().includes(keyword) ||
+    (student.class?.name ?? "").toLowerCase().includes(keyword);
+  const matchesClass = studentClassFilter === "all"
+    || (studentClassFilter === "unassigned" ? !student.class_id : student.class_id === studentClassFilter);
+  const matchesStatus = studentStatusFilter === "all" || student.status === studentStatusFilter;
+  const matchesAccount = userRole !== "super_admin"
+    || studentAccountFilter === "all"
+    || (studentAccountFilter === "linked"
+      ? getStudentAccountStatus(student) === "Sudah Ada Akun"
+      : getStudentAccountStatus(student) === "Belum Ada Akun");
+
+  return matchesSearch && matchesClass && matchesStatus && matchesAccount;
+});
 
 const createStudentAccount = async (student: Student) => {
   if (userRole !== "super_admin" || creatingStudentAccountId) return;
@@ -598,6 +702,97 @@ const createStudentAccount = async (student: Student) => {
   } finally {
     setCreatingStudentAccountId(null);
   }
+};
+
+const generateStudentAccountsBulk = async () => {
+  if (userRole !== "super_admin" || creatingStudentAccountId || bulkAccountProgress) return;
+  const eligibleStudents = filteredStudents.filter((student) =>
+    student.status === "Active"
+    && /^\d{10}$/.test(student.nisn.trim())
+    && getStudentAccountStatus(student) === "Belum Ada Akun"
+  );
+  if (!eligibleStudents.length) {
+    setMasterNotice("Tidak ada siswa Active yang memenuhi filter, NISN 10 digit, dan belum memiliki akun.");
+    return;
+  }
+  if (!window.confirm(
+    `Buat dan tautkan akun untuk ${eligibleStudents.length} siswa? Username dan password awal masing-masing adalah NISN.`,
+  )) return;
+
+  setBulkAccountProgress({ completed: 0, total: eligibleStudents.length, succeeded: 0, failed: [] });
+  setStudentAccountError("");
+  setMasterNotice("");
+  let currentUsers: ManagedUser[];
+  try {
+    currentUsers = await getManagedUsers();
+  } catch (error) {
+    setStudentAccountError(`Daftar akun gagal diperbarui: ${formatSupabaseError(error)}`);
+    setBulkAccountProgress(null);
+    return;
+  }
+  let succeeded = 0;
+  const failures: string[] = [];
+
+  for (let index = 0; index < eligibleStudents.length; index += 1) {
+    const student = eligibleStudents[index];
+    try {
+      const nisn = student.nisn.trim();
+      const existing = currentUsers.find((user) =>
+        normalizeAccountUsername(user.username) === normalizeAccountUsername(nisn)
+      );
+      if (existing && existing.role !== "siswa") {
+        throw new Error("NISN sudah digunakan oleh akun dengan peran lain.");
+      }
+
+      const account = existing ?? await createManagedUser({
+        username: nisn,
+        full_name: student.full_name.trim(),
+        role: "siswa",
+        password: nisn,
+      });
+      if (!existing) {
+        currentUsers = [...currentUsers, { ...account, created_at: new Date().toISOString() }];
+      }
+
+      const { error } = await supabase
+        .from("students")
+        .update({ profile_id: account.id })
+        .eq("id", student.id)
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      succeeded += 1;
+      setStudents((current) => current.map((item) =>
+        item.id === student.id ? { ...item, profile_id: account.id } : item
+      ));
+    } catch (error) {
+      failures.push(`${student.full_name}: ${formatSupabaseError(error)}`);
+    }
+
+    setBulkAccountProgress({
+      completed: index + 1,
+      total: eligibleStudents.length,
+      succeeded,
+      failed: [...failures],
+    });
+    if (index < eligibleStudents.length - 1) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 700));
+    }
+  }
+
+  setStudentAccounts(currentUsers);
+  const auditWarning = await logMasterChange(
+    "Pembuatan akun siswa massal",
+    `${succeeded} berhasil ditautkan dari ${eligibleStudents.length} siswa; ${failures.length} gagal.`,
+  );
+  const failureDetails = failures.length
+    ? ` Gagal: ${failures.slice(0, 3).join(" | ")}${failures.length > 3 ? ` dan ${failures.length - 3} lainnya.` : ""}`
+    : "";
+  setMasterNotice(
+    `Proses akun selesai: ${succeeded} berhasil, ${failures.length} gagal.${failureDetails}${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+  );
+  setBulkAccountProgress(null);
 };
 
 const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
@@ -751,12 +946,32 @@ useEffect(() => {
     (async () => {
       setTeacherLoading(true);
       setMasterError("");
+      setTeacherSummaryError("");
       try {
-        const { data, error } = await supabase.from("teachers").select("id, profile_id, nip, full_name, employment_status").order("full_name");
+        const [teacherResult, assignmentResult, classResult] = await Promise.all([
+          supabase.from("teachers").select("id, profile_id, nip, full_name, employment_status").order("full_name"),
+          supabase.from("attendance_teacher_subject_assignments").select("teacher_id, class_id, subject"),
+          supabase.from("classes").select("id, name, homeroom_teacher_id"),
+        ]);
         if (cancelled) return;
-        if (error) throw error;
-        setTeachers((data ?? []) as Teacher[]);
+        if (teacherResult.error) throw teacherResult.error;
+        setTeachers((teacherResult.data ?? []) as Teacher[]);
+        if (assignmentResult.error) {
+          setTeacherAssignmentSummary([]);
+          setTeacherSummaryError(`Ringkasan penugasan mapel gagal dimuat: ${formatSupabaseError(assignmentResult.error)}`);
+        } else {
+          setTeacherAssignmentSummary((assignmentResult.data ?? []) as TeacherAssignmentSummary[]);
+        }
+        if (classResult.error) {
+          setTeacherHomeroomSummary([]);
+          setTeacherSummaryError((current) => current
+            ? `${current} Ringkasan wali kelas gagal dimuat: ${formatSupabaseError(classResult.error)}`
+            : `Ringkasan wali kelas gagal dimuat: ${formatSupabaseError(classResult.error)}`);
+        } else {
+          setTeacherHomeroomSummary((classResult.data ?? []) as TeacherHomeroomSummary[]);
+        }
         if (userRole === "super_admin") {
+          setTeacherAccounts(null);
           void getManagedUsers()
             .then((users) => {
               if (!cancelled) setTeacherAccounts(users);
@@ -774,6 +989,13 @@ useEffect(() => {
     return () => { cancelled = true; };
   }, [activeMenu, userRole]);
 
+  const getTeacherManagedAccount = (teacher: Teacher) => {
+    if (!teacher.nip || !teacherAccounts) return undefined;
+    return teacherAccounts.find((user) =>
+      normalizeAccountUsername(user.username) === normalizeAccountUsername(teacher.nip ?? "")
+    );
+  };
+
   const getTeacherAccountStatus = (teacher: Teacher) => {
     if (teacher.profile_id) return "Akun Terhubung";
     if (userRole !== "super_admin") return "Status akun khusus Super Admin";
@@ -783,15 +1005,109 @@ useEffect(() => {
         : "Memeriksa akun...";
     }
 
-    const username = teacher.nip
-      ? normalizeAccountUsername(teacher.nip)
-      : "";
-    const isLinked = username !== "" && teacherAccounts.some((user) =>
-      user.role !== "siswa" &&
-      normalizeAccountUsername(user.username) === username
-    );
+    const existing = getTeacherManagedAccount(teacher);
+    if (existing?.role === "siswa") return "NIP digunakan akun siswa";
+    return existing ? "Akun tersedia, belum ditautkan" : "Belum terhubung ke akun";
+  };
 
-    return isLinked ? "Akun Terhubung" : "Belum terhubung ke akun";
+  const filteredTeachers = teachers.filter((teacher) => {
+    const keyword = search.trim().toLowerCase();
+    const matchesSearch = `${teacher.nip ?? ""} ${teacher.full_name} ${teacher.employment_status ?? ""}`
+      .toLowerCase()
+      .includes(keyword);
+    const matchesPosition = teacherFilterPosition === "all"
+      || teacher.employment_status === teacherFilterPosition;
+    const hasSubjectAssignment = teacherAssignmentSummary.some((assignment) => assignment.teacher_id === teacher.id);
+    const account = getTeacherManagedAccount(teacher);
+    const hasAccount = Boolean(teacher.profile_id || account);
+    const matchesStatus = teacherFilterStatus === "all"
+      || (teacherFilterStatus === "no-subject"
+          ? !teacherSummaryError && teacher.employment_status === "Guru Mata Pelajaran" && !hasSubjectAssignment
+        : userRole === "super_admin" && !hasAccount);
+    return matchesSearch && matchesPosition && matchesStatus;
+  });
+
+  const eligibleStudentAccountCount = filteredStudents.filter((student) =>
+    student.status === "Active"
+    && /^\d{10}$/.test(student.nisn.trim())
+    && getStudentAccountStatus(student) === "Belum Ada Akun"
+  ).length;
+  const visibleBulkStudents = bulkMoveMode === "graduate"
+    ? bulkStudents.filter((student) => student.status === "Active")
+    : bulkStudents;
+
+  const createOrLinkTeacherAccount = async (teacher: Teacher) => {
+    if (userRole !== "super_admin" || creatingTeacherAccountId) return;
+    const nip = teacher.nip?.trim() ?? "";
+    if (!/^\d{6,}$/.test(nip)) {
+      setMasterNotice("NIP harus berisi minimal 6 angka untuk membuat atau menautkan akun.");
+      return;
+    }
+
+    const existingAccount = getTeacherManagedAccount(teacher);
+    const actionLabel = existingAccount ? "Tautkan akun yang sudah ada" : "Buat akun baru";
+    if (!window.confirm(`${actionLabel} untuk ${teacher.full_name}? Username dan password awal adalah NIP.`)) return;
+
+    setCreatingTeacherAccountId(teacher.id);
+    setMasterNotice("");
+    setTeacherAccountError("");
+    try {
+      const currentUsers = await getManagedUsers();
+      const existing = currentUsers.find((user) =>
+        normalizeAccountUsername(user.username) === normalizeAccountUsername(nip)
+      );
+      if (existing?.role === "siswa") {
+        throw new Error("NIP ini sudah digunakan oleh akun siswa. Tautan dibatalkan agar data guru tidak terhubung ke akun yang salah.");
+      }
+      if (teacher.profile_id && existing && teacher.profile_id !== existing.id) {
+        throw new Error("Data guru sudah tertaut ke akun lain.");
+      }
+
+      const managedUser = existing ?? await createManagedUser({
+        username: nip,
+        full_name: teacher.full_name,
+        role: teacherRoleForPosition(teacher.employment_status),
+        password: nip,
+      });
+      const { data, error } = await supabase
+        .from("teachers")
+        .update({ profile_id: managedUser.id })
+        .eq("id", teacher.id)
+        .select("id, profile_id, nip, full_name, employment_status")
+        .single();
+      if (error) {
+        if (!existing) {
+          setTeacherAccounts([...currentUsers, { ...managedUser, created_at: new Date().toISOString() }]);
+          const auditWarning = await logMasterChange(
+            "Akun guru/tendik dibuat tanpa tautan Data Induk",
+            `${teacher.full_name} · NIP ${nip} · peran ${managedUser.role}`,
+          );
+          throw new Error(
+            `Akun berhasil dibuat, tetapi profile_id gagal ditautkan: ${error.message}${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+          );
+        }
+        throw error;
+      }
+
+      const savedTeacher = data as Teacher;
+      setTeachers((current) => current.map((item) =>
+        item.id === savedTeacher.id ? savedTeacher : item
+      ));
+      setTeacherAccounts(existing
+        ? currentUsers
+        : [...currentUsers, { ...managedUser, created_at: new Date().toISOString() }]);
+      const auditWarning = await logMasterChange(
+        existing ? "Akun guru/tendik ditautkan" : "Akun guru/tendik dibuat",
+        `${teacher.full_name} · NIP ${nip} · peran ${managedUser.role}`,
+      );
+      setMasterNotice(
+        `${existing ? "Akun yang sudah ada berhasil ditautkan" : "Akun berhasil dibuat dan ditautkan"}.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+      );
+    } catch (error) {
+      setTeacherAccountError(`Akun guru/tendik gagal dibuat atau ditautkan: ${formatSupabaseError(error)}`);
+    } finally {
+      setCreatingTeacherAccountId(null);
+    }
   };
 
   const loadTeacherAssignments = async (teacherId: string) => {
@@ -848,6 +1164,10 @@ useEffect(() => {
         "Penugasan mata pelajaran ditambahkan",
         `${assignmentTeacher.full_name} · ${subject}`,
       );
+      setTeacherAssignmentSummary((current) => [
+        ...current,
+        { teacher_id: assignmentTeacher.id, class_id: newAssignmentClassId, subject },
+      ]);
       setNewAssignmentSubject("");
       setNewAssignmentClassId("");
       await loadTeacherAssignments(assignmentTeacher.id);
@@ -881,6 +1201,13 @@ useEffect(() => {
         "Penugasan mata pelajaran dihapus",
         `${assignmentTeacher.full_name} · ${assignment.subject}`,
       );
+      setTeacherAssignmentSummary((current) =>
+        current.filter((item) =>
+          !(item.teacher_id === assignment.teacher_id
+            && item.class_id === assignment.class_id
+            && item.subject === assignment.subject)
+        )
+      );
       await loadTeacherAssignments(assignmentTeacher.id);
       if (auditWarning) setTeacherAssignmentError(`Penugasan dihapus, tetapi audit gagal: ${auditWarning}`);
     } catch (error) {
@@ -899,8 +1226,8 @@ useEffect(() => {
       try {
         const [c, y, t, st] = await Promise.all([
           supabase.from("classes").select("id, name, grade_level, academic_year_id, homeroom_teacher_id").order("grade_level").order("name"),
-          supabase.from("academic_years").select("id, name, is_active").order("start_date", { ascending: false }),
-          supabase.from("teachers").select("profile_id, full_name").not("profile_id", "is", null),
+        supabase.from("academic_years").select("id, name, is_active, start_date, end_date").order("start_date", { ascending: false }),
+        supabase.from("teachers").select("id, profile_id, full_name").not("profile_id", "is", null),
           supabase.from("students").select("class_id")
         ]);
         if (cancelled) return;
@@ -908,6 +1235,7 @@ useEffect(() => {
         if (error) throw error;
         const years = y.data ?? [];
         setAcademicYears(years as AcademicYear[]);
+        setClassTeacherOptions((t.data ?? []) as Array<Pick<Teacher, "id" | "profile_id" | "full_name">>);
         const teacherNames = new Map((t.data ?? []).filter(x => x.profile_id).map(x => [x.profile_id as string, x.full_name]));
         const yearNames = new Map(years.map(x => [x.id, x.name]));
         const counts = new Map<string, number>();
@@ -1044,52 +1372,150 @@ useEffect(() => {
     setTeachers(prev => prev.filter(x => x.id !== teacher.id));
   };
 
-  const handleAddClass = async () => {
-    const name = window.prompt("Nama kelas (contoh: X A):")?.trim(); if (!name) return;
-    const gradeText = window.prompt("Tingkat kelas (10, 11, atau 12):", "10"); if (gradeText === null) return;
-    const grade_level = Number(gradeText);
-    if (![10, 11, 12].includes(grade_level)) { alert("Tingkat kelas harus 10, 11, atau 12."); return; }
-    if (!academicYears.length) { alert("Belum ada tahun ajaran. Tambahkan tahun ajaran terlebih dahulu."); return; }
-    const activeYear = academicYears.find(y => y.is_active) ?? academicYears[0];
-    const yearChoice = window.prompt(
-  `Pilih nomor tahun ajaran:\n${academicYears
-    .map(
-      (y, i) =>
-        `${i + 1}. ${y.name}${y.is_active ? " (aktif)" : ""}`
-    )
-    .join("\n")}`,
-  String(academicYears.indexOf(activeYear) + 1)
-);
-    if (yearChoice === null) return;
-    const year = academicYears[Number(yearChoice) - 1]; if (!year) { alert("Pilihan tahun ajaran tidak valid."); return; }
-    const { error } = await supabase.from("classes").insert({ name, grade_level, academic_year_id: year.id, homeroom_teacher_id: null });
-    if (error) { alert(`Gagal menambah kelas: ${error.message}`); return; }
-    const auditWarning = await logMasterChange(
-      "Kelas ditambahkan",
-      `${name} · tingkat ${grade_level} · ${year.name}`,
-    );
-    setMasterNotice(auditWarning ? `Kelas tersimpan, tetapi audit gagal: ${auditWarning}` : "Kelas berhasil ditambahkan."); setActiveMenu("kelas");
-    const { data } = await supabase.from("classes").select("id, name, grade_level, academic_year_id, homeroom_teacher_id").order("grade_level").order("name");
-    const { data: yrs } = await supabase.from("academic_years").select("id, name, is_active");
-    const { data: tch } = await supabase.from("teachers").select("profile_id, full_name").not("profile_id", "is", null);
-    const { data: studentsData } = await supabase.from("students").select("class_id");
-    const yearMap = new Map((yrs ?? []).map(x => [x.id, x.name])); const teacherMap = new Map((tch ?? []).filter(x => x.profile_id).map(x => [x.profile_id as string, x.full_name])); const countMap = new Map<string, number>();
-    (studentsData ?? []).forEach(x => { if (x.class_id) countMap.set(x.class_id, (countMap.get(x.class_id) ?? 0) + 1); });
-    setClassRows((data ?? []).map(x => ({ ...x, academic_year_name: yearMap.get(x.academic_year_id) ?? "—", homeroom_teacher_name: x.homeroom_teacher_id ? teacherMap.get(x.homeroom_teacher_id) ?? "Profil guru tidak ditemukan" : "Belum ditentukan", student_count: countMap.get(x.id) ?? 0 })) as ClassRow[]);
+  const handleAddClass = () => {
+    if (!academicYears.length) {
+      setMasterNotice("Belum ada tahun ajaran. Tambahkan tahun ajaran terlebih dahulu.");
+      return;
+    }
+    const activeYear = academicYears.find((year) => year.is_active) ?? academicYears[0];
+    setEditingClass(null);
+    setClassForm({ ...emptyClassForm, academic_year_id: activeYear.id });
+    setClassFormError("");
+    setMasterNotice("");
+    setShowClassForm(true);
   };
 
-  const handleEditClass = async (row: ClassRow) => {
-    const name = window.prompt("Nama kelas:", row.name); if (name === null || !name.trim()) return;
-    const gradeText = window.prompt("Tingkat (10, 11, atau 12):", String(row.grade_level)); if (gradeText === null) return;
-    const grade_level = Number(gradeText); if (![10, 11, 12].includes(grade_level)) { alert("Tingkat kelas harus 10, 11, atau 12."); return; }
-    const { error } = await supabase.from("classes").update({ name: name.trim(), grade_level }).eq("id", row.id);
-    if (error) { alert(`Gagal memperbarui kelas: ${error.message}`); return; }
-    const auditWarning = await logMasterChange(
-      "Data kelas diperbarui",
-      `${row.name} → ${name.trim()} · tingkat ${grade_level}`,
-    );
-    if (auditWarning) setMasterNotice(`Kelas diperbarui, tetapi audit gagal: ${auditWarning}`);
-    setClassRows(prev => prev.map(x => x.id === row.id ? { ...x, name: name.trim(), grade_level } : x));
+  const handleEditClass = (row: ClassRow) => {
+    setEditingClass(row);
+    setClassForm({
+      name: row.name,
+      grade_level: String(row.grade_level),
+      academic_year_id: row.academic_year_id,
+      homeroom_teacher_id: classTeacherOptions.find((teacher) => teacher.profile_id === row.homeroom_teacher_id)?.profile_id ?? "",
+    });
+    setClassFormError("");
+    setMasterNotice("");
+    setShowClassForm(true);
+  };
+
+  const handleSaveClass = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = classForm.name.trim();
+    const grade_level = Number(classForm.grade_level);
+    const year = academicYears.find((item) => item.id === classForm.academic_year_id);
+    if (!name) {
+      setClassFormError("Nama kelas wajib diisi.");
+      return;
+    }
+    if (![10, 11, 12].includes(grade_level)) {
+      setClassFormError("Tingkat kelas harus 10, 11, atau 12.");
+      return;
+    }
+    if (!year) {
+      setClassFormError("Pilih tahun ajaran yang terdaftar.");
+      return;
+    }
+    if (classForm.homeroom_teacher_id && !classTeacherOptions.some((teacher) => teacher.profile_id === classForm.homeroom_teacher_id)) {
+      setClassFormError("Wali kelas harus dipilih dari guru yang sudah tertaut ke akun.");
+      return;
+    }
+
+    setSavingClass(true);
+    setClassFormError("");
+    try {
+      const payload = {
+        name,
+        grade_level,
+        academic_year_id: year.id,
+        homeroom_teacher_id: classForm.homeroom_teacher_id || null,
+      };
+      const result = editingClass
+        ? await supabase.from("classes").update(payload).eq("id", editingClass.id).select("id").single()
+        : await supabase.from("classes").insert(payload).select("id").single();
+      if (result.error) throw result.error;
+
+      const auditWarning = await logMasterChange(
+        editingClass ? "Data kelas diperbarui" : "Kelas ditambahkan",
+        `${name} · tingkat ${grade_level} · ${year.name}`,
+      );
+      setMasterNotice(
+        `${editingClass ? "Data kelas berhasil diperbarui" : "Kelas berhasil ditambahkan"}.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+      );
+      setShowClassForm(false);
+      setEditingClass(null);
+      setClassForm(emptyClassForm);
+      setClassReloadVersion((version) => version + 1);
+    } catch (error) {
+      setClassFormError(`Gagal ${editingClass ? "memperbarui" : "menambahkan"} kelas: ${formatSupabaseError(error)}`);
+    } finally {
+      setSavingClass(false);
+    }
+  };
+
+  const saveAcademicYear = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = academicYearForm.name.trim();
+    if (!name) {
+      setAcademicYearFormError("Nama tahun ajaran wajib diisi.");
+      return;
+    }
+    if (academicYears.some((year) => year.name.trim().toLowerCase() === name.toLowerCase())) {
+      setAcademicYearFormError("Nama tahun ajaran tersebut sudah terdaftar.");
+      return;
+    }
+    if (academicYearForm.start_date && academicYearForm.end_date && academicYearForm.end_date < academicYearForm.start_date) {
+      setAcademicYearFormError("Tanggal berakhir tidak boleh lebih awal daripada tanggal mulai.");
+      return;
+    }
+
+    setSavingAcademicYear(true);
+    setAcademicYearFormError("");
+    try {
+      const { data, error } = await supabase
+        .from("academic_years")
+        .insert({
+          name,
+          start_date: academicYearForm.start_date || null,
+          end_date: academicYearForm.end_date || null,
+          is_active: false,
+        })
+        .select("id, name, is_active, start_date, end_date")
+        .single();
+      if (error) throw error;
+
+      const auditWarning = await logMasterChange("Tahun ajaran ditambahkan", name);
+      setAcademicYears((current) => [...current, data as AcademicYear].sort((a, b) => (b.start_date ?? "").localeCompare(a.start_date ?? "")));
+      setAcademicYearForm({ name: "", start_date: "", end_date: "" });
+      setMasterNotice(`Tahun ajaran berhasil ditambahkan.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`);
+      setClassReloadVersion((version) => version + 1);
+    } catch (error) {
+      setAcademicYearFormError(`Tahun ajaran gagal ditambahkan: ${formatSupabaseError(error)}`);
+    } finally {
+      setSavingAcademicYear(false);
+    }
+  };
+
+  const activateAcademicYear = async (year: AcademicYear) => {
+    if (!canManageDataInduk || year.is_active || activatingAcademicYearId) return;
+    setActivatingAcademicYearId(year.id);
+    setAcademicYearFormError("");
+    try {
+      const { error } = await supabase
+        .from("academic_years")
+        .update({ is_active: true })
+        .eq("id", year.id)
+        .select("id")
+        .single();
+      if (error) throw error;
+      const auditWarning = await logMasterChange("Tahun ajaran diaktifkan", year.name);
+      setAcademicYears((current) => current.map((item) => ({ ...item, is_active: item.id === year.id })));
+      setMasterNotice(`Tahun ajaran ${year.name} sekarang aktif.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`);
+      setClassReloadVersion((version) => version + 1);
+    } catch (error) {
+      setAcademicYearFormError(`Gagal mengaktifkan tahun ajaran: ${formatSupabaseError(error)}`);
+    } finally {
+      setActivatingAcademicYearId(null);
+    }
   };
 
   const handleDeleteClass = async (row: ClassRow) => {
@@ -1108,6 +1534,7 @@ useEffect(() => {
   const openBulkMove = () => {
     if (!canManageDataInduk) return;
     bulkLoadRequestRef.current += 1;
+    setBulkMoveMode("move");
     setBulkSourceYearId((academicYears.find((year) => year.is_active) ?? academicYears[0])?.id ?? "");
     setBulkSourceClassId("");
     setBulkDestinationClassId("");
@@ -1162,43 +1589,92 @@ useEffect(() => {
     const sourceYear = academicYears.find((year) => year.id === bulkSourceYearId);
     const sourceClass = classRows.find((row) => row.id === bulkSourceClassId);
     const destinationClass = classRows.find((row) => row.id === bulkDestinationClassId);
-    const selectedStudents = bulkStudents.filter((student) => bulkSelectedIds.includes(student.id));
-    if (!sourceYear || !sourceClass || !destinationClass || !selectedStudents.length) {
-      setBulkError("Pilih tahun ajaran asal, kelas tujuan, dan minimal satu siswa.");
+    const selectableStudents = bulkMoveMode === "graduate"
+      ? bulkStudents.filter((student) => student.status === "Active")
+      : bulkStudents;
+    const selectedStudents = selectableStudents.filter((student) => bulkSelectedIds.includes(student.id));
+    if (!sourceYear || !sourceClass || !selectedStudents.length) {
+      setBulkError("Pilih tahun ajaran asal, kelas asal, dan minimal satu siswa.");
       return;
     }
-    if (destinationClass.id === bulkSourceClassId) {
+    if (bulkMoveMode === "graduate" && sourceClass.grade_level !== 12) {
+      setBulkError("Siswa hanya dapat diluluskan melalui proses massal dari kelas tingkat 12.");
+      return;
+    }
+    if (bulkMoveMode === "graduate" && selectedStudents.some((student) => student.status !== "Active")) {
+      setBulkError("Hanya siswa berstatus Active yang dapat diluluskan melalui proses ini.");
+      return;
+    }
+    if (bulkMoveMode === "move" && !destinationClass) {
+      setBulkError("Pilih kelas tujuan.");
+      return;
+    }
+    if (bulkMoveMode === "move" && destinationClass?.id === bulkSourceClassId) {
       setBulkError("Kelas tujuan harus berbeda dari kelas asal.");
       return;
     }
     if (selectedStudents.length > 5000) {
-      setBulkError("Pemindahan dibatasi maksimal 5.000 siswa per proses. Kurangi pilihan siswa.");
+      setBulkError("Proses dibatasi maksimal 5.000 siswa. Kurangi pilihan siswa.");
       return;
     }
 
-    const confirmation = [
-      `Pindahkan ${selectedStudents.length} siswa dari ${sourceClass.name} (${sourceYear.name})`,
-      `ke ${destinationClass.name} (${destinationClass.academic_year_name})?`,
-      "Perubahan ini akan tercatat di Riwayat Perubahan.",
-    ].join("\n");
+    const confirmation = bulkMoveMode === "graduate"
+      ? `Luluskan ${selectedStudents.length} siswa Active dari ${sourceClass.name} (${sourceYear.name})? Status mereka akan menjadi Graduated. Perubahan ini tercatat di Riwayat Perubahan.`
+      : [
+          `Pindahkan ${selectedStudents.length} siswa dari ${sourceClass.name} (${sourceYear.name})`,
+          `ke ${destinationClass?.name} (${destinationClass?.academic_year_name})?`,
+          "Perubahan ini akan tercatat di Riwayat Perubahan.",
+        ].join("\n");
     if (!window.confirm(confirmation)) return;
 
     setBulkSaving(true);
     setBulkError("");
     try {
+      if (bulkMoveMode === "graduate") {
+        const { data, error } = await supabase
+          .from("students")
+          .update({ status: "Graduated" })
+          .eq("class_id", sourceClass.id)
+          .eq("status", "Active")
+          .in("id", selectedStudents.map((student) => student.id))
+          .select("id");
+        if (error) throw error;
+        if ((data ?? []).length !== selectedStudents.length) {
+          throw new Error(`Server memperbarui ${(data ?? []).length} dari ${selectedStudents.length} siswa yang dipilih.`);
+        }
+        const auditWarning = await logMasterChange(
+          "Siswa diluluskan secara massal",
+          `${selectedStudents.length} siswa dari ${sourceClass.name} · tingkat ${sourceClass.grade_level} · ${sourceYear.name}`,
+        );
+        const graduatedIds = new Set(selectedStudents.map((student) => student.id));
+        setStudents((current) => current.map((student) =>
+          graduatedIds.has(student.id) ? { ...student, status: "Graduated" } : student
+        ));
+        setMasterNotice(
+          `${selectedStudents.length} siswa berhasil ditandai Graduated.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+        );
+        setClassReloadVersion((version) => version + 1);
+        closeBulkMove();
+        return;
+      }
+
       const { data, error } = await supabase.rpc("datainduk_move_students_to_class", {
         p_source_academic_year_id: sourceYear.id,
         p_source_class_id: sourceClass.id,
-        p_destination_class_id: destinationClass.id,
+        p_destination_class_id: destinationClass?.id ?? "",
         p_student_ids: selectedStudents.map((student) => student.id),
       });
       if (error) throw error;
       const movedCount = Number(data);
-      if (!Number.isInteger(movedCount) || movedCount < 0) {
-        throw new Error("Respons pemindahan siswa dari server tidak valid.");
+      if (!Number.isInteger(movedCount) || movedCount !== selectedStudents.length) {
+        throw new Error(`Server memindahkan ${movedCount} dari ${selectedStudents.length} siswa yang dipilih.`);
       }
+      const auditWarning = await logMasterChange(
+        "Siswa dipindahkan secara massal",
+        `${movedCount} siswa · ${sourceClass.name} → ${destinationClass?.name} · ${destinationClass?.academic_year_name}`,
+      );
       setMasterNotice(
-        `${movedCount} siswa berhasil dipindahkan ke ${destinationClass.name} (${destinationClass.academic_year_name}).`
+        `${movedCount} siswa berhasil dipindahkan ke ${destinationClass?.name} (${destinationClass?.academic_year_name}).${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`
       );
       setClassReloadVersion((version) => version + 1);
       closeBulkMove();
@@ -1513,6 +1989,160 @@ const handleDownloadStudentTemplate = () => {
     workbook,
     "Template_Impor_Siswa_SMAN_7_Maros.xlsx"
   );
+};
+
+const handleDownloadTeacherTemplate = () => {
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.aoa_to_sheet([
+    ["NIP", "Nama Lengkap", "Jabatan"],
+    ["000000000000000001", "Contoh Nama Guru", "Guru Mata Pelajaran"],
+    ["000000000000000002", "Contoh Nama Konselor", "Guru BK / Konselor"],
+  ]);
+  worksheet["!cols"] = [{ wch: 24 }, { wch: 32 }, { wch: 34 }];
+  const instructions = XLSX.utils.aoa_to_sheet([
+    ["PETUNJUK TEMPLATE IMPOR GURU/TENDIK"],
+    ["1. Isi satu baris untuk satu guru atau tenaga kependidikan."],
+    ["2. NIP harus berupa teks dan minimal 6 angka."],
+    ["3. Nama Lengkap dan Jabatan wajib diisi."],
+    ["4. NIP duplikat di dalam file atau database akan ditolak."],
+    ["5. Hapus baris contoh sebelum mengunggah data sebenarnya."],
+  ]);
+  instructions["!cols"] = [{ wch: 100 }];
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Data Guru");
+  XLSX.utils.book_append_sheet(workbook, instructions, "Petunjuk");
+  XLSX.writeFile(workbook, "Template_Impor_Guru_Tendik_SMAN_7_Maros.xlsx");
+};
+
+const handleTeacherExcelUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!canManageDataInduk) {
+    setTeacherImportError("Impor guru/tendik hanya dapat dilakukan operator atau super admin.");
+    event.target.value = "";
+    return;
+  }
+
+  setImporting(true);
+  setTeacherImportError("");
+  setTeacherImportNotice("");
+  setTeacherImportRows([]);
+  setTeacherImportValidationComplete(false);
+  setTeacherImportFileName(file.name);
+  let rows: ImportTeacherRow[] = [];
+
+  try {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet) throw new Error("File Excel tidak memiliki lembar kerja.");
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+    if (!rawRows.length) throw new Error("File Excel tidak memiliki data guru/tendik.");
+
+    const normalizeHeader = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+    rows = rawRows.map((raw, index) => {
+      const normalized: Record<string, unknown> = {};
+      Object.entries(raw).forEach(([key, value]) => { normalized[normalizeHeader(key)] = value; });
+      const nip = String(normalized.nip ?? "").trim();
+      const full_name = String(normalized.namalengkap ?? normalized.nama ?? normalized.fullname ?? "").trim();
+      const employment_status = String(normalized.jabatan ?? normalized.posisi ?? "").trim();
+      const errors: string[] = [];
+      if (!/^\d{6,}$/.test(nip)) errors.push("NIP harus minimal 6 angka");
+      if (full_name.length < 2 || full_name.length > 150) errors.push("Nama harus 2–150 karakter");
+      if (!employment_status) errors.push("Jabatan wajib diisi");
+      return { source_row: index + 2, nip, full_name, employment_status, errors };
+    });
+
+    const rowNumbersByNip = new Map<string, number[]>();
+    rows.forEach((row) => {
+      if (!row.nip) return;
+      rowNumbersByNip.set(row.nip, [...(rowNumbersByNip.get(row.nip) ?? []), row.source_row]);
+    });
+    rows.forEach((row) => {
+      const duplicateRows = rowNumbersByNip.get(row.nip) ?? [];
+      if (duplicateRows.length > 1) row.errors.push(`NIP duplikat di dalam file (baris ${duplicateRows.join(", ")})`);
+    });
+
+    const nips = [...new Set(rows.filter((row) => /^\d{6,}$/.test(row.nip)).map((row) => row.nip))];
+    const existingNips = new Set<string>();
+    for (let offset = 0; offset < nips.length; offset += 500) {
+      const { data, error } = await supabase.from("teachers").select("nip").in("nip", nips.slice(offset, offset + 500));
+      if (error) throw error;
+      (data ?? []).forEach((item) => { if (item.nip) existingNips.add(item.nip.trim()); });
+    }
+    rows.forEach((row) => {
+      if (existingNips.has(row.nip)) row.errors.push("NIP sudah terdaftar di database");
+    });
+    setTeacherImportRows(rows);
+    setTeacherImportValidationComplete(true);
+  } catch (error) {
+    if (rows.length) {
+      setTeacherImportRows(rows.map((row) => ({
+        ...row,
+        errors: [...row.errors, "Validasi database gagal; baris ini belum dapat diimpor."],
+      })));
+    }
+    setTeacherImportError(`Gagal memvalidasi file Excel guru/tendik: ${formatSupabaseError(error)}`);
+  } finally {
+    setImporting(false);
+    event.target.value = "";
+  }
+};
+
+const handleImportTeachers = async () => {
+  if (!canManageDataInduk || !teacherImportValidationComplete) {
+    setTeacherImportError("Validasi belum selesai atau Anda tidak memiliki izin impor.");
+    return;
+  }
+  const validRows = teacherImportRows.filter((row) => row.errors.length === 0);
+  if (!validRows.length) {
+    setTeacherImportError("Tidak ada baris guru/tendik valid untuk diimpor.");
+    return;
+  }
+
+  setImporting(true);
+  setTeacherImportError("");
+  setTeacherImportNotice("");
+  try {
+    const nips = validRows.map((row) => row.nip);
+    const { data: existing, error: existingError } = await supabase
+      .from("teachers")
+      .select("nip")
+      .in("nip", nips);
+    if (existingError) throw existingError;
+    const existingNips = new Set((existing ?? []).map((item) => item.nip?.trim()).filter((nip): nip is string => Boolean(nip)));
+    const duplicateNips = new Set(nips.filter((nip) => existingNips.has(nip)));
+    const rowsToInsert = validRows.filter((row) => !duplicateNips.has(row.nip));
+    if (!rowsToInsert.length) {
+      setTeacherImportRows((current) => current.map((row) =>
+        duplicateNips.has(row.nip) ? { ...row, errors: [...row.errors, "NIP sudah terdaftar di database"] } : row
+      ));
+      setTeacherImportError("Semua NIP valid pada file ini sudah terdaftar. Tidak ada data baru yang ditambahkan.");
+      return;
+    }
+
+    const { error: insertError } = await supabase.from("teachers").insert(rowsToInsert.map((row) => ({
+      nip: row.nip,
+      full_name: row.full_name,
+      employment_status: row.employment_status,
+    })));
+    if (insertError) throw insertError;
+
+    const auditWarning = await logMasterChange(
+      "Data guru/tendik diimpor",
+      `${rowsToInsert.length} guru/tendik berhasil diimpor.`,
+    );
+    setTeacherImportRows((current) => current
+      .filter((row) => duplicateNips.has(row.nip))
+      .map((row) => ({ ...row, errors: [...row.errors, "NIP sudah terdaftar di database"] })));
+    setTeacherImportValidationComplete(true);
+    setTeacherImportNotice(
+      `${rowsToInsert.length} guru/tendik berhasil diimpor.${duplicateNips.size ? ` ${duplicateNips.size} baris dilewati karena NIP sudah terdaftar.` : ""}${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+    );
+    if (!duplicateNips.size) setTeacherImportFileName("");
+  } catch (error) {
+    setTeacherImportError(`Impor guru/tendik gagal: ${formatSupabaseError(error)}`);
+  } finally {
+    setImporting(false);
+  }
 };
 
 
@@ -2840,6 +3470,170 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
         </div>
       )}
 
+      {showClassForm && canManageDataInduk && (
+        <div className="di-modal-backdrop">
+          <form
+            className="di-bulk-form"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="class-form-title"
+            onSubmit={(event) => void handleSaveClass(event)}
+          >
+            <h3 id="class-form-title">{editingClass ? "Edit Data Kelas" : "Tambah Data Kelas"}</h3>
+            <div className="di-bulk-fields">
+              <label className="di-form-label" htmlFor="class-form-name">Nama Kelas</label>
+              <input
+                id="class-form-name"
+                className="di-search"
+                value={classForm.name}
+                onChange={(event) => setClassForm((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Contoh: X A"
+                maxLength={80}
+                required
+              />
+              <label className="di-form-label" htmlFor="class-form-grade">Tingkat</label>
+              <select
+                id="class-form-grade"
+                className="di-search"
+                value={classForm.grade_level}
+                onChange={(event) => setClassForm((current) => ({ ...current, grade_level: event.target.value }))}
+                required
+              >
+                <option value="10">10</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+              </select>
+              <label className="di-form-label" htmlFor="class-form-year">Tahun Ajaran</label>
+              <select
+                id="class-form-year"
+                className="di-search"
+                value={classForm.academic_year_id}
+                onChange={(event) => setClassForm((current) => ({ ...current, academic_year_id: event.target.value }))}
+                required
+              >
+                <option value="">Pilih tahun ajaran</option>
+                {academicYears.map((year) => (
+                  <option key={year.id} value={year.id}>{year.name}{year.is_active ? " · Aktif" : ""}</option>
+                ))}
+              </select>
+              <label className="di-form-label" htmlFor="class-form-homeroom">Wali Kelas</label>
+              <select
+                id="class-form-homeroom"
+                className="di-search"
+                value={classForm.homeroom_teacher_id}
+                onChange={(event) => setClassForm((current) => ({ ...current, homeroom_teacher_id: event.target.value }))}
+              >
+                <option value="">Belum ditentukan</option>
+                {classTeacherOptions.map((teacher) => (
+                  <option key={teacher.id} value={teacher.profile_id ?? ""}>{teacher.full_name}</option>
+                ))}
+              </select>
+            </div>
+            {classFormError && <p className="di-bulk-error" role="alert">{classFormError}</p>}
+            <div className="di-actions di-bulk-actions">
+              <button
+                type="button"
+                className="di-button"
+                onClick={() => { setShowClassForm(false); setClassFormError(""); }}
+                disabled={savingClass}
+              >
+                Batal
+              </button>
+              <button type="submit" className="di-button di-button-primary" disabled={savingClass}>
+                {savingClass ? "Menyimpan..." : "Simpan Kelas"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showAcademicYearManager && canManageDataInduk && (
+        <div className="di-modal-backdrop">
+          <section
+            className="di-bulk-form"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="academic-year-title"
+          >
+            <h3 id="academic-year-title">Kelola Tahun Ajaran</h3>
+            <p className="di-bulk-description">Tahun ajaran aktif digunakan sebagai pilihan utama saat membuat kelas.</p>
+            <form onSubmit={(event) => void saveAcademicYear(event)}>
+              <div className="di-bulk-fields">
+                <label className="di-form-label" htmlFor="academic-year-name">Nama Tahun Ajaran</label>
+                <input
+                  id="academic-year-name"
+                  className="di-search"
+                  value={academicYearForm.name}
+                  onChange={(event) => setAcademicYearForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Contoh: 2026/2027"
+                  maxLength={40}
+                  required
+                />
+                <label className="di-form-label" htmlFor="academic-year-start">Tanggal Mulai</label>
+                <input
+                  id="academic-year-start"
+                  className="di-search"
+                  type="date"
+                  value={academicYearForm.start_date}
+                  onChange={(event) => setAcademicYearForm((current) => ({ ...current, start_date: event.target.value }))}
+                />
+                <label className="di-form-label" htmlFor="academic-year-end">Tanggal Berakhir</label>
+                <input
+                  id="academic-year-end"
+                  className="di-search"
+                  type="date"
+                  value={academicYearForm.end_date}
+                  onChange={(event) => setAcademicYearForm((current) => ({ ...current, end_date: event.target.value }))}
+                />
+              </div>
+              <div className="di-actions" style={{ marginTop: 16 }}>
+                <button type="submit" className="di-button di-button-primary" disabled={savingAcademicYear}>
+                  {savingAcademicYear ? "Menyimpan..." : "Tambah Tahun Ajaran"}
+                </button>
+              </div>
+            </form>
+            {academicYearFormError && <p className="di-bulk-error" role="alert">{academicYearFormError}</p>}
+            <div className="di-table-wrap" style={{ marginTop: 18 }}>
+              <table className="di-table">
+                <thead>
+                  <tr><th>Tahun Ajaran</th><th>Periode</th><th>Status</th><th>Aksi</th></tr>
+                </thead>
+                <tbody>
+                  {academicYears.map((year) => (
+                    <tr key={year.id}>
+                      <td>{year.name}</td>
+                      <td>{year.start_date ?? "—"} – {year.end_date ?? "—"}</td>
+                      <td>{year.is_active ? "Aktif" : "Tidak aktif"}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="di-button"
+                          onClick={() => void activateAcademicYear(year)}
+                          disabled={year.is_active || activatingAcademicYearId !== null}
+                        >
+                          {activatingAcademicYearId === year.id ? "Mengaktifkan..." : year.is_active ? "Aktif" : "Jadikan aktif"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!academicYears.length && <tr><td colSpan={4}>Belum ada tahun ajaran.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div className="di-actions di-bulk-actions">
+              <button
+                type="button"
+                className="di-button"
+                onClick={() => { setShowAcademicYearManager(false); setAcademicYearFormError(""); }}
+                disabled={savingAcademicYear || activatingAcademicYearId !== null}
+              >
+                Tutup
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {assignmentTeacher && canManageDataInduk && (
         <div className="di-modal-backdrop">
           <section
@@ -2862,12 +3656,16 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                 <input
                   id="teacher-assignment-subject"
                   className="di-search"
+                  list="teacher-subject-suggestions"
                   value={newAssignmentSubject}
                   onChange={(event) => setNewAssignmentSubject(event.target.value)}
                   maxLength={120}
                   required
                   placeholder="Contoh: Matematika Tingkat Lanjut"
                 />
+                <datalist id="teacher-subject-suggestions">
+                  {subjectSuggestions.map((subject) => <option key={subject} value={subject} />)}
+                </datalist>
                 <label className="di-form-label" htmlFor="teacher-assignment-class">
                   Kelas
                 </label>
@@ -3003,6 +3801,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   if (event.target.value === bulkDestinationClassId) {
                     setBulkDestinationClassId("");
                   }
+                  setBulkMoveMode("move");
                   void loadBulkStudents(event.target.value);
                 }}
                 disabled={!bulkSourceYearId}
@@ -3018,47 +3817,78 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   ))}
               </select>
 
-              <label className="di-form-label" htmlFor="bulk-destination-class">
-                Kelas tujuan
-              </label>
-              <select
-                id="bulk-destination-class"
-                className="di-search"
-                value={bulkDestinationClassId}
-                onChange={(event) => setBulkDestinationClassId(event.target.value)}
-                required
-              >
-                <option value="">Pilih kelas tujuan</option>
-                {classRows
-                  .filter((row) => row.id !== bulkSourceClassId)
-                  .map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {row.name} · {row.academic_year_name}
-                    </option>
-                  ))}
-              </select>
+              <span className="di-form-label">Mode proses</span>
+              <div className="di-actions" style={{ gridColumn: "1 / -1" }}>
+                  <label>
+                    <input
+                      type="radio"
+                      name="bulk-move-mode"
+                      checked={bulkMoveMode === "move"}
+                      onChange={() => {
+                        setBulkMoveMode("move");
+                        setBulkSelectedIds(bulkStudents.map((student) => student.id));
+                      }}
+                    />
+                    Pindahkan ke kelas
+                  </label>
+                  {classRows.find((row) => row.id === bulkSourceClassId)?.grade_level === 12 && (
+                    <label>
+                      <input
+                        type="radio"
+                        name="bulk-move-mode"
+                        checked={bulkMoveMode === "graduate"}
+                        onChange={() => {
+                          setBulkMoveMode("graduate");
+                          setBulkSelectedIds(bulkStudents.filter((student) => student.status === "Active").map((student) => student.id));
+                        }}
+                      />
+                      Luluskan siswa (status: Graduated)
+                    </label>
+                  )}
+              </div>
+              {bulkMoveMode === "move" && (
+                  <>
+                    <label className="di-form-label" htmlFor="bulk-destination-class">Kelas tujuan</label>
+                    <select
+                      id="bulk-destination-class"
+                      className="di-search"
+                      value={bulkDestinationClassId}
+                      onChange={(event) => setBulkDestinationClassId(event.target.value)}
+                      required
+                    >
+                      <option value="">Pilih kelas tujuan</option>
+                      {classRows
+                        .filter((row) => row.id !== bulkSourceClassId)
+                        .map((row) => (
+                          <option key={row.id} value={row.id}>
+                            {row.name} · {row.academic_year_name}
+                          </option>
+                        ))}
+                    </select>
+                  </>
+              )}
             </div>
 
             <div className="di-bulk-students">
               <div className="di-bulk-students-head">
-                <strong>Siswa yang dipindahkan</strong>
+                  <strong>{bulkMoveMode === "graduate" ? "Siswa yang diluluskan" : "Siswa yang dipindahkan"}</strong>
                 <label>
                   <input
                     type="checkbox"
-                    checked={bulkStudents.length > 0 && bulkSelectedIds.length === bulkStudents.length}
+                      checked={visibleBulkStudents.length > 0 && visibleBulkStudents.every((student) => bulkSelectedIds.includes(student.id))}
                     onChange={(event) => setBulkSelectedIds(
-                      event.target.checked ? bulkStudents.map((student) => student.id) : []
+                        event.target.checked ? visibleBulkStudents.map((student) => student.id) : []
                     )}
-                    disabled={bulkLoading || bulkStudents.length === 0}
+                      disabled={bulkLoading || visibleBulkStudents.length === 0}
                   />
-                  Pilih semua ({bulkSelectedIds.length}/{bulkStudents.length})
+                    Pilih semua ({visibleBulkStudents.filter((student) => bulkSelectedIds.includes(student.id)).length}/{visibleBulkStudents.length})
                 </label>
               </div>
               <div className="di-bulk-students-list">
                 {bulkLoading ? (
                   <p className="di-bulk-empty">Memuat daftar siswa...</p>
-                ) : bulkStudents.length ? (
-                  bulkStudents.map((student) => (
+                  ) : visibleBulkStudents.length ? (
+                    visibleBulkStudents.map((student) => (
                     <label className="di-bulk-student" key={student.id}>
                       <input
                         type="checkbox"
@@ -3078,7 +3908,9 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                 ) : (
                   <p className="di-bulk-empty">
                     {bulkSourceClassId
-                      ? "Tidak ada siswa yang dapat dipindahkan pada kelas ini."
+                      ? bulkMoveMode === "graduate"
+                        ? "Tidak ada siswa Active yang dapat diluluskan."
+                        : "Tidak ada siswa yang dapat dipindahkan pada kelas ini."
                       : "Pilih kelas asal untuk memuat daftar siswa."}
                   </p>
                 )}
@@ -3099,9 +3931,13 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
               <button
                 type="submit"
                 className="di-button di-button-primary"
-                disabled={bulkSaving || bulkLoading || !bulkSelectedIds.length || !bulkDestinationClassId}
+                disabled={bulkSaving || bulkLoading || !visibleBulkStudents.some((student) => bulkSelectedIds.includes(student.id)) || (bulkMoveMode === "move" && !bulkDestinationClassId)}
               >
-                {bulkSaving ? "Memindahkan..." : `Pindahkan ${bulkSelectedIds.length} Siswa`}
+                {bulkSaving
+                  ? bulkMoveMode === "graduate" ? "Meluluskan..." : "Memindahkan..."
+                  : bulkMoveMode === "graduate"
+                    ? `Luluskan ${visibleBulkStudents.filter((student) => bulkSelectedIds.includes(student.id)).length} Siswa`
+                    : `Pindahkan ${visibleBulkStudents.filter((student) => bulkSelectedIds.includes(student.id)).length} Siswa`}
               </button>
             </div>
           </form>
@@ -3151,7 +3987,9 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                 ? "Data rombongan belajar dan tahun ajaran."
                 : activeMenu === "riwayat"
                 ? "Audit perubahan siswa, guru/tendik, dan kelas. Menampilkan 200 catatan terbaru."
-                : "Impor data siswa dari Excel dan ekspor data sesuai kategori yang dipilih."}
+                : activeMenu === "sekolah"
+                ? "Kelola profil satuan pendidikan, kalender non-KBM, dan pantau koneksi Data Induk dengan Akademik serta Inventaris."
+                : "Impor data siswa atau guru/tendik dari Excel dan ekspor data sesuai kategori yang dipilih."}
             </p>
           </div>
 
@@ -3166,14 +4004,45 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                 Ekspor Excel
               </button>
               {activeMenu === "kelas" && canManageDataInduk && (
+                <>
+                  <button
+                    type="button"
+                    className="di-button"
+                    onClick={() => { setAcademicYearFormError(""); setShowAcademicYearManager(true); }}
+                    disabled={classLoading}
+                  >
+                    <School size={15} />
+                    Tahun Ajaran
+                  </button>
+                  <button
+                    type="button"
+                    className="di-button"
+                    onClick={openBulkMove}
+                    disabled={classLoading || !academicYears.length || !classRows.length}
+                  >
+                    <GraduationCap size={15} />
+                    Pemindahan Massal
+                  </button>
+                </>
+              )}
+
+              {activeMenu === "siswa" && userRole === "super_admin" && (
                 <button
                   type="button"
                   className="di-button"
-                  onClick={openBulkMove}
-                  disabled={classLoading || !academicYears.length || !classRows.length}
+                  onClick={() => void generateStudentAccountsBulk()}
+                  disabled={
+                    loadingStudents ||
+                    studentAccounts === null ||
+                    Boolean(studentAccountError) ||
+                    eligibleStudentAccountCount === 0 ||
+                    bulkAccountProgress !== null
+                  }
                 >
-                  <GraduationCap size={15} />
-                  Pemindahan Massal
+                  <UserRoundPlus size={15} />
+                  {bulkAccountProgress
+                    ? `Memproses ${bulkAccountProgress.completed}/${bulkAccountProgress.total}`
+                    : `Generate Akun Massal${eligibleStudentAccountCount ? ` (${eligibleStudentAccountCount})` : ""}`}
                 </button>
               )}
 
@@ -3215,7 +4084,12 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
             Status akun belum dapat diverifikasi: {teacherAccountError}
           </div>
         )}
-        {activeMenu === "riwayat" ? (
+        {activeMenu === "guru" && teacherSummaryError && (
+          <div className="di-notice di-audit-error" role="alert">{teacherSummaryError}</div>
+        )}
+        {activeMenu === "sekolah" ? (
+          <DataIndukSekolahPanel userRole={userRole} />
+        ) : activeMenu === "riwayat" ? (
           <div className="di-audit-panel">
             <div className="di-audit-toolbar">
               <div className="di-search-wrap">
@@ -3482,24 +4356,201 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
         </p>
       </>
     )}
+    {canManageDataInduk && (
+      <section style={{ marginTop: 32, paddingTop: 24, borderTop: "1px solid #e2e8f0" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            marginBottom: 16,
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>Impor Data Guru &amp; Tendik</h3>
+            <p style={{ color: "#64748b", fontSize: 13 }}>
+              Unduh template berisi NIP, Nama Lengkap, dan Jabatan. NIP duplikat akan ditolak.
+            </p>
+          </div>
+          <button type="button" className="di-button" onClick={handleDownloadTeacherTemplate}>
+            <FileSpreadsheet size={17} />
+            Unduh Template Guru/Tendik
+          </button>
+        </div>
+
+        <label
+          htmlFor="excel-teacher-upload"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+            padding: 26,
+            border: "2px dashed #93c5fd",
+            borderRadius: 16,
+            background: "#f8fbff",
+            cursor: importing ? "wait" : "pointer",
+            textAlign: "center",
+          }}
+        >
+          <FileSpreadsheet size={32} color="#2563eb" />
+          <strong>Pilih file Excel guru/tendik</strong>
+          <span style={{ color: "#64748b", fontSize: 13 }}>Format .xlsx atau .xls</span>
+          <span className="di-button di-button-primary">
+            <Upload size={16} />
+            {importing ? "Sedang membaca..." : "Pilih File Excel"}
+          </span>
+        </label>
+        <input
+          id="excel-teacher-upload"
+          type="file"
+          accept=".xlsx,.xls"
+          onChange={handleTeacherExcelUpload}
+          disabled={importing}
+          style={{ display: "none" }}
+        />
+        {teacherImportFileName && <p style={{ marginTop: 14 }}>File dipilih: <strong>{teacherImportFileName}</strong></p>}
+        {teacherImportError && <p className="di-bulk-error" role="alert">{teacherImportError}</p>}
+        {teacherImportNotice && <div className="di-notice" role="status">{teacherImportNotice}</div>}
+        {teacherImportRows.length > 0 && (
+          <>
+            <div className="di-notice" style={{ marginTop: 16 }}>
+              {teacherImportRows.length} baris terbaca · {teacherImportRows.filter((row) => row.errors.length === 0).length} valid · {teacherImportRows.filter((row) => row.errors.length > 0).length} perlu diperbaiki
+            </div>
+            <div className="di-table-wrap">
+              <table className="di-table">
+                <thead>
+                  <tr><th>Baris</th><th>NIP</th><th>Nama Lengkap</th><th>Jabatan</th><th>Validasi</th></tr>
+                </thead>
+                <tbody>
+                  {teacherImportRows.map((row, index) => (
+                    <tr key={`${row.nip}-${row.source_row}-${index}`}>
+                      <td>{row.source_row}</td>
+                      <td>{row.nip}</td>
+                      <td>{row.full_name}</td>
+                      <td>{row.employment_status}</td>
+                      <td>{row.errors.length ? <span style={{ color: "#b91c1c" }}>{row.errors.join(", ")}</span> : <span style={{ color: "#15803d" }}>Valid</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="di-actions" style={{ marginTop: 18 }}>
+              <button
+                type="button"
+                className="di-button di-button-primary"
+                onClick={() => void handleImportTeachers()}
+                disabled={importing || !teacherImportValidationComplete || teacherImportRows.every((row) => row.errors.length > 0)}
+              >
+                <Upload size={16} />
+                {importing ? "Sedang menyimpan..." : "Impor Guru/Tendik"}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    )}
   </div>
 ) : (
   <>
             <div style={{ padding: "20px 22px 0" }}>
-              <div className="di-search-wrap">
-                <Search size={17} />
-                <input
-                  className="di-search"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder={`Cari ${activeMenu === "siswa"
-                    ? "nama atau NISN siswa"
-                    : activeMenu === "guru"
-                    ? "nama atau NIP guru"
-                    : "nama kelas"}...`}
-                  aria-label="Cari data"
-                />
+              <div className="di-actions" style={{ alignItems: "center", marginBottom: 10 }}>
+                <div className="di-search-wrap">
+                  <Search size={17} />
+                  <input
+                    className="di-search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder={`Cari ${activeMenu === "siswa"
+                      ? "nama atau NISN siswa"
+                      : activeMenu === "guru"
+                      ? "nama atau NIP guru"
+                      : "nama kelas"}...`}
+                    aria-label="Cari data"
+                  />
+                </div>
+                {activeMenu === "siswa" && (
+                  <>
+                    <select
+                      className="di-search"
+                      value={studentClassFilter}
+                      onChange={(event) => setStudentClassFilter(event.target.value)}
+                      aria-label="Filter kelas siswa"
+                      style={{ width: "auto", minWidth: 150 }}
+                    >
+                      <option value="all">Semua Kelas</option>
+                      <option value="unassigned">Belum Punya Kelas</option>
+                      {classes.map((classOption) => (
+                        <option key={classOption.id} value={classOption.id}>{classOption.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      className="di-search"
+                      value={studentStatusFilter}
+                      onChange={(event) => setStudentStatusFilter(event.target.value)}
+                      aria-label="Filter status siswa"
+                      style={{ width: "auto", minWidth: 130 }}
+                    >
+                      <option value="all">Semua Status</option>
+                      <option value="Active">Active</option>
+                      <option value="Inactive">Inactive</option>
+                      <option value="Graduated">Graduated</option>
+                    </select>
+                    {userRole === "super_admin" && (
+                      <select
+                        className="di-search"
+                        value={studentAccountFilter}
+                        onChange={(event) => setStudentAccountFilter(event.target.value)}
+                        aria-label="Filter status akun siswa"
+                        style={{ width: "auto", minWidth: 150 }}
+                        disabled={studentAccounts === null}
+                      >
+                        <option value="all">Semua</option>
+                        <option value="linked">Sudah Ada Akun</option>
+                        <option value="unlinked">Belum Ada Akun</option>
+                      </select>
+                    )}
+                  </>
+                )}
+                {activeMenu === "guru" && (
+                  <>
+                    <select
+                      className="di-search"
+                      value={teacherFilterPosition}
+                      onChange={(event) => setTeacherFilterPosition(event.target.value)}
+                      aria-label="Filter jabatan guru"
+                      style={{ width: "auto", minWidth: 170 }}
+                    >
+                      <option value="all">Semua Jabatan</option>
+                      {[...new Set([
+                        ...teacherPositionOptions,
+                        ...teachers.map((teacher) => teacher.employment_status ?? "").filter(Boolean),
+                      ])].map((position) => <option key={position} value={position}>{position}</option>)}
+                    </select>
+                    <select
+                      className="di-search"
+                      value={teacherFilterStatus}
+                      onChange={(event) => setTeacherFilterStatus(event.target.value)}
+                      aria-label="Filter penugasan atau akun guru"
+                      style={{ width: "auto", minWidth: 170 }}
+                      disabled={userRole === "super_admin" && teacherAccounts === null}
+                    >
+                      <option value="all">Semua Status</option>
+                      <option value="no-subject">Belum punya mapel</option>
+                      {userRole === "super_admin" && <option value="no-account">Belum punya akun</option>}
+                    </select>
+                  </>
+                )}
               </div>
+              {bulkAccountProgress && activeMenu === "siswa" && (
+                <div className="di-notice" role="status">
+                  Membuat akun: {bulkAccountProgress.completed} dari {bulkAccountProgress.total}
+                  {" · "}{bulkAccountProgress.succeeded} berhasil
+                  {bulkAccountProgress.failed.length ? ` · ${bulkAccountProgress.failed.length} gagal` : ""}
+                </div>
+              )}
             </div>
 
             <div className="di-table-wrap">
@@ -3523,6 +4574,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                         <th>Nama</th>
                         <th>Status Akun</th>
                         <th>Jabatan</th>
+                        <th>Penugasan &amp; Wali Kelas</th>
                         <th>Aksi</th>
                       </>
                     ) : (
@@ -3530,6 +4582,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                         <th>Nama Kelas</th>
                         <th>Tingkat</th>
                         <th>Tahun Ajaran</th>
+                        <th>Wali Kelas</th>
                         <th>Jumlah Siswa</th>
                         <th>Aksi</th>
                       </>
@@ -3635,15 +4688,77 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       ))
                     )
                   ) : activeMenu === "guru" ? (
-                    teacherLoading ? <tr><td colSpan={5}><div className="di-empty">Memuat data guru &amp; tendik...</div></td></tr>
-                    : masterError ? <tr><td colSpan={5}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
-                    : teachers.filter(t => `${t.nip ?? ""} ${t.full_name} ${t.employment_status ?? ""}`.toLowerCase().includes(search.toLowerCase())).length === 0 ? <tr><td colSpan={5}><div className="di-empty"><strong>Belum ada data guru/tendik</strong><p>Tambahkan data menggunakan tombol Tambah Data.</p></div></td></tr>
-                    : teachers.filter(t => `${t.nip ?? ""} ${t.full_name} ${t.employment_status ?? ""}`.toLowerCase().includes(search.toLowerCase())).map(t => <tr key={t.id}><td>{t.nip || "—"}</td><td>{t.full_name}</td><td>{getTeacherAccountStatus(t)}</td><td>{t.employment_status || "—"}</td><td><div className="di-actions">{canManageDataInduk && <button type="button" className="di-button" onClick={() => openTeacherAssignments(t)}><GraduationCap size={14} />Mapel &amp; Kelas</button>}<button type="button" className="di-button di-button-icon" aria-label={`Edit data ${t.full_name}`} title={`Edit ${t.full_name}`} onClick={() => void handleEditTeacher(t)}><Pencil size={15} /></button><button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteTeacher(t)}><Trash2 size={14} />Hapus</button></div></td></tr>)
+                    teacherLoading ? <tr><td colSpan={6}><div className="di-empty">Memuat data guru &amp; tendik...</div></td></tr>
+                    : masterError ? <tr><td colSpan={6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
+                    : filteredTeachers.length === 0 ? <tr><td colSpan={6}><div className="di-empty"><strong>Data guru/tendik tidak ditemukan</strong><p>Ubah kata kunci atau filter, atau tambahkan data menggunakan tombol Tambah Data.</p></div></td></tr>
+                    : filteredTeachers.map((teacher) => {
+                      const assignments = teacherAssignmentSummary.filter((item) => item.teacher_id === teacher.id);
+                      const subjects = [...new Set(assignments.map((item) => item.subject))];
+                      const assignedClassCount = new Set(assignments.map((item) => item.class_id)).size;
+                      const homeroomClasses = teacherHomeroomSummary
+                        .filter((item) => item.homeroom_teacher_id === teacher.profile_id)
+                        .map((item) => item.name);
+                      const account = getTeacherManagedAccount(teacher);
+                      const canGenerateAccount = userRole === "super_admin"
+                        && !teacher.profile_id
+                        && /^\d{6,}$/.test(teacher.nip?.trim() ?? "")
+                        && account?.role !== "siswa";
+                      return (
+                        <tr key={teacher.id}>
+                          <td>{teacher.nip || "—"}</td>
+                          <td>{teacher.full_name}</td>
+                          <td>{getTeacherAccountStatus(teacher)}</td>
+                          <td>{teacher.employment_status || "—"}</td>
+                          <td>
+                            {teacherSummaryError
+                              ? "Ringkasan penugasan tidak tersedia"
+                              : teacher.employment_status === "Guru Mata Pelajaran"
+                              ? subjects.length
+                                ? `${subjects.slice(0, 3).join(", ")}${subjects.length > 3 ? ` +${subjects.length - 3}` : ""} · ${assignedClassCount} kelas`
+                                : "Belum ditugaskan"
+                              : subjects.length
+                                ? `${subjects.join(", ")} · ${assignedClassCount} kelas`
+                                : "—"}
+                            {homeroomClasses.map((className) => (
+                              <div key={className}>Wali Kelas {className}</div>
+                            ))}
+                          </td>
+                          <td>
+                            <div className="di-actions">
+                              {canManageDataInduk && (
+                                <button type="button" className="di-button" onClick={() => openTeacherAssignments(teacher)}>
+                                  <GraduationCap size={14} />Mapel &amp; Kelas
+                                </button>
+                              )}
+                              {canGenerateAccount && (
+                                <button
+                                  type="button"
+                                  className="di-button"
+                                  onClick={() => void createOrLinkTeacherAccount(teacher)}
+                                  disabled={creatingTeacherAccountId !== null}
+                                >
+                                  <UserRoundPlus size={14} />
+                                  {creatingTeacherAccountId === teacher.id
+                                    ? "Memproses..."
+                                    : account ? "Tautkan Akun" : "Generate Akun"}
+                                </button>
+                              )}
+                              <button type="button" className="di-button di-button-icon" aria-label={`Edit data ${teacher.full_name}`} title={`Edit ${teacher.full_name}`} onClick={() => void handleEditTeacher(teacher)}>
+                                <Pencil size={15} />
+                              </button>
+                              <button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteTeacher(teacher)}>
+                                <Trash2 size={14} />Hapus
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
-                    classLoading ? <tr><td colSpan={5}><div className="di-empty">Memuat data kelas...</div></td></tr>
-                    : masterError ? <tr><td colSpan={5}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
-                    : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).length === 0 ? <tr><td colSpan={5}><div className="di-empty"><strong>Belum ada data kelas</strong><p>Pastikan tahun ajaran sudah dibuat, lalu tambahkan kelas.</p></div></td></tr>
-                    : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).map(c => <tr key={c.id}><td>{c.name}</td><td>{c.grade_level}</td><td>{c.academic_year_name}</td><td>{c.student_count}</td><td><div className="di-actions"><button type="button" className="di-button di-button-icon" aria-label={`Edit kelas ${c.name}`} title={`Edit ${c.name}`} onClick={() => void handleEditClass(c)}><Pencil size={15} /></button><button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteClass(c)}><Trash2 size={14} />Hapus</button></div></td></tr>)
+                    classLoading ? <tr><td colSpan={6}><div className="di-empty">Memuat data kelas...</div></td></tr>
+                    : masterError ? <tr><td colSpan={6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
+                    : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).length === 0 ? <tr><td colSpan={6}><div className="di-empty"><strong>Belum ada data kelas</strong><p>Pastikan tahun ajaran sudah dibuat, lalu tambahkan kelas.</p></div></td></tr>
+                    : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).map(c => <tr key={c.id}><td>{c.name}</td><td>{c.grade_level}</td><td>{c.academic_year_name}</td><td>{c.homeroom_teacher_name}</td><td>{c.student_count}</td><td><div className="di-actions"><button type="button" className="di-button di-button-icon" aria-label={`Edit kelas ${c.name}`} title={`Edit ${c.name}`} onClick={() => void handleEditClass(c)}><Pencil size={15} /></button><button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteClass(c)}><Trash2 size={14} />Hapus</button></div></td></tr>)
                   )}
                 </tbody>
               </table>

@@ -264,3 +264,158 @@ export async function searchClasses(search = ""): Promise<ClassOption[]> {
   throwOnError(error, "Pencarian kelas gagal");
   return data ?? [];
 }
+
+export type SchoolPanelSettings = Pick<SchoolSettings, "id" | "school_name" | "npsn"> & {
+  school_address: string | null;
+  principal_name: string | null;
+  principal_nip: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofence_radius_meters: number | null;
+};
+
+export type SchoolHoliday = {
+  id: string;
+  holiday_date: string;
+  title: string;
+  category: string;
+  is_non_kbm: boolean;
+};
+
+export type SchoolSyncSummary = {
+  students: number;
+  teachers: number;
+  classes: number;
+  academicRecords: number;
+  teacherSubjectAssignments: number;
+  rooms: number;
+  roomsLinkedToClasses: number;
+  assets: number;
+  assetsLinkedToPlaces: number;
+  loans: number;
+};
+
+export type DataIndukSchoolPanelData = {
+  settings: SchoolPanelSettings | null;
+  holidays: SchoolHoliday[];
+  summary: SchoolSyncSummary;
+};
+
+function requiredCount(count: number | null, operation: string) {
+  if (count === null) throw new Error(`${operation}: jumlah data tidak tersedia.`);
+  return count;
+}
+
+export async function loadDataIndukSchoolPanelData(): Promise<DataIndukSchoolPanelData> {
+  const [
+    settingsResult,
+    holidaysResult,
+    studentsResult,
+    teachersResult,
+    classesResult,
+    academicRecordsResult,
+    assignmentsResult,
+    roomsResult,
+    linkedRoomsResult,
+    assetsResult,
+    linkedAssetsResult,
+    loansResult,
+  ] = await Promise.all([
+    supabase
+      .from("school_settings")
+      .select("id, school_name, npsn, school_address, principal_name, principal_nip, latitude, longitude, geofence_radius_meters")
+      .order("id")
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("school_holidays")
+      .select("id, holiday_date, title, category, is_non_kbm")
+      .order("holiday_date", { ascending: false })
+      .order("title"),
+    supabase.from("students").select("id", { count: "exact", head: true }),
+    supabase.from("teachers").select("id", { count: "exact", head: true }),
+    supabase.from("classes").select("id", { count: "exact", head: true }),
+    supabase.from("academic_records").select("id", { count: "exact", head: true }),
+    supabase.from("attendance_teacher_subject_assignments").select("id", { count: "exact", head: true }),
+    supabase.from("inv_places").select("id", { count: "exact", head: true }),
+    supabase.from("inv_places").select("id", { count: "exact", head: true }).not("class_id", "is", null),
+    supabase.from("inv_assets").select("id", { count: "exact", head: true }),
+    supabase.from("inv_assets").select("id", { count: "exact", head: true }).not("place_id", "is", null),
+    supabase.from("inv_loans").select("id", { count: "exact", head: true }),
+  ]);
+
+  throwOnError(settingsResult.error, "Profil sekolah gagal dimuat");
+  throwOnError(holidaysResult.error, "Kalender sekolah gagal dimuat");
+  throwOnError(studentsResult.error, "Jumlah siswa gagal dimuat");
+  throwOnError(teachersResult.error, "Jumlah guru/tendik gagal dimuat");
+  throwOnError(classesResult.error, "Jumlah kelas gagal dimuat");
+  throwOnError(academicRecordsResult.error, "Jumlah data Akademik gagal dimuat");
+  throwOnError(assignmentsResult.error, "Jumlah penugasan mapel gagal dimuat");
+  throwOnError(roomsResult.error, "Jumlah ruangan Inventaris gagal dimuat");
+  throwOnError(linkedRoomsResult.error, "Jumlah ruangan tertaut gagal dimuat");
+  throwOnError(assetsResult.error, "Jumlah aset gagal dimuat");
+  throwOnError(linkedAssetsResult.error, "Jumlah aset tertaut gagal dimuat");
+  throwOnError(loansResult.error, "Jumlah peminjaman gagal dimuat");
+
+  return {
+    settings: settingsResult.data,
+    holidays: holidaysResult.data ?? [],
+    summary: {
+      students: requiredCount(studentsResult.count, "Jumlah siswa"),
+      teachers: requiredCount(teachersResult.count, "Jumlah guru/tendik"),
+      classes: requiredCount(classesResult.count, "Jumlah kelas"),
+      academicRecords: requiredCount(academicRecordsResult.count, "Jumlah data Akademik"),
+      teacherSubjectAssignments: requiredCount(assignmentsResult.count, "Jumlah penugasan mapel"),
+      rooms: requiredCount(roomsResult.count, "Jumlah ruangan Inventaris"),
+      roomsLinkedToClasses: requiredCount(linkedRoomsResult.count, "Jumlah ruangan tertaut"),
+      assets: requiredCount(assetsResult.count, "Jumlah aset"),
+      assetsLinkedToPlaces: requiredCount(linkedAssetsResult.count, "Jumlah aset tertaut"),
+      loans: requiredCount(loansResult.count, "Jumlah peminjaman"),
+    },
+  };
+}
+
+export type SchoolProfileUpdate = {
+  principal_name: string | null;
+  principal_nip: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofence_radius_meters: number;
+};
+
+export async function updateSchoolProfile(
+  id: number,
+  profile: SchoolProfileUpdate,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("school_settings")
+    .update(profile)
+    .eq("id", id)
+    .select("id")
+    .single();
+  throwOnError(error, "Profil sekolah gagal disimpan");
+  if (!data) throw new Error("Profil sekolah tidak ditemukan.");
+}
+
+export type SchoolHolidayInput = Omit<SchoolHoliday, "id">;
+
+export async function saveSchoolHoliday(
+  holiday: SchoolHolidayInput,
+  id?: string,
+): Promise<void> {
+  const result = id
+    ? await supabase
+        .from("school_holidays")
+        .update(holiday)
+        .eq("id", id)
+        .select("id")
+        .single()
+    : await supabase.from("school_holidays").insert(holiday).select("id").single();
+  throwOnError(result.error, "Hari libur gagal disimpan");
+  if (!result.data) throw new Error("Hari libur tidak ditemukan.");
+}
+
+export async function deleteSchoolHoliday(id: string): Promise<void> {
+  const { error } = await supabase.from("school_holidays").delete().eq("id", id);
+  throwOnError(error, "Hari libur gagal dihapus");
+}
