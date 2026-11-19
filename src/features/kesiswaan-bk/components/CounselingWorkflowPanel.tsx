@@ -518,8 +518,8 @@ export default function CounselingWorkflowPanel({
   }
 
   async function generateRplDraft() {
-    if (!rplTopic.trim()) {
-      setError("Isi topik layanan sebelum meminta bantuan AI.");
+    if (!rplTopic.trim() || !rplArea || !rplComponent || !rplServiceType || !rplGrade.trim() || !rplDuration.trim()) {
+      setError("Lengkapi topik, bidang, komponen, jenis layanan, kelas sasaran, dan alokasi waktu. Catatan kebutuhan bersifat opsional.");
       return;
     }
     setAiBusy(true);

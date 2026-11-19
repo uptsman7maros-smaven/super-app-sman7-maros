@@ -160,14 +160,21 @@ Deno.serve(async request => {
   const serviceType = readText(body.jenis_layanan, 40);
   const targetClass = readText(body.sasaran_kelas, 80);
   const duration = readText(body.durasi, 80);
-  const notes = typeof body.catatan_kebutuhan === "undefined" || body.catatan_kebutuhan === null
-    ? ""
-    : readText(body.catatan_kebutuhan, 1000);
+  const rawNotes = body.catatan_kebutuhan;
+  let notes: string | null = "";
+  if (rawNotes !== undefined && rawNotes !== null) {
+    notes = typeof rawNotes === "string" && rawNotes.trim().length <= 1000
+      ? rawNotes.trim()
+      : null;
+  }
   if (
     !topic || !area || !areas.includes(area) || !component || !components.includes(component)
     || !serviceType || !serviceTypes.includes(serviceType) || !targetClass || !duration || notes === null
   ) {
-    return jsonResponse({ code: "INVALID_PAYLOAD", error: "Lengkapi topik, layanan, sasaran, durasi, dan catatan yang valid." }, 400);
+    return jsonResponse({
+      code: "INVALID_PAYLOAD",
+      error: "Periksa topik, bidang, komponen, jenis layanan, sasaran, durasi, dan catatan (maksimal 1000 karakter). Catatan boleh dikosongkan.",
+    }, 400);
   }
   const durationParts = duration.match(/(\d+)\s*x\s*(\d+)/i);
   const durationMinutes = Math.max(1, Math.min(360, durationParts
