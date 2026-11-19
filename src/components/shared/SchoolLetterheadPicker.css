@@ -1,3 +1,199 @@
+.school-letterhead-picker {
+  position: relative;
+  min-width: 0;
+}
+
+.school-letterhead-picker-label {
+  display: block;
+  color: #536077;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.school-letterhead-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid #dfe3f0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff, #f8f7ff);
+  color: #302d55;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+.school-letterhead-trigger:hover,
+.school-letterhead-trigger.is-open {
+  border-color: #9c91ed;
+  background: #fff;
+  box-shadow: 0 0 0 3px #6857d51a;
+}
+
+.school-letterhead-trigger:focus-visible,
+.school-letterhead-option:focus-visible {
+  outline: 3px solid #a69bff;
+  outline-offset: 2px;
+}
+
+.school-letterhead-trigger-icon,
+.school-letterhead-option-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: #efedff;
+  color: #5b4ac6;
+}
+
+.school-letterhead-trigger-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.school-letterhead-trigger-copy strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.school-letterhead-trigger-copy small {
+  color: #85829f;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.school-letterhead-trigger-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #777391;
+  transition: transform .18s ease;
+}
+
+.school-letterhead-trigger.is-open .school-letterhead-trigger-chevron {
+  transform: rotate(180deg);
+}
+
+.school-letterhead-menu {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 9px);
+  right: 0;
+  width: min(340px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 9px;
+  border: 1px solid #e6e3f5;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 18px 48px rgba(40, 35, 91, .18), 0 3px 10px rgba(40, 35, 91, .07);
+  animation: school-letterhead-menu-in .16s ease-out both;
+  transform-origin: top right;
+}
+
+.school-letterhead-menu-heading {
+  display: block;
+  padding: 5px 8px 8px;
+  color: #9290a9;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.school-letterhead-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: #343250;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.school-letterhead-option + .school-letterhead-option {
+  margin-top: 4px;
+}
+
+.school-letterhead-option:hover {
+  background: #f8f7ff;
+  transform: translateY(-1px);
+}
+
+.school-letterhead-option.is-selected {
+  border-color: #ded9ff;
+  background: linear-gradient(115deg, #f5f2ff, #fbfaff);
+}
+
+.school-letterhead-option-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.school-letterhead-option-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.school-letterhead-option-title strong {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.school-letterhead-option-title small {
+  padding: 3px 6px;
+  border-radius: 20px;
+  background: #efedff;
+  color: #6555bf;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.school-letterhead-option-copy > small {
+  color: #77768e;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.school-letterhead-option-check {
+  flex: 0 0 auto;
+  color: #5b4ac6;
+  opacity: 0;
+  transform: scale(.7);
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+.school-letterhead-option.is-selected .school-letterhead-option-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@keyframes school-letterhead-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .school-letterhead-preview.no-logo .school-letterhead-copy {
   grid-column: 1 / -1;
 }
@@ -224,5 +420,14 @@
 
   .school-letterhead-preview.kop-2 img {
     height: 58px;
+  }
+}
+
+@media (max-width: 650px) {
+  .school-letterhead-menu {
+    right: auto;
+    left: 0;
+    width: min(340px, calc(100vw - 32px));
+    transform-origin: top left;
   }
 }

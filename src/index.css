@@ -1815,18 +1815,6 @@ a { color: inherit; text-decoration: none; }
 .school-letterhead-picker {
   display: grid;
   gap: 6px;
-  color: #536077;
-  font-size: 12px;
-  font-weight: 700;
-}
-.school-letterhead-picker select {
-  min-height: 38px;
-  padding: 8px 11px;
-  border: 1px solid #dce2ed;
-  border-radius: 9px;
-  background: #fff;
-  color: #263248;
-  font: inherit;
 }
 .school-letterhead-preview {
   display: grid;
