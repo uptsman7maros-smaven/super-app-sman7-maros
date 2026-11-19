@@ -419,7 +419,12 @@ export default function PengaturanIntegrasi({
             <label>Alamat surat<textarea rows={3} value={settings.letterhead_2} onChange={e => setSettingsDraft({...settings, letterhead_2:e.target.value})} /></label>
             <SchoolLetterheadPreview letterhead={getSchoolLetterhead(settings, "2")} />
           </fieldset>
-          <p className="pi-letterhead-help">Kop 1 memakai lambang Sulawesi Selatan di tengah; Kop 2 memakai lambang provinsi di kiri dan logo sekolah di kanan. Lambang provinsi bawaan dan logo sekolah dapat diganti di sini. Alamat mengikuti data sekolah dan otomatis dipakai pada dokumen.</p>
+          <fieldset className="pi-letterhead-card">
+            <legend>Kop Surat 3 · Lambang alternatif</legend>
+            <p className="pi-letterhead-static">Menggunakan logo alternatif yang disediakan. Susunan, teks, dan alamat mengikuti Kop Surat 1.</p>
+            <SchoolLetterheadPreview letterhead={getSchoolLetterhead(settings, "3")} />
+          </fieldset>
+          <p className="pi-letterhead-help">Kop 1 memakai lambang Sulawesi Selatan di tengah; Kop 2 memakai lambang provinsi di kiri dan logo sekolah di kanan; Kop 3 memakai susunan Kop 1 dengan lambang alternatif. Alamat mengikuti data sekolah dan otomatis dipakai pada dokumen.</p>
         </div>
         <div className="pi-wide pi-actions"><button className="pi-primary" disabled={busy || logoUploading !== null}>Simpan identitas</button><button type="button" className="pi-secondary" onClick={() => window.print()}>Cetak pratinjau</button></div>
       </form>

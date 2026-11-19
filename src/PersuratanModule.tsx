@@ -908,7 +908,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     </header>
     <nav className="module-nav" aria-label="Navigasi Persuratan"><div className="module-nav-label"><span>MENU MODUL</span><small>{visibleNav.length} layanan</small></div><div className="module-nav-list">{visibleNav.map(({label,icon:Icon,key})=><button key={key} className={`module-nav-item ${page===key?'active':''}`} aria-current={page===key?'page':undefined} onClick={()=>setPage(key)}><Icon size={17}/><span>{label}</span></button>)}</div></nav>
     <main className="main-area">
-      <div className="section-heading"><div><span className="eyebrow">WORKSPACE · PERSURATAN DIGITAL</span><h2>{nav.find(n=>n.key===page)?.label||'Persuratan Digital'}</h2><p>{pageDescriptions[page]}</p></div><div className="heading-meta">{['dashboard','requests','issued','archive'].includes(page)&&<SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot}/>}<span className="module-status"><i/> Administrasi sekolah</span><span className="role-chip">{role?roleLabels[role]:person?.role||'Pengguna'}</span></div></div>
+      <div className="section-heading"><div><span className="eyebrow">WORKSPACE · PERSURATAN DIGITAL</span><h2>{nav.find(n=>n.key===page)?.label||'Persuratan Digital'}</h2><p>{pageDescriptions[page]}</p></div><div className="heading-meta"><SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot}/><span className="module-status"><i/> Administrasi sekolah</span><span className="role-chip">{role?roleLabels[role]:person?.role||'Pengguna'}</span></div></div>
       <section className="content" key={page}>
         {loading?<div className="loading-grid"><div/><div/><div/><div/></div>:!role?<div className="setup-layout">
           <div className="setup-intro">
@@ -1014,7 +1014,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
               </div>):<p className="hint">Belum ada token. Sisipkan token untuk membuat field pengajuan secara otomatis.</p>}
             </div>
           </div>
-          <div className="template-preview-column"><div className="template-studio-section-head"><div><strong>Pratinjau {normalizePaperSize(form.paper_size)}</strong><small>Satu halaman penuh · Kop resmi dan isi format surat.</small></div><Eye size={18}/></div><FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,'2')}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{},templateFields)}</article>`} className="template-studio-preview"/></div>
+          <div className="template-preview-column"><div className="template-studio-section-head"><div><strong>Pratinjau {normalizePaperSize(form.paper_size)}</strong><small>Satu halaman penuh · Kop resmi dan isi format surat.</small></div><Eye size={18}/></div><FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{},templateFields)}</article>`} className="template-studio-preview"/></div>
         </div>
         <div className="form-actions"><button type="button" className="secondary" onClick={()=>setModal(null)}>Batal</button><button type="submit" className="primary" disabled={busy||!canManageTemplates}>{busy?'Menyimpan...':'Simpan Format Surat'}</button></div>
       </form>
