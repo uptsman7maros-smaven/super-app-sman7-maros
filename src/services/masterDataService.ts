@@ -56,8 +56,15 @@ export function getSchoolLetterhead(
   settings: Pick<SchoolSettings, "school_name" | "npsn" | "logo_url" | "letterhead" | "logo_url_2" | "letterhead_2" | "province_logo_url"> | null,
   slot: LetterheadSlot,
 ): SchoolLetterhead {
-  const provinceLogoUrl = settings?.province_logo_url.trim() || "/logo-provinsi-sulsel.svg";
-  const schoolLogoUrl = settings?.logo_url_2.trim() || settings?.logo_url.trim() || "/logo-sekolah.png";
+  const provinceLogoUrl =
+    typeof settings?.province_logo_url === "string" && settings.province_logo_url.trim()
+      ? settings.province_logo_url.trim()
+      : "/logo-provinsi-sulsel.svg";
+  const alternateSchoolLogo =
+    typeof settings?.logo_url_2 === "string" ? settings.logo_url_2.trim() : "";
+  const primarySchoolLogo =
+    typeof settings?.logo_url === "string" ? settings.logo_url.trim() : "";
+  const schoolLogoUrl = alternateSchoolLogo || primarySchoolLogo || "/logo-sekolah.png";
   return {
     layout: slot,
     school_name: officialSchoolName(settings?.school_name || "SMAN 7 Maros"),

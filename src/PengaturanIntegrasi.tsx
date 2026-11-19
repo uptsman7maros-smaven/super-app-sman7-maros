@@ -58,6 +58,7 @@ export default function PengaturanIntegrasi({
       ...schoolSettings,
       letterhead: schoolSettings.letterhead || DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
       letterhead_2: schoolSettings.letterhead_2 || DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
+      province_logo_url: schoolSettings.province_logo_url || "",
       academic_year: activeAcademicYear?.name ?? schoolSettings.academic_year,
     }
     : initialSettings);
