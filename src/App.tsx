@@ -384,6 +384,7 @@ const roleAccess: Record<string, string[]> = {
   ],
   kepala_tata_usaha: [
     "Dashboard",
+    "Absensi Digital",
     "Persuratan",
     "Inventaris",
     "Keuangan",
@@ -460,6 +461,7 @@ const dashboardQuickActions: Record<string, DashboardQuickAction[]> = {
     { module: "Laporan & Analitik", title: "Laporan & Analitik", description: "Ringkasan kinerja sekolah", icon: ChartNoAxesCombined, color: "green" },
   ],
   kepala_tata_usaha: [
+    { module: "Absensi Digital", title: "Absensi Digital", description: "Pantau kehadiran sekolah", icon: CalendarCheck, color: "green" },
     { module: "Persuratan", title: "Antrean Persuratan", description: "Periksa pengajuan dokumen", icon: Mail, color: "purple" },
     { module: "Inventaris", title: "Inventaris", description: "Pantau aset dan laporan", icon: Package, color: "blue" },
     { module: "Keuangan", title: "Persetujuan Keuangan", description: "Tinjau transaksi menunggu", icon: Wallet, color: "green" },

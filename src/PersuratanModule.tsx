@@ -305,7 +305,7 @@ const roleLabels: Record<LetterRole, string> = { administrator:'Administrator Su
 const rolePageAccess: Record<LetterRole, Page[]> = {
   administrator:nav.map(item=>item.key),
   operator:['dashboard','create','requests','issued','archive','incoming','outgoing','dispositions','templates'],
-  kepala_tu:['dashboard','create','requests','approvals','issued','archive','incoming','outgoing','dispositions','templates'],
+  kepala_tu:['dashboard','create','requests','approvals','issued','archive','incoming','outgoing','dispositions'],
   staf_tu:['dashboard','create','requests','archive','incoming','outgoing','dispositions'],
   kepala_sekolah:['dashboard','create','requests','approvals','issued','archive','dispositions'],
   guru_staf:['dashboard','create','requests','issued','archive'],

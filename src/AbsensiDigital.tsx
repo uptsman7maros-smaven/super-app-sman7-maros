@@ -1022,7 +1022,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       setExporting(false);
     }
   };
-  if (!isSelfService && !canManageAttendance) {
+  if (!isSelfService && !canViewAllAttendance) {
     return <div className="attendance-page">
       <div className="attendance-alert error">
         <ShieldCheck size={17}/> Akun ini tidak memiliki hak akses ke modul Absensi Digital.
