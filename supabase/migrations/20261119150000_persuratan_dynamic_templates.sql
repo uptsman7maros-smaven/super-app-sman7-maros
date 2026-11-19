@@ -2,7 +2,7 @@
 -- Apply after 001_persuratan.sql and 003_superapp_role_access.sql.
 
 create or replace function public.letter_requester_identity()
-returns table(full_name text, nip text, position text)
+returns table(full_name text, nip text, "position" text)
 language sql
 stable
 security definer
