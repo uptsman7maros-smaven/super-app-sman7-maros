@@ -26,7 +26,7 @@ type TemplateField = {
   name: string
   label: string
   required?: boolean
-  type?: 'text' | 'textarea' | 'date' | 'time' | 'auto_user' | 'kepala_tu_only' | 'student' | 'teacher'
+  type?: 'text' | 'textarea' | 'date' | 'time' | 'auto_user' | 'auto_school' | 'kepala_tu_only' | 'student' | 'teacher'
 }
 type LetterTemplate = {
   id: string
@@ -72,6 +72,14 @@ type LetterRequest = {
     html_snapshot?: string | null
   } | null
 }
+type IssueForm = {
+  letter_number: string
+  issue_date: string
+  signer_name: string
+  signer_position: string
+  signer_nip: string
+  ktu_fields: Record<string, string>
+}
 type IncomingLetter = {
   id: string
   external_number: string
@@ -99,6 +107,8 @@ type StudentLetterPrefill = {
 const TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}/g
 const USER_TOKEN_NAMES = new Set(['nama', 'nip', 'jabatan'])
 const OFFICE_TOKEN_NAMES = new Set(['nomor_surat', 'tanggal_terbit', 'penandatangan', 'nip_penandatangan'])
+const SCHOOL_PROFILE_TOKEN_NAMES = new Set(['nama_kepala_sekolah', 'nip_kepala_sekolah'])
+const TU_COMPLETABLE_TOKEN_NAMES = new Set(['hari_tanggal', 'tanggal_surat', 'tempat'])
 const ALLOWED_TEMPLATE_TAGS = new Set([
   'a', 'b', 'blockquote', 'br', 'caption', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'hr', 'i', 'img', 'li', 'ol', 'p', 's', 'span', 'strong', 'sub', 'sup', 'table', 'tbody',
@@ -121,23 +131,40 @@ function tokenNameFromMatch(match: RegExpExecArray) {
   return match[1] ?? match[2] ?? ''
 }
 
+function normalizeTemplateField(field: TemplateField): TemplateField {
+  const normalized = field.name.toLocaleLowerCase('id-ID')
+  if (SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)) return { ...field, required: false, type: 'auto_school' }
+  if (TU_COMPLETABLE_TOKEN_NAMES.has(normalized)) return { ...field, required: false, type: 'text' }
+  if (OFFICE_TOKEN_NAMES.has(normalized)) return { ...field, required: false, type: 'kepala_tu_only' }
+  return field
+}
+
 function detectTemplateFields(html: string, existing: TemplateField[] = []): TemplateField[] {
   const existingByName = new Map(existing.map(field => [field.name.toLocaleLowerCase('id-ID'), field]))
   const found = new Set<string>()
   for (const match of html.matchAll(TOKEN_PATTERN)) found.add(tokenNameFromMatch(match))
   return [...found].map(name => {
-    const previous = existingByName.get(name.toLocaleLowerCase('id-ID'))
-    if (previous) return { ...previous, name }
     const normalized = name.toLocaleLowerCase('id-ID')
-    return {
+    const previous = existingByName.get(normalized)
+    if (previous) return normalizeTemplateField({ ...previous, name })
+    return normalizeTemplateField({
       name,
       label: normalized.replaceAll('_', ' ').replace(/\b\p{L}/gu, letter => letter.toLocaleUpperCase('id-ID')),
-      required: !OFFICE_TOKEN_NAMES.has(normalized),
+      required: !OFFICE_TOKEN_NAMES.has(normalized) && !TU_COMPLETABLE_TOKEN_NAMES.has(normalized) && !SCHOOL_PROFILE_TOKEN_NAMES.has(normalized),
       type: USER_TOKEN_NAMES.has(normalized)
         ? 'auto_user'
-        : OFFICE_TOKEN_NAMES.has(normalized) ? 'kepala_tu_only' : 'text',
-    }
+        : SCHOOL_PROFILE_TOKEN_NAMES.has(normalized) ? 'auto_school'
+          : OFFICE_TOKEN_NAMES.has(normalized) ? 'kepala_tu_only' : 'text',
+    })
   })
+}
+
+function schoolProfileTokenValue(name: string, settings: SchoolSettings | null) {
+  switch (name.toLocaleLowerCase('id-ID')) {
+    case 'nama_kepala_sekolah': return settings?.principal_name?.trim() ?? ''
+    case 'nip_kepala_sekolah': return settings?.principal_nip?.trim() ?? ''
+    default: return ''
+  }
 }
 
 function sanitizeTemplateHtml(value: string): string {
@@ -220,13 +247,19 @@ function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlo
   </div>`
 }
 
-function requestDocumentValues(request: LetterRequest) {
+function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null) {
   const issued = Array.isArray(request.letter_issued) ? request.letter_issued[0] : request.letter_issued
+  const savedPrincipalName = request.form_data?.nama_kepala_sekolah
+  const savedPrincipalNip = request.form_data?.nip_kepala_sekolah
   return {
     ...(request.form_data ?? {}),
     nama: request.requester_name,
     NIP: request.requester_nip ?? '',
     jabatan: request.requester_position ?? '',
+    nama_kepala_sekolah: typeof savedPrincipalName === 'string' && savedPrincipalName.trim()
+      ? savedPrincipalName : schoolProfileTokenValue('nama_kepala_sekolah', schoolSettings),
+    nip_kepala_sekolah: typeof savedPrincipalNip === 'string' && savedPrincipalNip.trim()
+      ? savedPrincipalNip : schoolProfileTokenValue('nip_kepala_sekolah', schoolSettings),
     nomor_surat: issued?.letter_number,
     tanggal_terbit: issued?.issue_date,
     penandatangan: issued?.signer_name,
@@ -319,7 +352,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [reviewDecision,setReviewDecision]=useState<'approved'|'revision'|'rejected'>('revision')
   const [reviewNote,setReviewNote]=useState('')
   const [issueRequest,setIssueRequest]=useState<LetterRequest|null>(null)
-  const [issueForm,setIssueForm]=useState({letter_number:'',issue_date:new Date().toISOString().slice(0,10),signer_name:'',signer_position:'Kepala Sekolah',signer_nip:''})
+  const [issueForm,setIssueForm]=useState<IssueForm>({letter_number:'',issue_date:new Date().toISOString().slice(0,10),signer_name:'',signer_position:'Kepala Sekolah',signer_nip:'',ktu_fields:{}})
   const [profileReady,setProfileReady]=useState(false)
   const templateHtmlRef=useRef<HTMLTextAreaElement>(null)
   const [selectedTemplate,setSelectedTemplate]=useState('')
@@ -431,7 +464,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       if(!tplErr)setTemplates((tplData||[]).map((t: LetterTemplate & {letter_categories?:LetterTemplate['category']})=>({
         ...t,
         category:t.letter_categories,
-        fields_schema:Array.isArray(t.fields_schema)?t.fields_schema:[],
+        fields_schema:Array.isArray(t.fields_schema)?t.fields_schema.map(normalizeTemplateField):[],
       })))
       if(!inErr)setIncoming(inData||[])
       if(!notifErr)setNotifications(notifData||[])
@@ -610,6 +643,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   function openIssue(request:LetterRequest){
     const year=new Date().getFullYear()
     const defaultSigner=signatories.find(item=>/kepala sekolah/i.test(item.employment_status||''))??signatories[0]
+    const requestTemplate=templates.find(template=>template.id===request.template_id)
+    const ktuFields=(requestTemplate?.fields_schema||request.letter_templates?.fields_schema||[])
+      .filter(field=>TU_COMPLETABLE_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID')))
+    const ktuValues=Object.fromEntries(ktuFields.map(field=>[
+      field.name,
+      String(request.form_data?.[field.name]??''),
+    ]))
     setIssueRequest(request)
     setIssueForm({
       letter_number:`421.03/001/UPT.SMA.07/MRS/DISDIK/${year}`,
@@ -617,6 +657,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       signer_name:defaultSigner?.full_name||'',
       signer_position:defaultSigner?.employment_status||'Kepala Sekolah',
       signer_nip:defaultSigner?.nip||'',
+      ktu_fields:ktuValues,
     })
     setPreviewRequest(request)
     setModal({type:'issue'})
@@ -625,13 +666,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     e.preventDefault()
     if(!issueRequest)return
     setBusy(true)
-    const {error}=await supabase.rpc('letter_issue_number',{
+    const {error}=await supabase.rpc('letter_issue_number_with_ktu_fields',{
       p_request_id:issueRequest.id,
       p_letter_number:issueForm.letter_number.trim(),
       p_issue_date:issueForm.issue_date,
       p_signer_name:issueForm.signer_name.trim(),
       p_signer_position:issueForm.signer_position.trim(),
       p_signer_nip:issueForm.signer_nip.trim()||null,
+      p_ktu_fields:issueForm.ktu_fields,
     })
     if(error)notify(error.message)
     else{
@@ -796,7 +838,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const fields=activeTemplate?.fields_schema||request.letter_templates?.fields_schema||[]
     if(!html)return null
     return {
-      html:renderTemplateContent(html,requestDocumentValues(request),fields),
+      html:renderTemplateContent(html,requestDocumentValues(request,schoolSettings),fields),
       header:makeLetterheadHtml(schoolSettings,letterheadSlot,activeTemplate?.page_settings?.logo_position||request.letter_templates?.page_settings?.logo_position||'top'),
       paperSize:normalizePaperSize(activeTemplate?.page_settings?.size||request.letter_templates?.page_settings?.size),
       isDraft:request.status!=='issued',
@@ -851,6 +893,8 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       nama:myName,
       NIP:myNip,
       jabatan:myPosition,
+      nama_kepala_sekolah:schoolProfileTokenValue('nama_kepala_sekolah',schoolSettings),
+      nip_kepala_sekolah:schoolProfileTokenValue('nip_kepala_sekolah',schoolSettings),
     })
     setPersonFields({})
     setPage('create')
@@ -860,7 +904,17 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     return !q||[r.request_code,r.subject,r.requester_name,r.status].some(v=>String(v||'').toLowerCase().includes(q))
   }),[requests,search])
   const selectedTemplateRecord=templates.find(template=>template.id===selectedTemplate)
-  const liveFormValues={...requestData,nama:myName,NIP:myNip,jabatan:myPosition}
+  const issueTemplate=issueRequest?templates.find(template=>template.id===issueRequest.template_id):undefined
+  const issueEditableFields=(issueTemplate?.fields_schema||issueRequest?.letter_templates?.fields_schema||[])
+    .filter(field=>TU_COMPLETABLE_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID')))
+  const liveFormValues={
+    ...requestData,
+    nama:myName,
+    NIP:myNip,
+    jabatan:myPosition,
+    nama_kepala_sekolah:schoolProfileTokenValue('nama_kepala_sekolah',schoolSettings),
+    nip_kepala_sekolah:schoolProfileTokenValue('nip_kepala_sekolah',schoolSettings),
+  }
   const livePreviewHtml=selectedTemplateRecord
     ?renderTemplateContent(selectedTemplateRecord.html_content||'',liveFormValues,selectedTemplateRecord.fields_schema)
     :''
@@ -884,12 +938,20 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   }
   const renderTemplateField=(field:TemplateField)=>{
     const normalized=field.name.toLocaleLowerCase('id-ID')
+    if(field.type==='auto_school'||SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)){
+      const value=schoolProfileTokenValue(normalized,schoolSettings)
+      return <label className="request-field-automatic" key={field.name}>{field.label}<input value={value} readOnly aria-readonly="true" placeholder="Lengkapi di Data Induk → Sekolah & Sinkron"/><small>Diambil otomatis dari data Kepala Sekolah pada Data Induk.</small></label>
+    }
     if(field.type==='auto_user'||USER_TOKEN_NAMES.has(normalized)){
       const identityValue=normalized==='nama'?myName:normalized==='nip'?myNip:myPosition
       return <label key={field.name}>{field.label}<input value={identityValue} readOnly aria-readonly="true" placeholder="Identitas akun dimuat otomatis"/></label>
     }
+    if(TU_COMPLETABLE_TOKEN_NAMES.has(normalized)){
+      const value=requestData[field.name]||''
+      return <label className="request-field-optional" key={field.name}>{field.label}<input type={field.type==='date'?'date':'text'} value={value} onChange={event=>setRequestData(previous=>({...previous,[field.name]:event.target.value}))}/><small>Boleh dikosongkan jika belum tahu; akan dilengkapi Kepala Tata Usaha.</small></label>
+    }
     if(field.type==='kepala_tu_only'||OFFICE_TOKEN_NAMES.has(normalized)){
-      return <div className="letter-office-field" key={field.name}><strong>{field.label}</strong><span>{normalized==='nomor_surat'?'Nomor surat akan diisi & diterbitkan oleh Kepala Tata Usaha.':'Diisi oleh Kepala Tata Usaha pada saat penerbitan surat.'}</span></div>
+      return <div className="letter-office-field" key={field.name}><strong>{field.label}</strong><small>{normalized==='nomor_surat'?'Akan diisi dan diterbitkan oleh Kepala Tata Usaha.':'Akan dilengkapi Kepala Tata Usaha saat menerbitkan surat.'}</small></div>
     }
     const type=personFieldType(field)
     if(!type){
@@ -958,8 +1020,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
                   const nextTemplate=activeTemplates.find(template=>template.id===event.target.value)
                   setSelectedTemplate(event.target.value)
                   setRequestData(Object.fromEntries((nextTemplate?.fields_schema||[])
-                    .filter(field=>field.type==='auto_user'||USER_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID')))
-                    .map(field=>[field.name,field.name.toLocaleLowerCase('id-ID')==='nama'?myName:field.name.toLocaleLowerCase('id-ID')==='nip'?myNip:myPosition])))
+                    .filter(field=>field.type==='auto_user'||USER_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID'))||SCHOOL_PROFILE_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID')))
+                    .map(field=>{
+                      const normalized=field.name.toLocaleLowerCase('id-ID')
+                      const value=SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)
+                        ? schoolProfileTokenValue(normalized,schoolSettings)
+                        : normalized==='nama'?myName:normalized==='nip'?myNip:myPosition
+                      return [field.name,value]
+                    })))
                   setPersonFields({})
                   setForm(previous=>({...previous,subject:nextTemplate?.name||''}))
                 }} required>
@@ -1030,9 +1098,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
                 <strong>{`{${field.name}}`}</strong>
                 <input aria-label={`Label ${field.name}`} value={field.label} onChange={event=>updateTemplateField(index,{label:event.target.value})}/>
                 <select aria-label={`Tipe ${field.name}`} value={field.type||'text'} onChange={event=>updateTemplateField(index,{type:event.target.value as TemplateField['type']})}>
-                  <option value="text">Teks</option><option value="textarea">Paragraf</option><option value="date">Tanggal</option><option value="time">Waktu</option><option value="auto_user">Identitas akun</option><option value="kepala_tu_only">Kepala TU</option><option value="student">Pilih siswa</option><option value="teacher">Pilih guru</option>
+                    <option value="text">Teks</option><option value="textarea">Paragraf</option><option value="date">Tanggal</option><option value="time">Waktu</option><option value="auto_user">Identitas akun</option><option value="auto_school">Data Kepala Sekolah</option><option value="kepala_tu_only">Kepala TU</option><option value="student">Pilih siswa</option><option value="teacher">Pilih guru</option>
                 </select>
-                <label><input type="checkbox" checked={field.required!==false} disabled={field.type==='auto_user'||field.type==='kepala_tu_only'} onChange={event=>updateTemplateField(index,{required:event.target.checked})}/> Wajib</label>
+                  <label><input type="checkbox" checked={field.required!==false} disabled={field.type==='auto_user'||field.type==='auto_school'||field.type==='kepala_tu_only'||TU_COMPLETABLE_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID'))} onChange={event=>updateTemplateField(index,{required:event.target.checked})}/> Wajib</label>
               </div>):<p className="hint">Belum ada token. Sisipkan token untuk membuat field pengajuan secara otomatis.</p>}
             </div>
           </div>
@@ -1065,6 +1133,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     {modal?.type==='issue'&&issueRequest&&<Modal title="Setujui & Terbitkan Nomor Surat" className="letter-action-modal" close={()=>setModal(null)}>
       <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
       <form className="modal-form" onSubmit={submitIssue}>
+        {issueEditableFields.length>0&&<div className="letter-issue-office-fields">
+          <div className="letter-issue-office-fields-heading"><strong>Hari/tanggal dan tempat</strong><small>Lengkapi sebelum menerbitkan surat. Nilai dari pemohon sudah terisi jika tersedia.</small></div>
+          {issueEditableFields.map(field=><label key={field.name}>{field.label} *<input type={field.type==='date'?'date':'text'} required value={issueForm.ktu_fields[field.name]||''} onChange={event=>{
+            const value=event.target.value
+            setIssueForm(previous=>({...previous,ktu_fields:{...previous.ktu_fields,[field.name]:value}}))
+            setPreviewRequest(previous=>previous?.id===issueRequest.id?{...previous,form_data:{...previous.form_data,[field.name]:value}}:previous)
+          }}/></label>)}
+        </div>}
         <label>Nomor surat<input required maxLength={160} value={issueForm.letter_number} onChange={event=>setIssueForm(previous=>({...previous,letter_number:event.target.value}))}/><small className="hint">Saran format: 421.03/001/UPT.SMA.07/MRS/DISDIK/{new Date().getFullYear()}</small></label>
         <label>Tanggal terbit<input type="date" required value={issueForm.issue_date} onChange={event=>setIssueForm(previous=>({...previous,issue_date:event.target.value}))}/></label>
         {signatories.length>0&&<label>Pilih pejabat penandatangan<select value={`${issueForm.signer_name}::${issueForm.signer_nip}`} onChange={event=>{const selected=signatories.find(item=>`${item.full_name}::${item.nip??''}`===event.target.value);if(selected)setIssueForm(previous=>({...previous,signer_name:selected.full_name,signer_position:selected.employment_status||previous.signer_position,signer_nip:selected.nip||''}))}}>{signatories.map(signer=><option key={`${signer.full_name}-${signer.nip}`} value={`${signer.full_name}::${signer.nip??''}`}>{signer.full_name} · {signer.employment_status||'Pejabat'}</option>)}</select></label>}

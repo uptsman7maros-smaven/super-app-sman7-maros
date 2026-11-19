@@ -28,6 +28,8 @@ export type SchoolSettings = {
   logo_url_2: string;
   letterhead_2: string;
   province_logo_url: string;
+  principal_name?: string | null;
+  principal_nip?: string | null;
 };
 
 export type LetterheadSlot = "1" | "2" | "3";
@@ -168,7 +170,7 @@ export async function loadSchoolContextData(
     loadIdentity(account),
     supabase
       .from("school_settings")
-      .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2, province_logo_url")
+      .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2, province_logo_url, principal_name, principal_nip")
       .order("id")
       .limit(1)
       .maybeSingle(),
