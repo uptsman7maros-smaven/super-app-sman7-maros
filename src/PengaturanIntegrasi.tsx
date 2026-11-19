@@ -1,7 +1,10 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 import { useSchoolContext } from "./context/useSchoolContext";
 import { logAppActivity } from "./services/activityLogService";
+import type { AppModuleRegistryEntry } from "./services/moduleRegistry";
+import { getSchoolLetterhead } from "./services/masterDataService";
+import { SchoolLetterheadPreview } from "./components/shared/SchoolLetterheadPicker";
 import {
   getMaintenanceStatus,
   subscribeToMaintenanceStatus,
@@ -9,7 +12,7 @@ import {
 import type { ModuleSetting, SchoolSettings } from "./services/masterDataService";
 import "./PengaturanIntegrasi.css";
 
-type SchoolSettingsForm = Omit<SchoolSettings, "id"> & { id?: string };
+type SchoolSettingsForm = Omit<SchoolSettings, "id"> & { id?: number };
 type ServiceItem = { id: string; service_name: string; service_url: string; status: string; notes: string };
 type ActivityItem = {
   id?: string;
@@ -26,10 +29,18 @@ const initialSettings: SchoolSettingsForm = {
   npsn: "40308320",
   academic_year: "2026/2027",
   logo_url: "",
-  letterhead: ""
+  letterhead: "",
+  logo_url_2: "",
+  letterhead_2: "",
 };
 
-export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpdated?: () => void }) {
+export default function PengaturanIntegrasi({
+  onModulesUpdated,
+  moduleCatalog = [],
+}: {
+  onModulesUpdated?: () => void;
+  moduleCatalog?: readonly AppModuleRegistryEntry[];
+}) {
   const {
     currentUser,
     schoolSettings,
@@ -47,10 +58,33 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
       academic_year: activeAcademicYear?.name ?? schoolSettings.academic_year,
     }
     : initialSettings);
-  const modules: ModuleSetting[] = moduleSettings;
+  const modules = useMemo<ModuleSetting[]>(() => {
+    const normalize = (value: string) => value.toLocaleLowerCase("id-ID").replace(/[^a-z0-9]/g, "");
+    const registered = moduleCatalog.map((entry) => {
+      const setting = moduleSettings.find((item) =>
+        [item.module_key, item.label, item.route_key].some((value) => normalize(value) === normalize(entry.route_key))
+      );
+      return setting ?? {
+        id: "",
+        module_key: entry.module_key,
+        label: entry.label,
+        route_key: entry.route_key,
+        is_enabled: true,
+      };
+    });
+    const registeredRoutes = new Set(moduleCatalog.map(item => normalize(item.route_key)));
+    const extras = moduleSettings.filter(item => {
+      const identifiers = [item.module_key, item.label, item.route_key].map(normalize);
+      return !identifiers.includes(normalize("Kesiswaan & BK"))
+        && !identifiers.some(value => registeredRoutes.has(value));
+    });
+    return [...registered, ...extras];
+  }, [moduleCatalog, moduleSettings]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [moduleSyncLoading, setModuleSyncLoading] = useState(false);
+  const [logoUploading, setLogoUploading] = useState<"1" | "2" | null>(null);
   const [message, setMessage] = useState("");
   const [newService, setNewService] = useState({ service_name: "", service_url: "", notes: "" });
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
@@ -61,6 +95,36 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
   const isSuperAdmin = currentUser?.role === "super_admin";
 
   const notify = (s: string) => { setMessage(s); window.setTimeout(() => setMessage(""), 3500); };
+  const syncMissingModules = useCallback(async () => {
+    if (!isSuperAdmin || contextLoading || contextError) return;
+    const normalize = (value: string) => value.toLocaleLowerCase("id-ID").replace(/[^a-z0-9]/g, "");
+    const missing = moduleCatalog.filter((entry) => !moduleSettings.some((item) =>
+      [item.module_key, item.label, item.route_key].some((value) => normalize(value) === normalize(entry.route_key))
+    ));
+    if (!missing.length) return;
+    setModuleSyncLoading(true);
+    try {
+      const { error } = await supabase.from("app_module_settings").insert(missing.map(entry => ({
+        ...entry,
+        is_enabled: true,
+        updated_by: currentUser?.id ?? null,
+      })));
+      if (error) throw error;
+      await refreshSchoolContext();
+    } catch (error) {
+      notify(error instanceof Error
+        ? `Sinkronisasi katalog modul gagal: ${error.message}`
+        : "Sinkronisasi katalog modul gagal.");
+    } finally {
+      setModuleSyncLoading(false);
+    }
+  }, [contextError, contextLoading, currentUser?.id, isSuperAdmin, moduleCatalog, moduleSettings, refreshSchoolContext]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void syncMissingModules(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [syncMissingModules]);
+
   const auditSettings = async (action: string, details: string): Promise<string> => {
     try {
       await logAppActivity({
@@ -138,6 +202,45 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
     };
   }, [currentUser?.id, isSuperAdmin]);
 
+  async function uploadSchoolLogo(slot: "1" | "2", event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    if (!isSuperAdmin || !currentUser) {
+      notify("Hanya Super Admin yang dapat mengunggah logo kop surat.");
+      return;
+    }
+    if (!["image/png", "image/jpeg"].includes(file.type) || file.size > 8 * 1024 * 1024) {
+      notify("Pilih berkas PNG/JPEG dengan ukuran maksimal 8 MB.");
+      return;
+    }
+
+    setLogoUploading(slot);
+    try {
+      const bitmap = await createImageBitmap(file);
+      const highResolution = bitmap.width >= 300 && bitmap.height >= 300;
+      bitmap.close();
+      if (!highResolution) throw new Error("Gunakan logo berukuran minimal 300 × 300 piksel agar tetap tajam saat dicetak.");
+      const extension = file.type === "image/png" ? "png" : "jpg";
+      const path = `${currentUser.id}/letterhead-${slot}/logo-${Date.now()}.${extension}`;
+      const { error } = await supabase.storage.from("school-letterheads").upload(path, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+      if (error) throw error;
+      const { data } = supabase.storage.from("school-letterheads").getPublicUrl(path);
+      setSettingsDraft({
+        ...settings,
+        [slot === "1" ? "logo_url" : "logo_url_2"]: data.publicUrl,
+      });
+      notify(`Logo Kop Surat ${slot} diunggah. Simpan perubahan identitas untuk menerapkannya.`);
+    } catch (error) {
+      notify(error instanceof Error ? `Logo gagal diunggah: ${error.message}` : "Logo gagal diunggah.");
+    } finally {
+      setLogoUploading(null);
+    }
+  }
+
   async function saveSettings(e: React.FormEvent) {
     e.preventDefault(); setBusy(true);
     try {
@@ -159,7 +262,11 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
 
   async function toggleModule(item: ModuleSetting) {
     try {
-      const { error } = await supabase.from("app_module_settings").update({ is_enabled: !item.is_enabled }).eq("id", item.id);
+      const { error } = await supabase.from("app_module_settings").update({
+        is_enabled: !item.is_enabled,
+        updated_at: new Date().toISOString(),
+        updated_by: currentUser?.id ?? null,
+      }).eq("id", item.id);
       if (error) throw error;
       const auditWarning = await auditSettings(
         item.is_enabled ? "Modul dinonaktifkan" : "Modul diaktifkan",
@@ -297,16 +404,33 @@ export default function PengaturanIntegrasi({ onModulesUpdated }: { onModulesUpd
         <label>Nama sekolah<input value={settings.school_name} onChange={e => setSettingsDraft({...settings, school_name:e.target.value})} required /></label>
         <label>NPSN<input value={settings.npsn} onChange={e => setSettingsDraft({...settings, npsn:e.target.value})} /></label>
         <label>Tahun ajaran<input value={settings.academic_year} onChange={e => setSettingsDraft({...settings, academic_year:e.target.value})} placeholder="2026/2027" /></label>
-        <label>URL logo sekolah<input value={settings.logo_url} onChange={e => setSettingsDraft({...settings, logo_url:e.target.value})} placeholder="https://... atau URL Supabase Storage" /></label>
-        <label className="pi-wide">Teks kop surat<textarea rows={4} value={settings.letterhead} onChange={e => setSettingsDraft({...settings, letterhead:e.target.value})} placeholder="Nama instansi, alamat, telepon, email..." /></label>
-        {settings.logo_url && <div className="pi-logo-preview"><img src={settings.logo_url} alt="Pratinjau logo sekolah" onError={e => (e.currentTarget.style.display = "none")} /><span>Pratinjau logo</span></div>}
-        <div className="pi-wide pi-actions"><button className="pi-primary" disabled={busy}>Simpan identitas</button><button type="button" className="pi-secondary" onClick={() => window.print()}>Cetak pratinjau</button></div>
+        <div className="pi-letterhead-grid pi-wide">
+          <fieldset className="pi-letterhead-card">
+            <legend>Kop Surat 1 · Utama</legend>
+            <label>{logoUploading === "1" ? "Mengunggah logo utama..." : "Logo sekolah (PNG/JPEG, min. 300 × 300 px, maks. 8 MB)"}
+              <input type="file" accept="image/png,image/jpeg" onChange={event => void uploadSchoolLogo("1", event)} disabled={logoUploading !== null} />
+            </label>
+            <label>Teks kop surat<textarea rows={4} value={settings.letterhead} onChange={e => setSettingsDraft({...settings, letterhead:e.target.value})} placeholder="Instansi, alamat, telepon, dan email..." /></label>
+            <SchoolLetterheadPreview letterhead={getSchoolLetterhead(settings, "1")} />
+          </fieldset>
+          <fieldset className="pi-letterhead-card">
+            <legend>Kop Surat 2 · Alternatif</legend>
+            <label>{logoUploading === "2" ? "Mengunggah logo alternatif..." : "Logo alternatif (PNG/JPEG, min. 300 × 300 px, maks. 8 MB)"}
+              <input type="file" accept="image/png,image/jpeg" onChange={event => void uploadSchoolLogo("2", event)} disabled={logoUploading !== null} />
+            </label>
+            <label>Teks kop surat alternatif<textarea rows={4} value={settings.letterhead_2} onChange={e => setSettingsDraft({...settings, letterhead_2:e.target.value})} placeholder="Instansi, alamat, telepon, dan email..." /></label>
+            <SchoolLetterheadPreview letterhead={getSchoolLetterhead(settings, "2")} />
+          </fieldset>
+          <p className="pi-letterhead-help">Logo beresolusi tinggi menjaga ketajaman saat dicetak. Kop 1 menjadi pilihan baku; Kop 2 tersedia pada dokumen setelah diisi. Unggahan diterapkan setelah pengaturan disimpan.</p>
+        </div>
+        <div className="pi-wide pi-actions"><button className="pi-primary" disabled={busy || logoUploading !== null}>Simpan identitas</button><button type="button" className="pi-secondary" onClick={() => window.print()}>Cetak pratinjau</button></div>
       </form>
     </section>}
 
     {tab === "modul" && <section className="pi-panel pi-animate">
-      <div className="pi-section-title"><div><span className="pi-kicker">KONFIGURASI APLIKASI</span><h2>Modul & menu aktif</h2><p>Status tersinkron dengan navigasi. Modul nonaktif disembunyikan dari menu; modul yang belum tersedia tetap tidak dapat dibuka.</p></div><span className="pi-icon-chip">🧩</span></div>
-      {modules.length === 0 ? <div className="pi-empty">Belum ada modul terdaftar atau akses tabel belum tersedia.</div> : <div className="pi-module-grid">{modules.map(m => <div className="pi-module" key={m.id}><div className="pi-module-top"><span className="pi-module-dot">{m.is_enabled ? "✓" : "–"}</span><span className={m.is_enabled ? "pi-status on" : "pi-status off"}>{m.is_enabled ? "Aktif" : "Nonaktif"}</span></div><h3>{m.label}</h3><p>Kunci: <code>{m.module_key}</code></p><button className={m.is_enabled ? "pi-toggle enabled" : "pi-toggle"} onClick={() => void toggleModule(m)}>{m.is_enabled ? "Nonaktifkan" : "Aktifkan"}</button></div>)}</div>}
+      <div className="pi-section-title"><div><span className="pi-kicker">KONFIGURASI APLIKASI</span><h2>Modul & menu aktif</h2><p>Katalog diselaraskan dengan modul di menu dan routing. Modul nonaktif disembunyikan dari pengguna lain dan akses langsungnya ditolak.</p></div><span className="pi-icon-chip">🧩</span></div>
+      {modules.length === 0 ? <div className="pi-empty">Belum ada modul terdaftar atau akses tabel belum tersedia.</div> : <div className="pi-module-grid">{modules.map(m => <div className="pi-module" key={m.id || m.module_key}><div className="pi-module-top"><span className="pi-module-dot">{m.is_enabled ? "✓" : "–"}</span><span className={m.is_enabled ? "pi-status on" : "pi-status off"}>{m.id ? (m.is_enabled ? "Aktif" : "Nonaktif") : "Menunggu sinkronisasi"}</span></div><h3>{m.label}</h3><p>Kunci: <code>{m.module_key}</code></p><button className={m.is_enabled ? "pi-toggle enabled" : "pi-toggle"} disabled={!m.id || moduleSyncLoading || busy} onClick={() => void toggleModule(m)}>{m.is_enabled ? "Nonaktifkan" : "Aktifkan"}</button></div>)}</div>}
+      {moduleSyncLoading && <p className="pi-loading" role="status">Menyinkronkan katalog modul yang belum terdaftar…</p>}
     </section>}
 
     {tab === "integrasi" && <section className="pi-panel pi-animate">

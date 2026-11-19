@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import type { ReactNode } from "react";
+import { SchoolLetterheadPicker } from "../../../components/shared/SchoolLetterheadPicker";
+import { getSchoolLetterhead, type LetterheadSlot } from "../../../services/masterDataService";
 import type { SchoolUser } from "../../../context/school-context";
 import ReportActions from "./ReportActions";
 import {
@@ -204,10 +206,13 @@ function downloadExcel(filename: string, rows: Record<string, unknown>[]) {
 
 function PrintHeader({ header, title }: { header: SchoolHeader; title: string }) {
   return (
-    <header className="kb-print-header">
-      {header.letterhead && <p>{header.letterhead}</p>}
-      <h1>{header.school_name}</h1>
-      {header.npsn && <p>NPSN {header.npsn}</p>}
+    <header className={`kb-print-header school-document-header${header.logo_url ? " has-logo" : " no-logo"}`}>
+      {header.logo_url && <img src={header.logo_url} alt="" onError={event => { event.currentTarget.hidden = true; }} />}
+      <div>
+        <h1>{header.school_name}</h1>
+        {header.letterhead && <p>{header.letterhead}</p>}
+        {header.npsn && <p>NPSN {header.npsn}</p>}
+      </div>
       <hr />
       <h2>{title}</h2>
     </header>
@@ -220,7 +225,7 @@ function LabelCaption({ children, required = false }: { children: ReactNode; req
 
 function Signatures() {
   return (
-    <div className="kb-signatures">
+    <div className="kb-signatures document-signature-block">
       <p>Mengetahui,<br />Kepala Sekolah</p>
       <p>Guru Bimbingan dan Konseling</p>
       <div />
@@ -247,6 +252,11 @@ export default function CounselingWorkflowPanel({
   const isStudent = role === "siswa";
   const canManage = ["guru_bk", "super_admin", "operator"].includes(role);
   const canEditStudentProfile = role === "guru_bk" || role === "super_admin";
+  const [letterheadSlot, setLetterheadSlot] = useState<LetterheadSlot>("1");
+  const outputHeader = useMemo(() => ({
+    ...schoolHeader,
+    ...getSchoolLetterhead(schoolHeader, letterheadSlot),
+  }), [letterheadSlot, schoolHeader]);
   const student = isStudent
     ? students.find(item => item.profile_id === currentUser.id) ?? students[0]
     : undefined;
@@ -465,7 +475,7 @@ export default function CounselingWorkflowPanel({
 
   function getRplPdfSettings(yearId = rplYearId) {
     return {
-      ...schoolHeader,
+      ...outputHeader,
       academicYear: academicYears.find(year => year.id === yearId)?.name ?? schoolHeader.academic_year,
       counselorName: currentUser.full_name || currentUser.username,
       principalName: rplPrincipalName,
@@ -621,7 +631,8 @@ export default function CounselingWorkflowPanel({
   if (tab === "Konsultasi BK" || tab === "Pengajuan Konsultasi") {
     return (
       <section className="kb-panel kb-workflow-panel">
-        <PrintHeader header={schoolHeader} title="Laporan Konsultasi Bimbingan dan Konseling" />
+        <PrintHeader header={outputHeader} title="Laporan Konsultasi Bimbingan dan Konseling" />
+        {!isStudent && <div className="kb-document-output-options"><SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} /></div>}
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">JADWAL LAYANAN</span><h2>{isStudent ? "Pengajuan Konsultasi" : "Konsultasi BK"}</h2></div>
           <ReportActions onExportExcel={() => exportConsultations("xlsx")} onExportCsv={() => exportConsultations("csv")} onPrint={printReport} />
         </div>
@@ -707,7 +718,8 @@ export default function CounselingWorkflowPanel({
   if (tab === "Kunjungan Rumah") {
     return (
       <section className="kb-panel kb-workflow-panel">
-        <PrintHeader header={schoolHeader} title="Laporan Kunjungan Rumah Peserta Didik" />
+        <PrintHeader header={outputHeader} title="Laporan Kunjungan Rumah Peserta Didik" />
+        {!isStudent && <div className="kb-document-output-options"><SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} /></div>}
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">HOME VISIT</span><h2>Kunjungan Rumah</h2></div>
           <ReportActions onExportExcel={() => downloadExcel("laporan-kunjungan-rumah.xlsx", homeVisitExportRows(visits))} onExportCsv={() => downloadCsv("laporan-kunjungan-rumah.csv", homeVisitExportRows(visits))} onPrint={printReport} />
         </div>
@@ -757,8 +769,9 @@ export default function CounselingWorkflowPanel({
   if (tab === "Generator RPL") {
     return (
       <section className="kb-panel kb-workflow-panel">
-        <PrintHeader header={schoolHeader} title="Rencana Pelaksanaan Layanan Bimbingan dan Konseling" />
+        <PrintHeader header={outputHeader} title="Rencana Pelaksanaan Layanan Bimbingan dan Konseling" />
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">PERENCANAAN LAYANAN</span><h2>Generator RPL</h2></div></div>
+        <div className="kb-document-output-options"><SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} /></div>
         {error && <div className="kb-alert" role="alert">{error}</div>}{notice && <div className="kb-success" role="status">{notice}</div>}
         <form className="kb-form" onSubmit={event => {
           event.preventDefault();
@@ -888,7 +901,8 @@ export default function CounselingWorkflowPanel({
       }
     return (
       <section className="kb-panel kb-workflow-panel">
-        <PrintHeader header={schoolHeader} title="Rekap Angket Kebutuhan Peserta Didik" />
+        <PrintHeader header={outputHeader} title="Rekap Angket Kebutuhan Peserta Didik" />
+        {!isStudent && <div className="kb-document-output-options"><SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} /></div>}
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">ASESMEN KEBUTUHAN</span><h2>Angket Kebutuhan Siswa</h2></div>
           {!isStudent && <ReportActions
             onExportExcel={() => downloadExcel("rekap-akpd.xlsx", akpdExportRows)}
@@ -961,7 +975,8 @@ export default function CounselingWorkflowPanel({
   if (tab === "Daftar Siswa Asuh") {
     return (
       <section className="kb-panel kb-workflow-panel">
-        <PrintHeader header={schoolHeader} title="Biodata Bimbingan dan Konseling Peserta Didik" />
+        <PrintHeader header={outputHeader} title="Biodata Bimbingan dan Konseling Peserta Didik" />
+        {!isStudent && <div className="kb-document-output-options"><SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} /></div>}
         <div className="kb-panel-heading"><div><span className="kb-eyebrow">DATA INDUK TERHUBUNG</span><h2>Daftar Siswa Asuh</h2></div>
           <div className="kb-student-filters">
             <input className="kb-search" aria-label="Cari nama, NISN atau kelas" placeholder="Cari nama, NISN, kelas..." value={search} onChange={event => setSearch(event.target.value)} />

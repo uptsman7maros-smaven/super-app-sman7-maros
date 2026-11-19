@@ -12,6 +12,8 @@ import { isLetterInProgress } from './lib/letterMetrics'
 import { logAppActivity } from './services/activityLogService'
 import { useSchoolContext } from './context/useSchoolContext'
 import PersonPicker from './components/shared/PersonPicker'
+import { SchoolLetterheadPicker } from './components/shared/SchoolLetterheadPicker'
+import { getSchoolLetterhead, type LetterheadSlot } from './services/masterDataService'
 import type { PersonOption } from './services/masterDataService'
 import './PersuratanModule.css'
 
@@ -130,6 +132,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const person = contextUser ?? currentUser ?? null
   const [session,setSession]=useState<Session | null>(null), [role,setRole]=useState<LetterRole | null>(null)
   const [page,setPage]=useState<Page>('dashboard')
+  const [letterheadSlot,setLetterheadSlot]=useState<LetterheadSlot>('1')
   const [loading,setLoading]=useState(true), [sessionReady,setSessionReady]=useState(false), [busy,setBusy]=useState(false), [error,setError]=useState('')
   const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([])
   const [notifications,setNotifications]=useState<LetterNotification[]>([]), [search,setSearch]=useState(''), [toast,setToast]=useState('')
@@ -355,21 +358,22 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const escapeHtml=(value:string)=>value.replace(/[&<>"']/g,(character)=>({
       '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
     })[character]??character)
-    const schoolName=schoolSettings?.school_name||'SMAN 7 MAROS'
-    const letterhead=(schoolSettings?.letterhead||'').split('\n').map(escapeHtml).join('<br>')
-    const logoUrl=schoolSettings?.logo_url&&/^https?:\/\//i.test(schoolSettings.logo_url)
-      ? `<img src="${escapeHtml(schoolSettings.logo_url)}" alt="" width="76">`
+    const header=getSchoolLetterhead(schoolSettings,letterheadSlot)
+    const schoolName=header.school_name||'SMAN 7 MAROS'
+    const letterhead=header.letterhead.split('\n').map(escapeHtml).join('<br>')
+    const logoUrl=header.logo_url&&/^https?:\/\//i.test(header.logo_url)
+      ? `<img src="${escapeHtml(header.logo_url)}" alt="" width="84" height="84" onerror="this.hidden=true">`
       : ''
     const fields=Object.entries(request.form_data||{}).map(([key,value])=>
       `<tr><th>${escapeHtml(key.replaceAll('_',' '))}</th><td>${escapeHtml(String(value??''))}</td></tr>`
     ).join('')
     const documentHtml=`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(request.subject)}</title><style>
-      body{font:14px Arial,sans-serif;color:#111;margin:30mm 25mm}header{display:flex;align-items:center;gap:18px;border-bottom:3px double #111;padding-bottom:12px;margin-bottom:24px;text-align:center}header div{flex:1}h1{font-size:20px;margin:0 0 6px}.letterhead{line-height:1.5}table{width:100%;border-collapse:collapse;margin:18px 0}th,td{text-align:left;vertical-align:top;padding:7px;border-bottom:1px solid #bbb}th{width:35%;text-transform:capitalize}.signature{margin:44px 0 0 auto;width:230px;text-align:center}@media print{body{margin:22mm 20mm}}
-      </style></head><body><header>${logoUrl}<div><h1>${escapeHtml(schoolName)}</h1><div class="letterhead">${letterhead}</div></div></header>
+      @page{size:A4;margin:20mm}body{font:14px Arial,sans-serif;color:#111;margin:0}header{display:grid;grid-template-columns:24mm 1fr;align-items:center;gap:2mm 5mm;border-bottom:3px double #111;padding-bottom:4mm;margin-bottom:8mm;text-align:center}header img{grid-row:1;grid-column:1;width:22mm;height:22mm;object-fit:contain}header div{grid-column:2}header.no-logo div,header img[hidden]~div{grid-column:1/-1}h1{font-size:18px;margin:0 0 2mm}.letterhead{line-height:1.4;font-size:11px}header small{display:block;margin-top:1mm;font-size:10px}table{width:100%;border-collapse:collapse;margin:6mm 0}th,td{text-align:left;vertical-align:top;padding:2mm;border-bottom:1px solid #bbb}th{width:35%;text-transform:capitalize}.signature{margin:8mm 0 0 auto;width:65mm;text-align:center;break-inside:avoid;page-break-inside:avoid}@media print{body{margin:0}}
+      </style></head><body><header class="${logoUrl?'has-logo':'no-logo'}">${logoUrl}<div><h1>${escapeHtml(schoolName)}</h1><div class="letterhead">${letterhead}</div>${header.npsn?`<small>NPSN ${escapeHtml(header.npsn)}</small>`:''}</div></header>
       <h2>${escapeHtml(request.subject)}</h2><p>Nomor: ${escapeHtml(issued?.letter_number||'—')}</p>
       <p>Tanggal: ${escapeHtml(issued?.issue_date||new Date().toISOString().slice(0,10))}</p>
       <p>Pemohon: ${escapeHtml(request.requester_name)}${request.requester_position?` — ${escapeHtml(request.requester_position)}`:''}</p>
-      <table>${fields}</table><div class="signature"><p>${escapeHtml(issued?.signer_position||'Pejabat penandatangan')}</p><br><br><strong>${escapeHtml(issued?.signer_name||'')}</strong><br>${escapeHtml(issued?.signer_nip||'')}</div>
+      <table>${fields}</table><div class="signature document-signature-block"><p>${escapeHtml(issued?.signer_position||'Pejabat penandatangan')}</p><br><br><strong>${escapeHtml(issued?.signer_name||'')}</strong><br>${escapeHtml(issued?.signer_nip||'')}</div>
       </body></html>`
     const printWindow=window.open('','_blank')
     if(!printWindow){notify('Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.');return}
@@ -422,7 +426,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     </header>
     <nav className="module-nav" aria-label="Navigasi Persuratan"><div className="module-nav-label"><span>MENU MODUL</span><small>{visibleNav.length} layanan</small></div><div className="module-nav-list">{visibleNav.map(({label,icon:Icon,key})=><button key={key} className={`module-nav-item ${page===key?'active':''}`} aria-current={page===key?'page':undefined} onClick={()=>setPage(key)}><Icon size={17}/><span>{label}</span></button>)}</div></nav>
     <main className="main-area">
-      <div className="section-heading"><div><span className="eyebrow">WORKSPACE · PERSURATAN DIGITAL</span><h2>{nav.find(n=>n.key===page)?.label||'Persuratan Digital'}</h2><p>{pageDescriptions[page]}</p></div><div className="heading-meta"><span className="module-status"><i/> Administrasi sekolah</span><span className="role-chip">{role?roleLabels[role]:person?.role||'Role belum diatur'}</span></div></div>
+      <div className="section-heading"><div><span className="eyebrow">WORKSPACE · PERSURATAN DIGITAL</span><h2>{nav.find(n=>n.key===page)?.label||'Persuratan Digital'}</h2><p>{pageDescriptions[page]}</p></div><div className="heading-meta">{['dashboard','requests','issued','archive'].includes(page)&&<SchoolLetterheadPicker settings={schoolSettings} value={letterheadSlot} onChange={setLetterheadSlot}/>}<span className="module-status"><i/> Administrasi sekolah</span><span className="role-chip">{role?roleLabels[role]:person?.role||'Pengguna'}</span></div></div>
       <section className="content" key={page}>
         {loading?<div className="loading-grid"><div/><div/><div/><div/></div>:!role?<div className="setup-layout">
           <div className="setup-intro">

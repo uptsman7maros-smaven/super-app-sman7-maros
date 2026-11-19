@@ -1,6 +1,7 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { RplEditorContent, SchoolHeader } from "../types";
+import { drawStandardPdfSignatureBlock } from "../../../lib/pdfDocumentLayout";
 
 export type RplPdfData = RplEditorContent & {
   komponen_layanan: string;
@@ -18,7 +19,7 @@ type PdfSettings = SchoolHeader & {
   principalName?: string;
 };
 
-async function imageAsPng(url: string): Promise<string | null> {
+async function imageAsPng(url: string): Promise<{ data: string; width: number; height: number } | null> {
   try {
     const response = await fetch(url, { mode: "cors" });
     if (!response.ok) return null;
@@ -26,6 +27,8 @@ async function imageAsPng(url: string): Promise<string | null> {
     const canvas = document.createElement("canvas");
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
+    const width = bitmap.width;
+    const height = bitmap.height;
     const context = canvas.getContext("2d");
     if (!context) {
       bitmap.close();
@@ -33,7 +36,7 @@ async function imageAsPng(url: string): Promise<string | null> {
     }
     context.drawImage(bitmap, 0, 0);
     bitmap.close();
-    return canvas.toDataURL("image/png");
+    return { data: canvas.toDataURL("image/png"), width, height };
   } catch {
     return null;
   }
@@ -79,7 +82,10 @@ function createPdf(data: RplPdfData, settings: PdfSettings) {
     const logoData = await schoolLogoDataUrl(settings);
     let headerY = 17;
     if (logoData) {
-      doc.addImage(logoData, "PNG", 16, 12, 24, 24, undefined, "FAST");
+      const scale = Math.min(24 / logoData.width, 24 / logoData.height);
+      const logoWidth = logoData.width * scale;
+      const logoHeight = logoData.height * scale;
+      doc.addImage(logoData.data, "PNG", 16 + (24 - logoWidth) / 2, 12 + (24 - logoHeight) / 2, logoWidth, logoHeight, undefined, "FAST");
       headerY = 16;
     }
     doc.setFont("helvetica", "bold");
@@ -167,23 +173,12 @@ function createPdf(data: RplPdfData, settings: PdfSettings) {
     y = addParagraph(doc, "Evaluasi proses", data.evaluasi_proses, y);
     y = addParagraph(doc, "Evaluasi hasil", data.evaluasi_hasil, y);
 
-    const signatureHeight = 42;
-    if (y + signatureHeight > pageHeight - 12) {
-      doc.addPage();
-      y = 22;
-    } else {
-      y = Math.max(y + 5, pageHeight - signatureHeight - 10);
-    }
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text("Mengetahui,", pageWidth * 0.28, y, { align: "center" });
-    doc.text("Guru BK / Konselor", pageWidth * 0.72, y, { align: "center" });
-    doc.text("Kepala Sekolah", pageWidth * 0.28, y + 5, { align: "center" });
-    doc.line(pageWidth * 0.13, y + 28, pageWidth * 0.43, y + 28);
-    doc.line(pageWidth * 0.57, y + 28, pageWidth * 0.87, y + 28);
-    doc.setFont("helvetica", "bold");
-    doc.text(settings.principalName || "(................................)", pageWidth * 0.28, y + 34, { align: "center" });
-    doc.text(settings.counselorName || "(................................)", pageWidth * 0.72, y + 34, { align: "center" });
+    drawStandardPdfSignatureBlock(doc, y, {
+      leftHeading: ["Mengetahui,", "Kepala Sekolah"],
+      leftName: settings.principalName || "",
+      rightHeading: ["Guru BK / Konselor"],
+      rightName: settings.counselorName || "",
+    });
   };
   return { doc, render };
 }

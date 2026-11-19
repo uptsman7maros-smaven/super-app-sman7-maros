@@ -1811,3 +1811,125 @@ a { color: inherit; text-decoration: none; }
   .user-error-notice { flex-wrap: wrap; }
   .user-error-notice button { margin-left: 28px; }
 }
+
+.school-letterhead-picker {
+  display: grid;
+  gap: 6px;
+  color: #536077;
+  font-size: 12px;
+  font-weight: 700;
+}
+.school-letterhead-picker select {
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px solid #dce2ed;
+  border-radius: 9px;
+  background: #fff;
+  color: #263248;
+  font: inherit;
+}
+.school-letterhead-preview {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dfe3ef;
+  border-radius: 12px;
+  background: #fff;
+  color: #172033;
+  text-align: center;
+}
+.school-letterhead-preview > img {
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
+}
+.school-letterhead-preview h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 800;
+}
+.school-letterhead-copy p {
+  margin: 0;
+  white-space: pre-line;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.school-letterhead-copy small {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+}
+.school-letterhead-rules {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-top: 2px solid #1e2430;
+  border-bottom: 1px solid #1e2430;
+}
+.school-letterhead-preview.compact {
+  grid-template-columns: 50px minmax(0, 1fr);
+  padding: 9px;
+}
+.school-letterhead-preview.compact > img {
+  width: 48px;
+  height: 48px;
+}
+.school-letterhead-preview.compact h2 {
+  font-size: 12px;
+}
+.school-letterhead-preview.compact .school-letterhead-copy p,
+.school-letterhead-preview.compact .school-letterhead-copy small {
+  font-size: 9px;
+}
+.pi-letterhead-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.pi-letterhead-card {
+  display: grid;
+  align-content: start;
+  gap: 13px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid #e3e7f0;
+  border-radius: 15px;
+  background: #fbfcff;
+}
+.pi-letterhead-card legend {
+  padding: 0 7px;
+  color: #4e4b8e;
+  font-size: 13px;
+  font-weight: 800;
+}
+.pi-letterhead-card input[type="file"] {
+  font-size: 11px;
+}
+.pi-letterhead-card .school-letterhead-preview {
+  align-self: stretch;
+}
+.pi-letterhead-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #6c7488;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.pi-toggle:disabled {
+  cursor: wait;
+  opacity: .58;
+  transform: none;
+}
+@media print {
+  .document-signature-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+@media (max-width: 760px) {
+  .pi-letterhead-grid {
+    grid-template-columns: 1fr;
+  }
+}

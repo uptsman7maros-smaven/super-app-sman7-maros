@@ -65,10 +65,13 @@ export default function DataTable({
 
   return (
     <section className="kb-panel kb-data-panel">
-      <header className="kb-print-header">
-        {schoolHeader.letterhead && <p>{schoolHeader.letterhead}</p>}
-        <h1>{schoolHeader.school_name}</h1>
-        {schoolHeader.npsn && <p>NPSN {schoolHeader.npsn}</p>}
+      <header className={`kb-print-header${schoolHeader.logo_url ? " has-logo" : " no-logo"}`}>
+        {schoolHeader.logo_url && <img src={schoolHeader.logo_url} alt="" onError={event => { event.currentTarget.hidden = true; }} />}
+        <div>
+          <h1>{schoolHeader.school_name}</h1>
+          {schoolHeader.letterhead && <p>{schoolHeader.letterhead}</p>}
+          {schoolHeader.npsn && <p>NPSN {schoolHeader.npsn}</p>}
+        </div>
         <hr />
         <h2>{config.key === "Catatan BK" ? "Agenda Harian Bimbingan dan Konseling" : `Laporan ${config.key}`}</h2>
       </header>
@@ -165,7 +168,7 @@ export default function DataTable({
           <button className="kb-secondary" type="button" disabled={(page + 1) * PAGE_SIZE >= count || loading} onClick={() => onPageChange(page + 1)}>Berikutnya</button>
         </div>
       </div>
-      <div className="kb-signatures">
+      <div className="kb-signatures document-signature-block">
         <p>Mengetahui,<br />Kepala Sekolah</p><p>Guru Bimbingan dan Konseling</p>
         <div /><div /><span>(........................................)</span><span>(........................................)</span>
       </div>

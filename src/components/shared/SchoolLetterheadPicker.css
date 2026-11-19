@@ -1,0 +1,7 @@
+.school-letterhead-preview.no-logo .school-letterhead-copy {
+  grid-column: 1 / -1;
+}
+
+.school-letterhead-preview > img[hidden] ~ .school-letterhead-copy {
+  grid-column: 1 / -1;
+}

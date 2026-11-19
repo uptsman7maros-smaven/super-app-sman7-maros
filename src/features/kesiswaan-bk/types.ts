@@ -58,7 +58,15 @@ export type StudentOption = {
 
 export type AcademicYearOption = { id: string; name: string; is_active: boolean };
 export type ClassOption = { id: string; name: string; grade_level: number; academic_year_id: string };
-export type SchoolHeader = { school_name: string; npsn: string; letterhead: string; academic_year: string; logo_url: string };
+export type SchoolHeader = {
+  school_name: string;
+  npsn: string;
+  letterhead: string;
+  academic_year: string;
+  logo_url: string;
+  letterhead_2: string;
+  logo_url_2: string;
+};
 export type CounselorOption = { id: string; name: string };
 export type AssignmentStudent = StudentOption & { counselor_profile_id: string | null };
 

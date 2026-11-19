@@ -9,6 +9,9 @@ import "./AbsensiDigital.css";
 import "./AbsensiDigitalQr.css";
 import { QRCodeSVG } from "qrcode.react";
 import type { SchoolUser } from "./context/school-context";
+import { useSchoolContext } from "./context/useSchoolContext";
+import { SchoolLetterheadPicker, SchoolLetterheadPreview } from "./components/shared/SchoolLetterheadPicker";
+import { getSchoolLetterhead, type LetterheadSlot } from "./services/masterDataService";
 
 type AttendanceStatus = "hadir" | "sakit" | "izin" | "terlambat" | "alpa" | "pulang";
 type PersonType = "siswa" | "guru_tendik";
@@ -181,7 +184,9 @@ type AbsensiDigitalProps = {
 };
 
 export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDigitalProps) {
+  const { schoolSettings } = useSchoolContext();
   const [date, setDate] = useState(today());
+  const [letterheadSlot, setLetterheadSlot] = useState<LetterheadSlot>("1");
   const [month, setMonth] = useState(today().slice(0,7));
   const [personType, setPersonType] = useState<PersonType>("siswa");
   const [identifier, setIdentifier] = useState("");
@@ -195,6 +200,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
+  const printHeader = getSchoolLetterhead(schoolSettings, letterheadSlot);
   const [cameraOn, setCameraOn] = useState(false);
   const [waEnabled, setWaEnabled] = useState(false);
   const [waTemplate, setWaTemplate] = useState("Assalamu’alaikum Bapak/Ibu,\n\nKami informasikan bahwa putra/putri Bapak/Ibu, *{nama}*, tercatat *{status}* pada *{tanggal} pukul {jam}*.\n\nTerima kasih atas perhatian Bapak/Ibu.");
@@ -1275,10 +1281,15 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         {role !== "siswa" && <button className="attendance-primary" disabled={saving || identityLoading || (isSelfService && !identity) || (!isSelfService && (identityLookup !== "found" || verifiedIdentifier !== identifier.trim()))}>{saving ? "Menyimpan..." : "Simpan Absensi"}</button>}
       </form>}
       <section className={`attendance-panel attendance-records${!canRecordAttendance ? " attendance-records-wide" : ""}`}>
+          <header className="attendance-print-header">
+            <SchoolLetterheadPreview letterhead={printHeader} compact />
+            <h1>{isTeacher ? "Rekap Kehadiran Mapel Saya" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Kehadiran"}</h1>
+            <p>{date} · {rows.length} catatan</p>
+          </header>
         <div className="attendance-panel-title"><div><h2>{isTeacher ? "Rekap Kehadiran Mapel Saya" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Harian"}</h2><p>{date} · {rows.length} catatan</p></div><FileSpreadsheet size={22}/></div>
         <div className="attendance-tools"><div className="attendance-search"><Search size={16}/><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Cari nama, kode, kelas..."/></div>
           {role !== "siswa" && <button className="attendance-secondary" onClick={()=>void exportRows(false)} disabled={exporting}><Download size={16}/> Excel</button>}
-          {(!isSelfService || isTeacher) && <button className="attendance-secondary" onClick={()=>window.print()}><Download size={16}/> PDF / Cetak</button>}
+            {(!isSelfService || isTeacher) && <><SchoolLetterheadPicker settings={schoolSettings} value={letterheadSlot} onChange={setLetterheadSlot}/><button className="attendance-secondary" onClick={()=>window.print()}><Download size={16}/> PDF / Cetak</button></>}
         </div>
         <div className="attendance-table-wrap"><table><thead><tr><th>Nama / ID</th><th>Jenis</th><th>Kelas</th><th>Status</th></tr></thead><tbody>
         {filtered.map(r=><tr key={r.id}><td><strong>{r.person_name}</strong><small>{r.person_identifier}</small>{r.session_type === "subject" && <small className="attendance-row-subject">{r.subject || "Mapel"}{r.teacher_name ? ` · ${r.teacher_name}` : ""}</small>}</td><td>{r.person_type==="siswa"?"Siswa":"Guru/Tendik"}</td><td>{r.class_name || "—"}</td><td><span className={`attendance-status status-${r.status}`}>{r.session_type === "school_departure" ? "Pulang" : statusLabel(r.status)}</span></td></tr>)}

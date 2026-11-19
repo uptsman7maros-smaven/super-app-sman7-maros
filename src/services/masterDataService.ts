@@ -19,13 +19,39 @@ export type MasterIdentity = {
 type MasterIdentityRow = MasterIdentity;
 
 export type SchoolSettings = {
-  id: string;
+  id: number;
   school_name: string;
   npsn: string;
   academic_year: string;
   logo_url: string;
   letterhead: string;
+  logo_url_2: string;
+  letterhead_2: string;
 };
+
+export type SchoolLetterhead = Pick<SchoolSettings, "school_name" | "npsn" | "logo_url" | "letterhead">;
+export type LetterheadSlot = "1" | "2";
+
+export function getSchoolLetterhead(
+  settings: Pick<SchoolSettings, "school_name" | "npsn" | "logo_url" | "letterhead" | "logo_url_2" | "letterhead_2"> | null,
+  slot: LetterheadSlot,
+): SchoolLetterhead {
+  if (!settings) {
+    return { school_name: "SMAN 7 Maros", npsn: "", logo_url: "", letterhead: "" };
+  }
+  return {
+    school_name: settings.school_name,
+    npsn: settings.npsn,
+    logo_url: slot === "2" ? settings.logo_url_2 : settings.logo_url,
+    letterhead: slot === "2" ? settings.letterhead_2 : settings.letterhead,
+  };
+}
+
+export function hasAlternateSchoolLetterhead(
+  settings: Pick<SchoolSettings, "logo_url_2" | "letterhead_2"> | null,
+) {
+  return Boolean(settings?.logo_url_2.trim() || settings?.letterhead_2.trim());
+}
 
 export type AcademicYear = {
   id: string;
@@ -118,7 +144,7 @@ export async function loadSchoolContextData(
     loadIdentity(account),
     supabase
       .from("school_settings")
-      .select("id, school_name, npsn, academic_year, logo_url, letterhead")
+      .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2")
       .order("id")
       .limit(1)
       .maybeSingle(),

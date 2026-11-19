@@ -10,6 +10,8 @@ import SectionForm from "./features/kesiswaan-bk/components/SectionForm";
 import StatsHeader from "./features/kesiswaan-bk/components/StatsHeader";
 import StudentProfileDrawer from "./features/kesiswaan-bk/components/StudentProfileDrawer";
 import CounselingWorkflowPanel, { type CounselingWorkspaceTab } from "./features/kesiswaan-bk/components/CounselingWorkflowPanel";
+import { SchoolLetterheadPicker } from "./components/shared/SchoolLetterheadPicker";
+import { getSchoolLetterhead, type LetterheadSlot } from "./services/masterDataService";
 import { SECTION_BY_KEY, SECTION_CONFIGS } from "./features/kesiswaan-bk/constants";
 import {
   deleteSectionRecord,
@@ -94,13 +96,20 @@ export default function KesiswaanBK({
   const [students, setStudents] = useState<StudentOption[]>([]);
   const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
   const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [letterheadSlot, setLetterheadSlot] = useState<LetterheadSlot>("1");
   const [schoolHeader, setSchoolHeader] = useState<SchoolHeader>({
     school_name: "SMAN 7 Maros",
     npsn: "",
     letterhead: "",
     academic_year: "",
     logo_url: "",
+    letterhead_2: "",
+    logo_url_2: "",
   });
+  const printSchoolHeader = useMemo(() => ({
+    ...schoolHeader,
+    ...getSchoolLetterhead(schoolHeader, letterheadSlot),
+  }), [letterheadSlot, schoolHeader]);
   const [rows, setRows] = useState<KbRow[]>([]);
   const [count, setCount] = useState(0);
   const [filters, setFilters] = useState<QueryFilters>(EMPTY_FILTERS);
@@ -572,6 +581,9 @@ export default function KesiswaanBK({
 
       {view === "data" && canSeeSection && <>
         {isSensitive && <div className="kb-privacy">🔐 Agenda BK memuat informasi privat. Catatan rahasia hanya terlihat bagi Guru BK pengasuh dan Super Admin.</div>}
+        {role !== "siswa" && <div className="kb-document-output-options">
+          <SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} />
+        </div>}
         {isSensitive && !canSeePrivateNotes ? (
           <section className="kb-panel">
             <div className="kb-panel-heading"><div><span className="kb-eyebrow">RINGKASAN SAJA</span><h2>Status kasus BK</h2></div></div>
@@ -616,7 +628,7 @@ export default function KesiswaanBK({
             onExport={() => void exportCsv()}
             onExportExcel={() => void exportExcel()}
             onPrint={() => window.print()}
-            schoolHeader={schoolHeader}
+            schoolHeader={printSchoolHeader}
           />
         </>}
       </>}

@@ -89,6 +89,7 @@ import {
   type DashboardFeed,
   type DashboardNotification,
 } from "./services/dashboardService";
+import { createModuleRegistry } from "./services/moduleRegistry";
 
 // Keep the existing animation-oriented JSX usable without requiring framer-motion.
 const motionComponents: Record<string, ComponentType<Record<string, unknown>>> = {};
@@ -424,6 +425,12 @@ const roleAccess: Record<string, string[]> = {
     "Absensi Digital",
   ],
 };
+
+const appModuleCatalog = createModuleRegistry([
+  ...apps.map(app => app.name),
+  ...navGroups.flatMap(group => group.items.map(item => item.label)),
+  ...Object.keys(moduleStatuses),
+]);
 
 type DashboardQuickAction = {
   module: string;
@@ -1957,11 +1964,12 @@ function openPage(name: string) {
   }
 }
 const handleModuleOpen = (name: string) => {
+   const isSuperAdmin = currentUser?.role === "super_admin";
    if (name === "Dashboard") {
     openPage("Dashboard");
     return;
   }
-   if (moduleEnabledOverrides[name] === false) {
+    if (moduleEnabledOverrides[name] === false && !isSuperAdmin) {
      setToast(`${name} sedang dinonaktifkan melalui Pengaturan & Integrasi.`);
      return;
    }
@@ -1986,6 +1994,7 @@ const isDashboard = activePage === "Dashboard";
 const roleAllowedPages = roleAccess[currentUser?.role ?? ""] ?? [
   "Dashboard",
 ];
+const isSuperAdmin = currentUser?.role === "super_admin";
 const showAttendanceAndLettersDashboard = [
   "guru",
   "kepala_sekolah",
@@ -1994,7 +2003,7 @@ const showAttendanceAndLettersDashboard = [
   "tendik",
 ].includes(currentUser?.role ?? "");
 const allowedPages = roleAllowedPages.filter((name) =>
-  name === "Dashboard" || name === "Pengaturan" || moduleEnabledOverrides[name] !== false
+  name === "Dashboard" || name === "Pengaturan" || isSuperAdmin || moduleEnabledOverrides[name] !== false
 );
 const quickActions = (dashboardQuickActions[currentUser?.role ?? ""] ?? [])
   .filter((action) => allowedPages.includes(action.module));
@@ -2010,10 +2019,10 @@ const activityItems: DashboardActivity[] = dashboardActivities.length
 const unreadNotificationCount = dashboardNotifications.filter((item) => item.unread).length;
 
 useEffect(() => {
-  if (activePage !== "Dashboard" && moduleEnabledOverrides[activePage] === false) {
+  if (!isSuperAdmin && activePage !== "Dashboard" && moduleEnabledOverrides[activePage] === false) {
     setActivePage("Dashboard");
   }
-}, [activePage, moduleEnabledOverrides]);
+}, [activePage, isSuperAdmin, moduleEnabledOverrides]);
 
 const visibleNavGroups = navGroups
   .map((group) => ({
@@ -2167,7 +2176,7 @@ if (maintenanceStatus?.is_active && currentUser.role !== "super_admin") {
   );
 }
 
-if (moduleEnabledOverrides[activePage] === false && activePage !== "Dashboard") {
+if (!isSuperAdmin && moduleEnabledOverrides[activePage] === false && activePage !== "Dashboard") {
   return (
     <main className="module-fullscreen">
       <MaintenanceBanner />
@@ -2200,7 +2209,7 @@ const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" onOpenParentLetter={openParentLetter} />,
   "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} />,
   "Laporan & Analitik": <LaporanAnalitik userRole={currentUser.role} />,
-  "Pengaturan": <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} />,
+  "Pengaturan": <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />,
 };
 
 if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[activePage]) {
@@ -2651,7 +2660,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
      </motion.div>
 ) : activePage === "Pengaturan" ? (
       <motion.div key="pengaturan-integrasi" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-        <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} />
+        <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />
       </motion.div>
 ) : activePage === "Pengguna" ? (
   <motion.div
