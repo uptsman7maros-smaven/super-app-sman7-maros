@@ -21,6 +21,7 @@ type Page = 'dashboard' | 'create' | 'requests' | 'approvals' | 'issued' | 'arch
 type LetterRole = 'administrator' | 'operator' | 'guru_staf' | 'pemohon' | 'staf_tu' | 'kepala_tu' | 'kepala_sekolah'
 type LetterStatus = 'draft' | 'submitted' | 'in_review' | 'revision' | 'resubmitted' | 'approved' | 'awaiting_number' | 'issued' | 'rejected' | 'archived'
 type PaperSize = 'A4' | 'F4'
+type LogoPosition = 'left' | 'top'
 type TemplateField = {
   name: string
   label: string
@@ -35,7 +36,7 @@ type LetterTemplate = {
   subject?: string | null
   html_content?: string
   source_file_path?: string | null
-  page_settings?: { size?: PaperSize; margin_mm?: number }
+  page_settings?: { size?: PaperSize; margin_mm?: number; logo_position?: LogoPosition }
   requires_principal_approval?: boolean
   is_active?: boolean
   category?: { name: string; code?: string } | null
@@ -203,10 +204,10 @@ function renderTemplateContent(
   )
 }
 
-function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlot) {
+function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlot, logoPosition: LogoPosition) {
   const header = getSchoolLetterhead(settings, slot)
   const safeImageUrl = (url: string) => /^(?:https?:\/\/|\/(?!\/))/i.test(url) ? escapeHtml(url) : ''
-  return `<div class="letter-document-header kop-${header.layout}">
+  return `<div class="letter-document-header kop-${header.layout} logo-${logoPosition}">
     <img class="province-logo" src="${safeImageUrl(header.province_logo_url)}" alt="">
     <div class="letter-document-heading">
       <p>PEMERINTAH PROVINSI SULAWESI SELATAN</p>
@@ -301,6 +302,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [session,setSession]=useState<Session | null>(null), [role,setRole]=useState<LetterRole | null>(null)
   const [page,setPage]=useState<Page>('dashboard')
   const [letterheadSlot,setLetterheadSlot]=useState<LetterheadSlot>('1')
+  const [logoPosition,setLogoPosition]=useState<LogoPosition>('top')
   const [loading,setLoading]=useState(true), [sessionReady,setSessionReady]=useState(false), [busy,setBusy]=useState(false), [error,setError]=useState('')
   const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([])
   const [categories,setCategories]=useState<LetterCategory[]>([])
@@ -643,6 +645,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   function openNewTemplate(){
     setEditingTemplateId(null)
     setTemplateSourceFilePath('')
+    setLogoPosition('top')
     setTemplateFields([])
     setTokenDraft('')
     setForm({
@@ -661,6 +664,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   function editTemplate(template:LetterTemplate){
     setEditingTemplateId(template.id)
     setTemplateSourceFilePath(template.source_file_path||'')
+    setLogoPosition(template.page_settings?.logo_position||'top')
     setTemplateFields(template.fields_schema||[])
     setForm({
       name:template.name,
@@ -702,7 +706,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       category_id:String(form.category_id||'')||null,
       subject:String(form.subject||'').trim()||String(form.name||'').trim(),
       html_content:sanitizeTemplateHtml(html),
-      page_settings:{size:normalizePaperSize(form.paper_size),margin_mm:22},
+      page_settings:{size:normalizePaperSize(form.paper_size),margin_mm:22,logo_position:logoPosition},
       fields_schema:fields,
       requires_principal_approval:form.requires_principal_approval==='true',
       is_active:form.is_active!=='false',
@@ -793,7 +797,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(!html)return null
     return {
       html:renderTemplateContent(html,requestDocumentValues(request),fields),
-      header:makeLetterheadHtml(schoolSettings,letterheadSlot),
+      header:makeLetterheadHtml(schoolSettings,letterheadSlot,activeTemplate?.page_settings?.logo_position||request.letter_templates?.page_settings?.logo_position||'top'),
       paperSize:normalizePaperSize(activeTemplate?.page_settings?.size||request.letter_templates?.page_settings?.size),
       isDraft:request.status!=='issued',
       title:request.subject,
@@ -804,8 +808,27 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(!documentMarkup){notify('Konten template surat tidak tersedia untuk pratinjau.');return}
     const watermark=documentMarkup.isDraft?'<div class="letter-watermark">KONSEP / BELUM BERNOMOR</div>':''
     const documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(documentMarkup.title)}</title><style>
-      @page{size:${documentMarkup.paperSize==='F4'?'215mm 330mm':'A4'};margin:20mm}*{box-sizing:border-box}body{margin:0;color:#171717;font:12pt/1.55 "Times New Roman",serif}.letter-page{position:relative;min-height:${documentMarkup.paperSize==='F4'?'290mm':'257mm'}}.letter-document-header{display:grid;grid-template-columns:24mm minmax(0,1fr) 24mm;align-items:center;gap:4mm;margin-bottom:8mm;text-align:center}.letter-document-header img{width:22mm;height:25mm;object-fit:contain}.letter-document-heading p,.letter-document-heading h2{margin:0}.letter-document-heading p:first-child{font-size:11pt}.letter-document-heading p:nth-child(2){font-size:13pt;font-weight:bold}.letter-document-heading h2{font-size:14pt}.letter-document-heading p:last-child{margin-top:2mm;font-size:8pt}.letter-document-rules{grid-column:1/-1;width:100%;height:2mm;border-top:2pt solid #111;border-bottom:.8pt solid #111}.letter-template-body{font:12pt/1.5 "Times New Roman",serif}.letter-template-body table{width:100%;border-collapse:collapse}.letter-template-body th,.letter-template-body td{padding:1.5mm;text-align:left;vertical-align:top}.letter-watermark{position:fixed;inset:42% 0 auto;z-index:-1;color:#8883;font:700 28pt Arial,sans-serif;text-align:center;transform:rotate(-25deg)}img{max-width:100%}
-      </style></head><body><main class="letter-page">${watermark}${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></main></body></html>`
+      @media print{@page{size:${documentMarkup.paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:20mm}}
+      *{box-sizing:border-box}
+      body{margin:0;color:#000;font:12pt/1.55 "Times New Roman",serif}
+      .letter-page{position:relative;min-height:${documentMarkup.paperSize==='F4'?'290mm':'257mm'}}
+      .letter-paper-preview{color:#000;font-family:"Times New Roman",serif}
+      .letter-document-header{display:grid;grid-template-columns:24mm minmax(0,1fr) 24mm;align-items:center;gap:4mm;margin-bottom:8mm;text-align:center}
+      .letter-document-header img{width:22mm;height:25mm;object-fit:contain}
+      .letter-document-header.logo-top:not(.kop-2){grid-template-columns:minmax(0,1fr);gap:0}
+      .letter-document-header.logo-top:not(.kop-2) .province-logo{grid-column:1;grid-row:1;justify-self:center;width:14mm;height:14mm;margin-bottom:1mm}
+      .letter-document-header.logo-top:not(.kop-2) .letter-document-heading{grid-column:1;grid-row:2}
+      .letter-document-header.logo-top:not(.kop-2) .letter-document-rules{grid-column:1;grid-row:3}
+      .letter-document-heading p,.letter-document-heading h2{margin:0}
+      .letter-document-heading p:first-child{font-size:11pt}
+      .letter-document-heading p:nth-child(2){font-size:13pt;font-weight:bold}
+      .letter-document-heading h2{font-size:14pt}
+      .letter-document-heading p:last-child{margin-top:2mm;font-size:8pt}
+      .letter-document-rules{grid-column:1/-1;width:100%;height:2mm;border-top:2pt solid #111;border-bottom:.8pt solid #111}
+      .letter-template-body{font:12pt/1.5 "Times New Roman",serif;color:#000}
+      .letter-watermark{position:fixed;inset:42% 0 auto;z-index:-1;color:#8883;font:700 28pt Arial,sans-serif;text-align:center;transform:rotate(-25deg)}
+      img{max-width:100%}
+      </style></head><body><main class="letter-page letter-paper-preview">${watermark}${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></main></body></html>`
     const printWindow=window.open('','_blank')
     if(!printWindow){notify('Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.');return}
     printWindow.opener=null
@@ -965,7 +988,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
             {selectedTemplateRecord?<FitLetterPreview
               paperSize={normalizePaperSize(selectedTemplateRecord.page_settings?.size)}
               watermark="KONSEP / BELUM BERNOMOR"
-              html={`${makeLetterheadHtml(schoolSettings,letterheadSlot)}<article class="letter-template-body">${livePreviewHtml}</article>`}
+              html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,selectedTemplateRecord.page_settings?.logo_position||'top')}<article class="letter-template-body">${livePreviewHtml}</article>`}
               className="request-fit-preview"
             />:<div className="letter-preview-empty"><FileText size={28}/><strong>Pilih format surat</strong><span>Pratinjau dokumen akan muncul di sini.</span></div>}
           </aside>
@@ -988,7 +1011,6 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           <label>Nama format<input required value={form.name||''} onChange={event=>setForm(previous=>({...previous,name:event.target.value}))}/></label>
           <label>Deskripsi<input value={form.description||''} onChange={event=>setForm(previous=>({...previous,description:event.target.value}))}/></label>
           <label>Kategori<select value={form.category_id||''} onChange={event=>setForm(previous=>({...previous,category_id:event.target.value}))}><option value="">Umum</option>{categories.map(category=><option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-          <label>Ukuran kertas<select value={normalizePaperSize(form.paper_size)} onChange={event=>setForm(previous=>({...previous,paper_size:normalizePaperSize(event.target.value)}))}><option value="A4">A4 · 210 × 297 mm</option><option value="F4">F4 · 215 × 330 mm</option></select></label>
           <label className="template-approval-toggle"><input type="checkbox" checked={form.requires_principal_approval==='true'} onChange={event=>setForm(previous=>({...previous,requires_principal_approval:String(event.target.checked)}))}/> Memerlukan persetujuan Kepala Sekolah</label>
           <label className="template-approval-toggle"><input type="checkbox" checked={form.is_active!=='false'} onChange={event=>setForm(previous=>({...previous,is_active:String(event.target.checked)}))}/> Format aktif dan tersedia untuk pengajuan</label>
           <label className="template-file-upload"><Upload size={17}/><span>Unggah format DOCX / PDF</span><input type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" disabled={busy} onChange={event=>{void importTemplateFile(event.target.files?.[0]??null);event.target.value=''}}/></label>
@@ -1014,7 +1036,15 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
               </div>):<p className="hint">Belum ada token. Sisipkan token untuk membuat field pengajuan secara otomatis.</p>}
             </div>
           </div>
-          <div className="template-preview-column"><div className="template-studio-section-head"><div><strong>Pratinjau {normalizePaperSize(form.paper_size)}</strong><small>Satu halaman penuh · Kop dan isi surat mengikuti pilihan.</small></div><label className="template-preview-letterhead"><span>Kop surat</span><select aria-label="Pilih kop surat untuk pratinjau" value={letterheadSlot} onChange={event=>setLetterheadSlot(event.target.value as LetterheadSlot)}><option value="1">Kop Surat 1</option><option value="2">Kop Surat 2</option><option value="3">Kop Surat 3</option></select><Eye size={16}/></label></div><FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{},templateFields)}</article>`} className="template-studio-preview"/></div>
+          <div className="template-preview-column">
+            <div className="template-studio-section-head"><div><strong>Pratinjau {normalizePaperSize(form.paper_size)}</strong><small>Kop dan isi surat mengikuti pilihan.</small></div><Eye size={18}/></div>
+            <div className="template-preview-controls">
+              <label><span>Ukuran kertas</span><select aria-label="Ukuran kertas pratinjau" value={normalizePaperSize(form.paper_size)} onChange={event=>setForm(previous=>({...previous,paper_size:normalizePaperSize(event.target.value)}))}><option value="A4">A4 · 210 × 297 mm</option><option value="F4">F4 / Folio · 215 × 330 mm</option></select></label>
+              <label><span>Kop surat</span><select aria-label="Pilih kop surat untuk pratinjau" value={letterheadSlot} onChange={event=>setLetterheadSlot(event.target.value as LetterheadSlot)}><option value="1">Kop Surat 1</option><option value="2">Kop Surat 2</option><option value="3">Kop Surat 3</option></select></label>
+              <label><span>Posisi logo{letterheadSlot==='2'?' · Kop 2 tetap kiri-kanan':''}</span><select aria-label="Pilih posisi logo untuk kop surat" value={logoPosition} disabled={letterheadSlot==='2'} title={letterheadSlot==='2'?'Kop Surat 2 menggunakan susunan dua logo kiri-kanan.':''} onChange={event=>setLogoPosition(event.target.value as LogoPosition)}><option value="top">Di atas · kecil</option><option value="left">Di kiri</option></select></label>
+            </div>
+            <FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,logoPosition)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{},templateFields)}</article>`} className="template-studio-preview"/>
+          </div>
         </div>
         <div className="form-actions"><button type="button" className="secondary" onClick={()=>setModal(null)}>Batal</button><button type="submit" className="primary" disabled={busy||!canManageTemplates}>{busy?'Menyimpan...':'Simpan Format Surat'}</button></div>
       </form>
@@ -1105,7 +1135,7 @@ function FitLetterPreview({paperSize,html,watermark,className=''}:{paperSize:Pap
     <div className="letter-fit-frame" style={{width:widthPx*scale,height:heightPx*scale}}>
       <div className={`letter-paper letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,transform:`scale(${scale})`}}>
         {watermark&&<span className="letter-watermark">{watermark}</span>}
-        <div className="letter-document-render" dangerouslySetInnerHTML={{__html:html}}/>
+        <div className="letter-document-render letter-paper-preview" dangerouslySetInnerHTML={{__html:html}}/>
       </div>
     </div>
   </div>

@@ -159,14 +159,19 @@
 .letter-app .letter-preview-empty{display:flex;min-height:300px;align-items:center;justify-content:center;flex-direction:column;gap:10px;border:1px dashed #dfe4f1;border-radius:12px;color:#93a0b3}
 .letter-app .letter-preview-empty strong{color:#5d6e87;font-size:12px}
 .letter-app .letter-preview-empty span{font-size:10px}
-.letter-app .letter-paper{position:relative;width:210mm;max-width:100%;min-height:297mm;margin:0 auto;padding:18mm 17mm;background:#fff;color:#161616;box-shadow:0 8px 26px #18274418;overflow:hidden}
+.letter-app .letter-paper{position:relative;width:210mm;max-width:100%;min-height:297mm;margin:0 auto;padding:18mm 17mm;background:#fff;color:#000;box-shadow:0 8px 26px #18274418;overflow:hidden}
 .letter-app .letter-paper.paper-f4{width:215mm;min-height:330mm}
 .letter-app .letter-fit-preview{display:flex;min-width:0;min-height:0;flex:1;align-items:center;justify-content:center;overflow:hidden}
 .letter-app .letter-fit-frame{position:relative;flex:none}
 .letter-app .letter-fit-sheet{position:absolute;top:0;left:0;max-width:none;min-height:0;margin:0;transform-origin:top left}
-.letter-app .letter-document-render{position:relative;z-index:1;font:12pt/1.5 "Times New Roman",serif;color:#111}
+.letter-app .letter-document-render{position:relative;z-index:1;font:12pt/1.5 "Times New Roman",serif;color:#000}
+.letter-app .letter-paper-preview{color:#000;font-family:"Times New Roman",serif}
 .letter-app .letter-document-header{display:grid;grid-template-columns:22mm minmax(0,1fr) 22mm;align-items:center;gap:4mm;margin-bottom:8mm;text-align:center}
 .letter-app .letter-document-header img{width:20mm;height:23mm;object-fit:contain}
+.letter-app .letter-document-header.logo-top:not(.kop-2){grid-template-columns:minmax(0,1fr);gap:0}
+.letter-app .letter-document-header.logo-top:not(.kop-2) .province-logo{grid-column:1;grid-row:1;justify-self:center;width:14mm;height:14mm;margin-bottom:1mm}
+.letter-app .letter-document-header.logo-top:not(.kop-2) .letter-document-heading{grid-column:1;grid-row:2}
+.letter-app .letter-document-header.logo-top:not(.kop-2) .letter-document-rules{grid-column:1;grid-row:3}
 .letter-app .letter-document-heading p,.letter-app .letter-document-heading h2{margin:0}
 .letter-app .letter-document-heading p:first-child{font-size:10pt}
 .letter-app .letter-document-heading p:nth-child(2){font-size:12pt;font-weight:bold}
@@ -177,6 +182,12 @@
 .letter-app .letter-template-body p{margin:0 0 4mm}
 .letter-app .letter-template-body table{width:100%;border-collapse:collapse}
 .letter-app .letter-template-body th,.letter-app .letter-template-body td{padding:1.5mm;text-align:left;vertical-align:top}
+.letter-app .letter-paper-preview table{width:revert;min-width:0;border-collapse:revert;text-align:revert}
+.letter-app .letter-paper-preview th,.letter-app .letter-paper-preview td{color:#000;font-family:inherit;font-size:inherit;font-weight:revert;letter-spacing:revert;text-align:revert;text-transform:revert;vertical-align:revert;padding:revert;border:revert;background:revert}
+.letter-app .letter-paper-preview tbody tr:last-child td{border-bottom:revert}
+.letter-app .letter-paper-preview tbody tr:hover{background:revert}
+.letter-app .letter-paper-preview td b{display:revert;color:inherit;font-size:inherit}
+.letter-app .letter-paper-preview td small{display:revert;color:inherit;font-size:inherit;margin:revert}
 .letter-app .letter-watermark{position:absolute;z-index:2;top:42%;right:0;left:0;color:#8883;font:700 28pt Arial,sans-serif;text-align:center;transform:rotate(-25deg);pointer-events:none}
 .letter-app .template-card.is-inactive{opacity:.64}
 .letter-app .template-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
@@ -216,6 +227,10 @@
 .letter-app .template-field-schema>strong{overflow:hidden;color:#5c51b7;font:600 9px ui-monospace,monospace;text-overflow:ellipsis}
 .letter-app .template-field-schema>label{display:flex;align-items:center;gap:4px;color:#7a8799;font-size:8px;white-space:nowrap}
 .letter-app .template-preview-column{display:flex;min-width:0;height:58vh;max-height:58vh;flex-direction:column;overflow:hidden}
+.letter-app .template-preview-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px}
+.letter-app .template-preview-controls label{display:flex;min-width:0;flex-direction:column;gap:4px;color:#77869b;font-size:9px;font-weight:700}
+.letter-app .template-preview-controls select{width:100%;min-width:0;min-height:32px;border:1px solid #e1e8f0;border-radius:7px;background:#fff;padding:5px 7px;color:#45566c;font-size:9px}
+.letter-app .template-preview-controls select:disabled{background:#f2f4f8;color:#8a94a5;cursor:not-allowed}
 .letter-app .template-studio-preview{min-height:0}
 .letter-app .modal-card.letter-action-modal{width:min(1120px,96vw)}
 .letter-app .letter-action-preview{display:flex;height:48vh;max-height:48vh;margin-bottom:14px;overflow:hidden;background:#f1f3f8;padding:10px}
@@ -234,4 +249,4 @@
 .letter-app .notification-row>span{min-width:0}
 .letter-app .notification-row:hover{background:#f7f8ff}
 @media(max-width:1000px){.letter-app .request-create-layout{grid-template-columns:1fr}.letter-app .request-live-preview{position:static;height:70vh;max-height:none}.letter-app .template-studio-workspace{grid-template-columns:1fr}.letter-app .template-editor-column{max-height:none;overflow:visible;padding-right:0}.letter-app .template-preview-column{height:560px;max-height:560px}.letter-app .letter-action-preview{height:48vh;max-height:48vh}}
-@media(max-width:700px){.letter-app .modal-card.template-modal,.letter-app .modal-card.letter-action-modal,.letter-app .modal-card.letter-preview-modal{width:100%;max-height:96vh;max-height:96dvh;padding:16px}.letter-app .template-modal>.modal-head{margin-bottom:10px;padding-bottom:10px}.letter-app .template-studio-fields{grid-template-columns:1fr}.letter-app .template-studio-fields>.template-source-path{grid-column:auto}.letter-app .template-custom-token{align-items:stretch;flex-direction:column}.letter-app .template-field-schema{grid-template-columns:minmax(65px,.6fr) minmax(90px,1fr);}.letter-app .template-field-schema>label{grid-column:span 2}.letter-app .letter-action-modal .modal-form{grid-template-columns:1fr}.letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:1}.letter-app .letter-paper{width:100%;min-height:230mm;padding:12mm 10mm}.letter-app .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}.letter-app .letter-document-header img{width:15mm;height:18mm}.letter-app .letter-document-heading p:first-child{font-size:7pt}.letter-app .letter-document-heading p:nth-child(2){font-size:8pt}.letter-app .letter-document-heading h2{font-size:9pt}.letter-app .letter-document-heading p:last-child{font-size:6pt}.letter-app .letter-document-render,.letter-app .letter-template-body{font-size:9pt}.letter-app .letter-preview-modal .letter-paper{max-height:67vh}}
+@media(max-width:700px){.letter-app .modal-card.template-modal,.letter-app .modal-card.letter-action-modal,.letter-app .modal-card.letter-preview-modal{width:100%;max-height:96vh;max-height:96dvh;padding:16px}.letter-app .template-modal>.modal-head{margin-bottom:10px;padding-bottom:10px}.letter-app .template-studio-fields{grid-template-columns:1fr}.letter-app .template-studio-fields>.template-source-path{grid-column:auto}.letter-app .template-custom-token{align-items:stretch;flex-direction:column}.letter-app .template-field-schema{grid-template-columns:minmax(65px,.6fr) minmax(90px,1fr);}.letter-app .template-field-schema>label{grid-column:span 2}.letter-app .template-preview-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.letter-app .letter-action-modal .modal-form{grid-template-columns:1fr}.letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:1}.letter-app .letter-paper{width:100%;min-height:230mm;padding:12mm 10mm}.letter-app .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}.letter-app .letter-document-header img{width:15mm;height:18mm}.letter-app .letter-document-heading p:first-child{font-size:7pt}.letter-app .letter-document-heading p:nth-child(2){font-size:8pt}.letter-app .letter-document-heading h2{font-size:9pt}.letter-app .letter-document-heading p:last-child{font-size:6pt}.letter-app .letter-document-render,.letter-app .letter-template-body{font-size:9pt}.letter-app .letter-preview-modal .letter-paper{max-height:67vh}}
