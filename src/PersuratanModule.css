@@ -160,6 +160,10 @@
 .letter-app .letter-preview-empty strong{color:#5d6e87;font-size:12px}
 .letter-app .letter-preview-empty span{font-size:10px}
 .letter-app .letter-paper{position:relative;width:210mm;max-width:100%;min-height:297mm;margin:0 auto;padding:18mm 17mm;background:#fff;color:#161616;box-shadow:0 8px 26px #18274418;overflow:hidden}
+.letter-app .letter-paper.paper-f4{width:215mm;min-height:330mm}
+.letter-app .letter-fit-preview{display:flex;min-width:0;min-height:0;flex:1;align-items:center;justify-content:center;overflow:hidden}
+.letter-app .letter-fit-frame{position:relative;flex:none}
+.letter-app .letter-fit-sheet{position:absolute;top:0;left:0;max-width:none;min-height:0;margin:0;transform-origin:top left}
 .letter-app .letter-document-render{position:relative;z-index:1;font:12pt/1.5 "Times New Roman",serif;color:#111}
 .letter-app .letter-document-header{display:grid;grid-template-columns:22mm minmax(0,1fr) 22mm;align-items:center;gap:4mm;margin-bottom:8mm;text-align:center}
 .letter-app .letter-document-header img{width:20mm;height:23mm;object-fit:contain}
@@ -208,29 +212,23 @@
 .letter-app .template-field-schema{display:grid;grid-template-columns:minmax(80px,.65fr) minmax(100px,1fr) minmax(100px,.9fr) auto;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #edf0f5}
 .letter-app .template-field-schema>strong{overflow:hidden;color:#5c51b7;font:600 9px ui-monospace,monospace;text-overflow:ellipsis}
 .letter-app .template-field-schema>label{display:flex;align-items:center;gap:4px;color:#7a8799;font-size:8px;white-space:nowrap}
-.letter-app .template-preview-column{display:flex;min-width:0;max-height:58vh;flex-direction:column;overflow:auto}
-.letter-app .template-letter-paper{width:100%;min-height:420px;padding:12mm 10mm}
-.letter-app .template-letter-paper .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}
-.letter-app .template-letter-paper .letter-document-header img{width:15mm;height:18mm}
-.letter-app .template-letter-paper .letter-document-heading p:first-child{font-size:7pt}
-.letter-app .template-letter-paper .letter-document-heading p:nth-child(2){font-size:8pt}
-.letter-app .template-letter-paper .letter-document-heading h2{font-size:9pt}
-.letter-app .template-letter-paper .letter-document-heading p:last-child{font-size:6pt}
-.letter-app .template-letter-paper .letter-template-body{font-size:9pt}
+.letter-app .template-preview-column{display:flex;min-width:0;height:58vh;max-height:58vh;flex-direction:column;overflow:hidden}
+.letter-app .template-studio-preview{min-height:0}
 .letter-app .modal-card.letter-action-modal{width:min(1120px,96vw)}
-.letter-app .letter-action-preview{max-height:48vh;margin-bottom:14px;overflow:auto;background:#f1f3f8;padding:10px}
-.letter-app .letter-action-preview .letter-paper{min-height:257mm;padding:14mm}
+.letter-app .letter-action-preview{display:flex;height:48vh;max-height:48vh;margin-bottom:14px;overflow:hidden;background:#f1f3f8;padding:10px}
 .letter-app .letter-action-modal .modal-form{display:grid;grid-template-columns:1fr 1fr;align-items:start}
 .letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:span 2}
 .letter-app .letter-action-modal .modal-form>button{justify-self:end}
 .letter-app .modal-card.letter-preview-modal{width:min(950px,96vw);background:#f1f3f8}
 .letter-app .letter-preview-modal .modal-head{padding:0 5px}
-.letter-app .letter-preview-modal .letter-paper{max-height:70vh;overflow:auto}
+.letter-app .letter-modal-fit-preview{height:min(72vh,850px);flex:none}
 .letter-app .letter-preview-actions{display:flex;justify-content:flex-end;margin-top:14px}
+.letter-app .request-live-preview{display:flex;height:calc(100vh - 128px);flex-direction:column}
+.letter-app .request-fit-preview{min-height:0;flex:1}
 .letter-app .request-admin-note{max-width:180px;color:#b66d36!important}
 .letter-app .notification-row{width:100%;border:0;background:transparent;text-align:left;cursor:pointer}
 .letter-app .notification-row.is-read{opacity:.62}
 .letter-app .notification-row>span{min-width:0}
 .letter-app .notification-row:hover{background:#f7f8ff}
-@media(max-width:1000px){.letter-app .request-create-layout{grid-template-columns:1fr}.letter-app .request-live-preview{position:static;max-height:none}.letter-app .template-studio-workspace{grid-template-columns:1fr}.letter-app .template-editor-column{max-height:none;overflow:visible;padding-right:0}.letter-app .template-preview-column{position:static;max-height:560px}}
+@media(max-width:1000px){.letter-app .request-create-layout{grid-template-columns:1fr}.letter-app .request-live-preview{position:static;height:70vh;max-height:none}.letter-app .template-studio-workspace{grid-template-columns:1fr}.letter-app .template-editor-column{max-height:none;overflow:visible;padding-right:0}.letter-app .template-preview-column{height:560px;max-height:560px}.letter-app .letter-action-preview{height:48vh;max-height:48vh}}
 @media(max-width:700px){.letter-app .modal-card.template-modal,.letter-app .modal-card.letter-action-modal,.letter-app .modal-card.letter-preview-modal{width:100%;max-height:96vh;max-height:96dvh;padding:16px}.letter-app .template-modal>.modal-head{margin-bottom:10px;padding-bottom:10px}.letter-app .template-studio-fields{grid-template-columns:1fr}.letter-app .template-studio-fields>.template-source-path{grid-column:auto}.letter-app .template-custom-token{align-items:stretch;flex-direction:column}.letter-app .template-field-schema{grid-template-columns:minmax(65px,.6fr) minmax(90px,1fr);}.letter-app .template-field-schema>label{grid-column:span 2}.letter-app .letter-action-modal .modal-form{grid-template-columns:1fr}.letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:1}.letter-app .letter-paper{width:100%;min-height:230mm;padding:12mm 10mm}.letter-app .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}.letter-app .letter-document-header img{width:15mm;height:18mm}.letter-app .letter-document-heading p:first-child{font-size:7pt}.letter-app .letter-document-heading p:nth-child(2){font-size:8pt}.letter-app .letter-document-heading h2{font-size:9pt}.letter-app .letter-document-heading p:last-child{font-size:6pt}.letter-app .letter-document-render,.letter-app .letter-template-body{font-size:9pt}.letter-app .letter-preview-modal .letter-paper{max-height:67vh}}
