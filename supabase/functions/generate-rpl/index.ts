@@ -226,23 +226,56 @@ Deno.serve(async request => {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: generationRequest,
-        signal: AbortSignal.timeout(45_000),
+        signal: AbortSignal.timeout(30_000),
       },
     );
-    const requestWithRetry = async (model: string) => {
+    const models = ["gemini-2.5-flash", "gemini-flash-latest"];
+    let response: Response | null = null;
+    let lastTransportError: unknown = null;
+    for (const [modelIndex, model] of models.entries()) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const response = await requestModel(model);
-        if (![502, 503, 504].includes(response.status) || attempt === 1) return response;
-        await response.body?.cancel();
-        await new Promise(resolve => setTimeout(resolve, 500));
+        try {
+          response = await requestModel(model);
+        } catch (error) {
+          lastTransportError = error;
+          const errorName = error instanceof Error ? error.name : "UnknownError";
+          const errorMessage = error instanceof Error
+            ? error.message.replace(apiKey, "[redacted]").replace(/\s+/g, " ").slice(0, 200)
+            : "";
+          console.error("Gemini request transport failure", { model, attempt: attempt + 1, errorName, errorMessage });
+          if (attempt === 0) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+          }
+          break;
+        }
+        if ([502, 503, 504].includes(response.status) && attempt === 0) {
+          await response.body?.cancel();
+          response = null;
+          await new Promise(resolve => setTimeout(resolve, 500));
+          continue;
+        }
+        break;
       }
-      throw new Error("Permintaan Gemini tidak menghasilkan respons.");
-    };
-    let response = await requestWithRetry("gemini-2.5-flash");
-    if ([404, 502, 503, 504].includes(response.status)) {
-      console.warn("Gemini 2.5 Flash tidak tersedia sementara; mencoba alias Gemini Flash terbaru.");
-      await response.body?.cancel();
-      response = await requestWithRetry("gemini-flash-latest");
+
+      if (response && [404, 502, 503, 504].includes(response.status) && modelIndex < models.length - 1) {
+        console.warn("Gemini model unavailable; trying fallback model.", { model, status: response.status });
+        await response.body?.cancel();
+        response = null;
+        continue;
+      }
+      if (response) break;
+    }
+
+    if (!response) {
+      const errorName = lastTransportError instanceof Error ? lastTransportError.name : "";
+      const timedOut = errorName === "TimeoutError" || errorName === "AbortError";
+      return jsonResponse({
+        code: timedOut ? "GEMINI_TIMEOUT" : "GEMINI_CONNECTION_FAILED",
+        error: timedOut
+          ? "Gemini tidak merespons setelah dicoba ulang. Coba lagi beberapa saat atau gunakan template RPL bawaan."
+          : "Koneksi Supabase ke Gemini gagal setelah dicoba ulang. Periksa koneksi layanan dan coba lagi.",
+      }, 503);
     }
     const result: unknown = await response.json().catch(() => null);
     if (!response.ok) {
