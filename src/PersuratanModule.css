@@ -201,6 +201,9 @@
 .letter-app .template-studio-section-head strong{color:#31445f;font-size:11px}
 .letter-app .template-studio-section-head small{color:#8794a5;font-size:9px;font-weight:400}
 .letter-app .template-studio-section-head>span{font-size:9px;color:#8290a2}
+.letter-app .template-preview-letterhead{display:flex;flex:none;align-items:center;gap:5px;color:#77869b;font-size:9px;font-weight:700}
+.letter-app .template-preview-letterhead select{max-width:118px;min-height:30px;border:1px solid #e1e8f0;border-radius:7px;background:#fff;padding:5px 7px;color:#45566c;font-size:9px}
+.letter-app .template-preview-letterhead svg{flex:none;color:#5d54b5}
 .letter-app .template-token-buttons{display:flex;flex-wrap:wrap;gap:6px}
 .letter-app .template-token-buttons button{padding:6px 8px;border:1px solid #e3e1f4;border-radius:7px;background:#f4f2ff;color:#5a50b2;font:600 9px ui-monospace,monospace}
 .letter-app .template-token-buttons button:hover{background:#e8e5ff}
