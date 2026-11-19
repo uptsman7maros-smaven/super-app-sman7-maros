@@ -213,26 +213,70 @@ Deno.serve(async request => {
     },
     required: ["judul_topik", "tujuan_umum", "tujuan_khusus", "metode_teknik", "media_alat", "materi_pokok", "tahap_awal", "tahap_inti", "tahap_penutup", "evaluasi_proses", "evaluasi_hasil"],
   };
+  const generationRequest = JSON.stringify({
+    systemInstruction: { parts: [{ text: "Anda membantu Guru BK menyusun RPL pendidikan umum. Jangan mengolah data pribadi atau kasus nyata siswa." }] },
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: 5500, responseMimeType: "application/json", responseSchema, temperature: 0.35 },
+  });
 
   try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: "Anda membantu Guru BK menyusun RPL pendidikan umum. Jangan mengolah data pribadi atau kasus nyata siswa." }] },
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 5500, responseMimeType: "application/json", responseSchema, temperature: 0.35 },
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!response.ok) {
-      console.error("Generate-rpl Gemini gagal dengan status", response.status);
-      return jsonResponse({
-        code: response.status === 429 ? "GEMINI_RATE_LIMIT" : "GEMINI_ERROR",
-        error: response.status === 429 ? "Kuota AI sedang penuh. Coba lagi beberapa saat." : "Gemini gagal menyusun RPL. Gunakan template bawaan atau coba kembali.",
-      }, response.status === 429 ? 429 : 502);
+    const requestModel = (model: string) => fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: generationRequest,
+        signal: AbortSignal.timeout(45_000),
+      },
+    );
+    let response = await requestModel("gemini-2.5-flash");
+    if (response.status === 404) {
+      console.warn("Gemini 2.5 Flash tidak tersedia; mencoba alias Gemini Flash terbaru.");
+      response = await requestModel("gemini-flash-latest");
     }
-    const result: unknown = await response.json();
+    const result: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const providerError = isRecord(result) && isRecord(result.error) ? result.error : {};
+      const providerMessage = typeof providerError.message === "string"
+        ? providerError.message.replace(/AIza[0-9A-Za-z_-]{20,}/g, "[redacted]").replace(/\s+/g, " ").slice(0, 320)
+        : "";
+      const providerStatus = typeof providerError.status === "string" ? providerError.status : "";
+      const providerCode = typeof providerError.code === "number" ? providerError.code : null;
+      console.error("Generate-rpl Gemini HTTP error", { httpStatus: response.status, providerStatus, providerCode });
+
+      if (response.status === 429) {
+        return jsonResponse({ code: "GEMINI_RATE_LIMIT", error: "Kuota AI sedang penuh. Coba lagi beberapa saat." }, 429);
+      }
+      if (/API key not valid|API_KEY_INVALID/i.test(providerMessage)) {
+        return jsonResponse({
+          code: "GEMINI_KEY_INVALID",
+          error: "Kunci Gemini tidak valid. Periksa GEMINI_API_KEY di Supabase dan pastikan Generative Language API diaktifkan.",
+        }, 502);
+      }
+      if (response.status === 403 || response.status === 401) {
+        return jsonResponse({
+          code: "GEMINI_PERMISSION_DENIED",
+          error: providerMessage
+            ? `Akses Gemini ditolak: ${providerMessage}`
+            : "Akses Gemini ditolak. Periksa izin API key dan akses ke model Gemini.",
+        }, 502);
+      }
+      if (response.status === 400) {
+        return jsonResponse({
+          code: "GEMINI_REQUEST_INVALID",
+          error: providerMessage
+            ? `Gemini menolak permintaan: ${providerMessage}`
+            : "Gemini menolak format permintaan. Periksa konfigurasi model dan skema RPL.",
+        }, 502);
+      }
+      if (response.status === 404) {
+        return jsonResponse({ code: "GEMINI_MODEL_UNAVAILABLE", error: "Model Gemini tidak ditemukan atau tidak tersedia untuk API key ini." }, 502);
+      }
+      return jsonResponse({
+        code: "GEMINI_ERROR",
+        error: `Gemini gagal menyusun RPL (HTTP ${response.status}). Gunakan template bawaan atau coba kembali.`,
+      }, 502);
+    }
     if (!isRecord(result) || !Array.isArray(result.candidates)) {
       return jsonResponse({ code: "INVALID_GEMINI_RESPONSE", error: "Respons Gemini tidak sesuai format." }, 502);
     }
