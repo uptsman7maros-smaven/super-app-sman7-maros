@@ -423,9 +423,18 @@ type DataIndukProps = { userRole?: string };
 
 export default function DataInduk({ userRole = "" }: DataIndukProps) {
   const canManageDataInduk = ["super_admin", "operator"].includes(userRole);
+  const canDeleteMasterData = userRole === "super_admin";
   const [activeMenu, setActiveMenu] =
     useState<MenuDataInduk>("siswa");
   const [search, setSearch] = useState("");
+  const [selectedMasterIds, setSelectedMasterIds] = useState<string[]>([]);
+  const [deletingSelectedMasterData, setDeletingSelectedMasterData] = useState(false);
+  const [selectedMasterDeleteError, setSelectedMasterDeleteError] = useState("");
+
+  useEffect(() => {
+    setSelectedMasterIds([]);
+    setSelectedMasterDeleteError("");
+  }, [activeMenu]);
 
   const [students, setStudents] = useState<Student[]>([]);
 const [loadingStudents, setLoadingStudents] = useState(false);
@@ -1026,6 +1035,32 @@ useEffect(() => {
         : userRole === "super_admin" && !hasAccount);
     return matchesSearch && matchesPosition && matchesStatus;
   });
+  const filteredClasses = classRows.filter((row) =>
+    `${row.name} ${row.academic_year_name} ${row.homeroom_teacher_name}`
+      .toLowerCase()
+      .includes(search.toLowerCase())
+  );
+  const selectableMasterIds = activeMenu === "siswa"
+    ? filteredStudents.map((student) => student.id)
+    : activeMenu === "guru"
+      ? filteredTeachers.map((teacher) => teacher.id)
+      : activeMenu === "kelas"
+        ? filteredClasses.map((row) => row.id)
+        : [];
+  const selectedMasterIdSet = new Set(selectedMasterIds);
+  const allVisibleMasterRowsSelected = selectableMasterIds.length > 0
+    && selectableMasterIds.every((id) => selectedMasterIdSet.has(id));
+  const someVisibleMasterRowsSelected = selectableMasterIds.some((id) => selectedMasterIdSet.has(id));
+  const toggleVisibleMasterSelection = () => {
+    setSelectedMasterIds((current) => allVisibleMasterRowsSelected
+      ? current.filter((id) => !selectableMasterIds.includes(id))
+      : [...new Set([...current, ...selectableMasterIds])]);
+  };
+  const toggleMasterRowSelection = (id: string) => {
+    setSelectedMasterIds((current) => current.includes(id)
+      ? current.filter((selectedId) => selectedId !== id)
+      : [...current, id]);
+  };
 
   const eligibleStudentAccountCount = filteredStudents.filter((student) =>
     student.status === "Active"
@@ -1529,6 +1564,114 @@ useEffect(() => {
     );
     if (auditWarning) setMasterNotice(`Kelas dihapus, tetapi audit gagal: ${auditWarning}`);
     setClassRows(prev => prev.filter(x => x.id !== row.id));
+  };
+
+  const handleDeleteSelectedMasterData = async () => {
+    if (!canDeleteMasterData || deletingSelectedMasterData) return;
+    setSelectedMasterDeleteError("");
+
+    const tableName = activeMenu === "siswa"
+      ? "students"
+      : activeMenu === "guru"
+        ? "teachers"
+        : activeMenu === "kelas"
+          ? "classes"
+          : null;
+    if (!tableName) return;
+
+    const selectedRows = activeMenu === "siswa"
+      ? students.filter((student) => selectedMasterIdSet.has(student.id))
+      : activeMenu === "guru"
+        ? teachers.filter((teacher) => selectedMasterIdSet.has(teacher.id))
+        : classRows.filter((row) => selectedMasterIdSet.has(row.id));
+    const selectedIds = selectedRows.map((row) => row.id);
+    if (!selectedIds.length) return;
+    if (selectedIds.length > 100) {
+      setSelectedMasterDeleteError("Penghapusan dibatasi 100 data per proses. Hapus pilihan terlebih dahulu, lalu pilih maksimal 100 data.");
+      return;
+    }
+
+    if (activeMenu === "kelas") {
+      const classesWithStudents = (selectedRows as ClassRow[]).filter((row) => row.student_count > 0);
+      if (classesWithStudents.length) {
+        setSelectedMasterDeleteError(
+          `Kelas masih memiliki siswa dan tidak dapat dihapus: ${classesWithStudents.map((row) => row.name).join(", ")}. Pindahkan siswa terlebih dahulu.`,
+        );
+        return;
+      }
+    }
+
+    const rowName = (row: Student | Teacher | ClassRow) =>
+      "full_name" in row ? row.full_name : row.name;
+    const names = selectedRows.map(rowName);
+    const itemLabel = activeMenu === "siswa" ? "siswa" : activeMenu === "guru" ? "data guru/tendik" : "kelas";
+    const relatedDataWarning = activeMenu === "siswa"
+      ? "\nAkun login/profil siswa tidak ikut dihapus. Data yang masih dirujuk layanan lain dapat menyebabkan penghapusan ditolak."
+      : activeMenu === "guru"
+        ? "\nAkun login/profil guru tidak ikut dihapus. Data yang masih dirujuk layanan lain dapat menyebabkan penghapusan ditolak."
+        : "\nKelas dengan siswa tidak bisa dihapus. Data akademik atau layanan lain yang masih merujuk kelas juga dapat menolak penghapusan.";
+    const namePreview = names.slice(0, 5).join(", ");
+    const moreNames = names.length > 5 ? ` dan ${names.length - 5} lainnya` : "";
+    if (!window.confirm(
+      `Hapus ${selectedIds.length} ${itemLabel} terpilih?\n\n${namePreview}${moreNames}${relatedDataWarning}\n\nPenghapusan tidak dapat dibatalkan.`,
+    )) return;
+
+    setDeletingSelectedMasterData(true);
+    setMasterNotice("");
+    try {
+      let deletedRows: Array<{ id: string }> | null = null;
+      let deleteError: { message: string } | null = null;
+      if (tableName === "students") {
+        const result = await supabase.from("students").delete().in("id", selectedIds).select("id");
+        deletedRows = result.data;
+        deleteError = result.error;
+      } else if (tableName === "teachers") {
+        const result = await supabase.from("teachers").delete().in("id", selectedIds).select("id");
+        deletedRows = result.data;
+        deleteError = result.error;
+      } else {
+        const result = await supabase.from("classes").delete().in("id", selectedIds).select("id");
+        deletedRows = result.data;
+        deleteError = result.error;
+      }
+      if (deleteError) throw deleteError;
+
+      const deletedIds = (deletedRows ?? []).map((row) => row.id);
+      if (!deletedIds.length) {
+        throw new Error("Tidak ada baris yang terhapus. Periksa hak akses Super Admin dan data yang masih terkait.");
+      }
+      const deletedIdSet = new Set(deletedIds);
+      if (tableName === "students") {
+        setStudents((current) => current.filter((student) => !deletedIdSet.has(student.id)));
+      } else if (tableName === "teachers") {
+        setTeachers((current) => current.filter((teacher) => !deletedIdSet.has(teacher.id)));
+        setTeacherAssignmentSummary((current) => current.filter((assignment) => !deletedIdSet.has(assignment.teacher_id)));
+      } else {
+        setClassRows((current) => current.filter((row) => !deletedIdSet.has(row.id)));
+        setClassReloadVersion((version) => version + 1);
+      }
+      setSelectedMasterIds((current) => current.filter((id) => !deletedIdSet.has(id)));
+
+      const deletedNames = selectedRows
+        .filter((row) => deletedIdSet.has(row.id))
+        .map(rowName);
+      const auditWarning = await logMasterChange(
+        `${itemLabel} dipilih dihapus`,
+        `${deletedIds.length} data: ${deletedNames.slice(0, 5).join(", ")}${deletedNames.length > 5 ? ` dan ${deletedNames.length - 5} lainnya` : ""}`,
+      );
+      setMasterNotice(
+        `${deletedIds.length} ${itemLabel} berhasil dihapus.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+      );
+      if (deletedIds.length !== selectedIds.length) {
+        setSelectedMasterDeleteError(
+          `Terhapus ${deletedIds.length} dari ${selectedIds.length} data. Data lain tidak dapat dihapus karena izin atau keterkaitan; periksa Riwayat Perubahan.`,
+        );
+      }
+    } catch (error) {
+      setSelectedMasterDeleteError(`Gagal menghapus data terpilih: ${formatSupabaseError(error)}`);
+    } finally {
+      setDeletingSelectedMasterData(false);
+    }
   };
 
   const openBulkMove = () => {
@@ -4551,6 +4694,68 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   {bulkAccountProgress.failed.length ? ` · ${bulkAccountProgress.failed.length} gagal` : ""}
                 </div>
               )}
+              {canDeleteMasterData && ["siswa", "guru", "kelas"].includes(activeMenu) && (
+                <div
+                  className="di-actions"
+                  style={{
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    marginTop: 12,
+                    padding: "10px 12px",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 10,
+                    background: "#f8fafc",
+                  }}
+                >
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={allVisibleMasterRowsSelected}
+                      ref={(element) => {
+                        if (element) {
+                          element.indeterminate = someVisibleMasterRowsSelected && !allVisibleMasterRowsSelected;
+                        }
+                      }}
+                      onChange={toggleVisibleMasterSelection}
+                      disabled={deletingSelectedMasterData || selectableMasterIds.length === 0}
+                      aria-label={`Pilih semua ${selectableMasterIds.length} data ${activeMenu} yang tampil`}
+                    />
+                    Pilih semua yang tampil ({selectableMasterIds.length})
+                  </label>
+                  <div className="di-actions">
+                    <span aria-live="polite">{selectedMasterIds.length} data dipilih</span>
+                    {selectedMasterIds.length > 0 && (
+                      <button
+                        type="button"
+                        className="di-button"
+                        onClick={() => setSelectedMasterIds([])}
+                        disabled={deletingSelectedMasterData}
+                      >
+                        Batalkan pilihan
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="di-button di-button-danger"
+                      onClick={() => void handleDeleteSelectedMasterData()}
+                      disabled={deletingSelectedMasterData || selectedMasterIds.length === 0}
+                    >
+                      <Trash2 size={14} />
+                      {deletingSelectedMasterData
+                        ? "Menghapus..."
+                        : `Hapus terpilih${selectedMasterIds.length ? ` (${selectedMasterIds.length})` : ""}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {selectedMasterDeleteError && (
+                <div className="di-notice di-audit-error" role="alert">{selectedMasterDeleteError}</div>
+              )}
+              {canManageDataInduk && !canDeleteMasterData && ["siswa", "guru", "kelas"].includes(activeMenu) && (
+                <div className="di-notice" role="status">
+                  Penghapusan data hanya tersedia untuk Super Admin sesuai izin database.
+                </div>
+              )}
             </div>
 
             <div className="di-table-wrap">
@@ -4559,6 +4764,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   <tr>
                     {activeMenu === "siswa" ? (
                       <>
+                        {canDeleteMasterData && <th scope="col">Pilih</th>}
                         <th>NISN</th>
                         <th>Nama Siswa</th>
                         <th>Kelas</th>
@@ -4570,6 +4776,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </>
                     ) : activeMenu === "guru" ? (
                       <>
+                        {canDeleteMasterData && <th scope="col">Pilih</th>}
                         <th>NIP / Identitas</th>
                         <th>Nama</th>
                         <th>Status Akun</th>
@@ -4579,6 +4786,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </>
                     ) : (
                       <>
+                        {canDeleteMasterData && <th scope="col">Pilih</th>}
                         <th>Nama Kelas</th>
                         <th>Tingkat</th>
                         <th>Tahun Ajaran</th>
@@ -4593,7 +4801,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   {activeMenu === "siswa" ? (
                     loadingStudents ? (
                       <tr>
-                        <td colSpan={userRole === "super_admin" ? 8 : 7}>
+                        <td colSpan={userRole === "super_admin" ? 9 : 7}>
                           <div className="di-empty">
                             Memuat data siswa dari Supabase...
                           </div>
@@ -4601,7 +4809,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </tr>
                     ) : studentError ? (
                       <tr>
-                        <td colSpan={userRole === "super_admin" ? 8 : 7}>
+                        <td colSpan={userRole === "super_admin" ? 9 : 7}>
                           <div className="di-empty">
                             <strong>Data siswa gagal dimuat</strong>
                             <p>{studentError}</p>
@@ -4610,7 +4818,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </tr>
                     ) : filteredStudents.length === 0 ? (
                       <tr>
-                        <td colSpan={userRole === "super_admin" ? 8 : 7}>
+                        <td colSpan={userRole === "super_admin" ? 9 : 7}>
                           <div className="di-empty">
                             <div className="di-empty-icon">
                               <GraduationCap size={24} />
@@ -4627,6 +4835,17 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                     ) : (
                       filteredStudents.map((student) => (
                         <tr key={student.id}>
+                          {canDeleteMasterData && (
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selectedMasterIdSet.has(student.id)}
+                                onChange={() => toggleMasterRowSelection(student.id)}
+                                disabled={deletingSelectedMasterData}
+                                aria-label={`Pilih siswa ${student.full_name}`}
+                              />
+                            </td>
+                          )}
                           <td>{student.nisn}</td>
                           <td title={student.profile_id ? "Akun siswa terhubung ke Data Induk" : "Akun siswa belum tertaut"}>
                             {student.full_name}
@@ -4688,9 +4907,9 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       ))
                     )
                   ) : activeMenu === "guru" ? (
-                    teacherLoading ? <tr><td colSpan={6}><div className="di-empty">Memuat data guru &amp; tendik...</div></td></tr>
-                    : masterError ? <tr><td colSpan={6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
-                    : filteredTeachers.length === 0 ? <tr><td colSpan={6}><div className="di-empty"><strong>Data guru/tendik tidak ditemukan</strong><p>Ubah kata kunci atau filter, atau tambahkan data menggunakan tombol Tambah Data.</p></div></td></tr>
+                    teacherLoading ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty">Memuat data guru &amp; tendik...</div></td></tr>
+                    : masterError ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
+                    : filteredTeachers.length === 0 ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Data guru/tendik tidak ditemukan</strong><p>Ubah kata kunci atau filter, atau tambahkan data menggunakan tombol Tambah Data.</p></div></td></tr>
                     : filteredTeachers.map((teacher) => {
                       const assignments = teacherAssignmentSummary.filter((item) => item.teacher_id === teacher.id);
                       const subjects = [...new Set(assignments.map((item) => item.subject))];
@@ -4705,6 +4924,17 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                         && account?.role !== "siswa";
                       return (
                         <tr key={teacher.id}>
+                          {canDeleteMasterData && (
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selectedMasterIdSet.has(teacher.id)}
+                                onChange={() => toggleMasterRowSelection(teacher.id)}
+                                disabled={deletingSelectedMasterData}
+                                aria-label={`Pilih data guru/tendik ${teacher.full_name}`}
+                              />
+                            </td>
+                          )}
                           <td>{teacher.nip || "—"}</td>
                           <td>{teacher.full_name}</td>
                           <td>{getTeacherAccountStatus(teacher)}</td>
@@ -4746,19 +4976,34 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                               <button type="button" className="di-button di-button-icon" aria-label={`Edit data ${teacher.full_name}`} title={`Edit ${teacher.full_name}`} onClick={() => void handleEditTeacher(teacher)}>
                                 <Pencil size={15} />
                               </button>
-                              <button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteTeacher(teacher)}>
-                                <Trash2 size={14} />Hapus
-                              </button>
+                              {canDeleteMasterData && (
+                                <button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteTeacher(teacher)}>
+                                  <Trash2 size={14} />Hapus
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
                       );
                     })
                   ) : (
-                    classLoading ? <tr><td colSpan={6}><div className="di-empty">Memuat data kelas...</div></td></tr>
-                    : masterError ? <tr><td colSpan={6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
-                    : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).length === 0 ? <tr><td colSpan={6}><div className="di-empty"><strong>Belum ada data kelas</strong><p>Pastikan tahun ajaran sudah dibuat, lalu tambahkan kelas.</p></div></td></tr>
-                    : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).map(c => <tr key={c.id}><td>{c.name}</td><td>{c.grade_level}</td><td>{c.academic_year_name}</td><td>{c.homeroom_teacher_name}</td><td>{c.student_count}</td><td><div className="di-actions"><button type="button" className="di-button di-button-icon" aria-label={`Edit kelas ${c.name}`} title={`Edit ${c.name}`} onClick={() => void handleEditClass(c)}><Pencil size={15} /></button><button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteClass(c)}><Trash2 size={14} />Hapus</button></div></td></tr>)
+                    classLoading ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty">Memuat data kelas...</div></td></tr>
+                    : masterError ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
+                    : filteredClasses.length === 0 ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Belum ada data kelas</strong><p>Pastikan tahun ajaran sudah dibuat, lalu tambahkan kelas.</p></div></td></tr>
+                    : filteredClasses.map(c => <tr key={c.id}>
+                      {canDeleteMasterData && (
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedMasterIdSet.has(c.id)}
+                            onChange={() => toggleMasterRowSelection(c.id)}
+                            disabled={deletingSelectedMasterData}
+                            aria-label={`Pilih kelas ${c.name}`}
+                          />
+                        </td>
+                      )}
+                      <td>{c.name}</td><td>{c.grade_level}</td><td>{c.academic_year_name}</td><td>{c.homeroom_teacher_name}</td><td>{c.student_count}</td><td><div className="di-actions"><button type="button" className="di-button di-button-icon" aria-label={`Edit kelas ${c.name}`} title={`Edit ${c.name}`} onClick={() => void handleEditClass(c)}><Pencil size={15} /></button>{canDeleteMasterData && <button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteClass(c)}><Trash2 size={14} />Hapus</button>}</div></td>
+                    </tr>)
                   )}
                 </tbody>
               </table>
