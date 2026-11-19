@@ -76,13 +76,7 @@ export default function PengaturanIntegrasi({
         is_enabled: true,
       };
     });
-    const registeredRoutes = new Set(moduleCatalog.map(item => normalize(item.route_key)));
-    const extras = moduleSettings.filter(item => {
-      const identifiers = [item.module_key, item.label, item.route_key].map(normalize);
-      return !identifiers.includes(normalize("Kesiswaan & BK"))
-        && !identifiers.some(value => registeredRoutes.has(value));
-    });
-    return [...registered, ...extras];
+    return registered;
   }, [moduleCatalog, moduleSettings]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
