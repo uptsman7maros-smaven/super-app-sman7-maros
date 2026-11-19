@@ -31,6 +31,65 @@
   border-color: #efc5c1;
 }
 
+.maintenance-update-toast {
+  position: fixed;
+  z-index: 1000;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  width: min(390px, calc(100vw - 40px));
+  box-sizing: border-box;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #f1d59d;
+  border-left: 4px solid #d88a19;
+  border-radius: 14px;
+  color: #71320b;
+  background: #fff;
+  box-shadow: 0 12px 36px rgba(49, 38, 17, .18);
+  animation: maintenance-toast-lifecycle 6.5s ease forwards;
+}
+
+.maintenance-update-toast > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #bd7410;
+}
+
+.maintenance-update-toast > div {
+  display: grid;
+  gap: 5px;
+}
+
+.maintenance-update-toast strong {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.maintenance-update-toast span {
+  color: #795a36;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@keyframes maintenance-toast-lifecycle {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  8%,
+  82% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px);
+    visibility: hidden;
+  }
+}
+
 .maintenance-lock-screen {
   display: flex;
   min-height: 100vh;
@@ -174,6 +233,12 @@
     gap: 6px 10px;
     padding: 11px 14px;
     font-size: 12px;
+  }
+
+  .maintenance-update-toast {
+    top: 12px;
+    right: 12px;
+    width: calc(100vw - 24px);
   }
 
   .maintenance-lock-card {

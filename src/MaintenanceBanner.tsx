@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CircleAlert } from "lucide-react";
 import {
   getMaintenanceStatus,
   subscribeToMaintenanceStatus,
@@ -44,25 +45,34 @@ export default function MaintenanceBanner() {
     };
   }, []);
 
-  if (loadError) {
-    return (
-      <aside className="maintenance-banner maintenance-banner-error" role="alert">
-        Informasi status pemeliharaan belum dapat dimuat. Silakan muat ulang atau hubungi administrator.
-      </aside>
-    );
-  }
-
-  if (!status?.is_active && !syncError) return null;
+  const showUpdateNotice = loadError || syncError;
+  if (!status?.is_active && !showUpdateNotice) return null;
 
   return (
-    <aside className="maintenance-banner" role="alert">
-      <strong>{status?.is_active ? "Aplikasi sedang dalam perbaikan" : "Status aplikasi belum tersinkron"}</strong>
-      <span>
-        {status?.is_active
-          ? status.message
-          : "Muat ulang aplikasi untuk memastikan Anda melihat informasi pemeliharaan terbaru."}
-      </span>
-      {syncError && <small>Pembaruan status mungkin terlambat terlihat. Muat ulang aplikasi untuk menyegarkan.</small>}
-    </aside>
+    <>
+      {status?.is_active && (
+        <aside className="maintenance-banner" role="alert">
+          <strong>Aplikasi sedang dalam perbaikan</strong>
+          <span>{status.message}</span>
+        </aside>
+      )}
+      {showUpdateNotice && (
+        <aside
+          className="maintenance-update-toast"
+          key={loadError ? "load-error" : "sync-error"}
+          role={loadError ? "alert" : "status"}
+        >
+          <CircleAlert size={20} aria-hidden="true" />
+          <div>
+            <strong>{loadError ? "Status pembaruan gagal dimuat" : "Status pembaruan belum tersinkron"}</strong>
+            <span>
+              {loadError
+                ? "Informasi status pemeliharaan belum dapat dimuat. Silakan muat ulang atau hubungi administrator."
+                : "Pembaruan status mungkin terlambat terlihat. Muat ulang aplikasi untuk menyegarkan."}
+            </span>
+          </div>
+        </aside>
+      )}
+    </>
   );
 }
