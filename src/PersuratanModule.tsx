@@ -848,37 +848,32 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const printLetter=(request:LetterRequest)=>{
     const documentMarkup=getRequestTemplate(request)
     if(!documentMarkup){notify('Konten template surat tidak tersedia untuk pratinjau.');return}
-    const watermark=documentMarkup.isDraft?'<div class="letter-watermark">KONSEP / BELUM BERNOMOR</div>':''
-    const documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(documentMarkup.title)}</title><style>
-      @media print{@page{size:${documentMarkup.paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:20mm}}
-      *{box-sizing:border-box}
-      body{margin:0;color:#000;font:12pt/1.55 "Times New Roman",serif}
-      .letter-page{position:relative;min-height:${documentMarkup.paperSize==='F4'?'290mm':'257mm'}}
-      .letter-paper-preview{color:#000;font-family:"Times New Roman",serif}
-      .letter-document-header{display:grid;grid-template-columns:24mm minmax(0,1fr) 24mm;align-items:center;gap:4mm;margin-bottom:8mm;text-align:center}
-      .letter-document-header img{width:22mm;height:25mm;object-fit:contain}
-      .letter-document-header.logo-top:not(.kop-2){grid-template-columns:minmax(0,1fr);gap:0}
-      .letter-document-header.logo-top:not(.kop-2) .province-logo{grid-column:1;grid-row:1;justify-self:center;width:14mm;height:14mm;margin-bottom:1mm}
-      .letter-document-header.logo-top:not(.kop-2) .letter-document-heading{grid-column:1;grid-row:2}
-      .letter-document-header.logo-top:not(.kop-2) .letter-document-rules{grid-column:1;grid-row:3}
-      .letter-document-heading p,.letter-document-heading h2{margin:0}
-      .letter-document-heading p:first-child{font-size:12pt}
-      .letter-document-heading p:nth-child(2){font-size:14pt;font-weight:bold}
-      .letter-document-heading h2{font-size:15pt}
-      .letter-document-heading p:last-child{margin-top:2mm;font-size:8pt}
-      .letter-document-rules{grid-column:1/-1;width:100%;height:2mm;border-top:2pt solid #111;border-bottom:.8pt solid #111}
-      .letter-template-body{font:12pt/1.5 "Times New Roman",serif;color:#000}
-      .letter-watermark{position:fixed;inset:42% 0 auto;z-index:-1;color:#8883;font:700 28pt Arial,sans-serif;text-align:center;transform:rotate(-25deg)}
-      img{max-width:100%}
-      </style></head><body><main class="letter-page letter-paper-preview">${watermark}${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></main></body></html>`
+    const paperWidth=documentMarkup.paperSize==='F4'?215:210
+    const paperHeight=documentMarkup.paperSize==='F4'?330:297
+    const stylesheetLinks=Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+      .filter(link=>new URL(link.href).origin===window.location.origin)
+      .map(link=>`<link rel="stylesheet" href="${escapeHtml(link.href)}">`)
+      .join('')
+    const inlineStylesheets=Array.from(document.querySelectorAll<HTMLStyleElement>('style'))
+      .map(style=>`<style>${style.textContent||''}</style>`)
+      .join('')
+    const watermark=documentMarkup.isDraft?'<span class="letter-watermark">KONSEP / BELUM BERNOMOR</span>':''
+    const documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(documentMarkup.title)}</title>${stylesheetLinks}${inlineStylesheets}<style>
+      @page{size:${paperWidth}mm ${paperHeight}mm;margin:0}
+      html,body{width:${paperWidth}mm;height:${paperHeight}mm;margin:0;padding:0;background:#fff}
+      .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:0;background:#fff}
+      .letter-app .letter-paper{width:${paperWidth}mm;height:${paperHeight}mm;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:none;transform:none}
+      </style></head><body><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
     const printWindow=window.open('','_blank')
     if(!printWindow){notify('Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.');return}
     printWindow.opener=null
+    printWindow.onload=()=>{
+      printWindow.focus()
+      printWindow.print()
+    }
     printWindow.document.open()
     printWindow.document.write(documentHtml)
     printWindow.document.close()
-    printWindow.focus()
-    printWindow.setTimeout(()=>printWindow.print(),400)
   }
   const openPreview=(request:LetterRequest)=>{setPreviewRequest(request);setModal({type:'preview'})}
   function editRequest(request:LetterRequest){
