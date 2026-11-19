@@ -1282,14 +1282,14 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       </form>}
       <section className={`attendance-panel attendance-records${!canRecordAttendance ? " attendance-records-wide" : ""}`}>
           <header className="attendance-print-header">
-            <SchoolLetterheadPreview letterhead={printHeader} compact />
+            <SchoolLetterheadPreview letterhead={printHeader} />
             <h1>{isTeacher ? "Rekap Kehadiran Mapel Saya" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Kehadiran"}</h1>
             <p>{date} · {rows.length} catatan</p>
           </header>
         <div className="attendance-panel-title"><div><h2>{isTeacher ? "Rekap Kehadiran Mapel Saya" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Harian"}</h2><p>{date} · {rows.length} catatan</p></div><FileSpreadsheet size={22}/></div>
         <div className="attendance-tools"><div className="attendance-search"><Search size={16}/><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Cari nama, kode, kelas..."/></div>
           {role !== "siswa" && <button className="attendance-secondary" onClick={()=>void exportRows(false)} disabled={exporting}><Download size={16}/> Excel</button>}
-            {(!isSelfService || isTeacher) && <><SchoolLetterheadPicker settings={schoolSettings} value={letterheadSlot} onChange={setLetterheadSlot}/><button className="attendance-secondary" onClick={()=>window.print()}><Download size={16}/> PDF / Cetak</button></>}
+            {(!isSelfService || isTeacher) && <><SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot}/><button className="attendance-secondary" onClick={()=>window.print()}><Download size={16}/> PDF / Cetak</button></>}
         </div>
         <div className="attendance-table-wrap"><table><thead><tr><th>Nama / ID</th><th>Jenis</th><th>Kelas</th><th>Status</th></tr></thead><tbody>
         {filtered.map(r=><tr key={r.id}><td><strong>{r.person_name}</strong><small>{r.person_identifier}</small>{r.session_type === "subject" && <small className="attendance-row-subject">{r.subject || "Mapel"}{r.teacher_name ? ` · ${r.teacher_name}` : ""}</small>}</td><td>{r.person_type==="siswa"?"Siswa":"Guru/Tendik"}</td><td>{r.class_name || "—"}</td><td><span className={`attendance-status status-${r.status}`}>{r.session_type === "school_departure" ? "Pulang" : statusLabel(r.status)}</span></td></tr>)}

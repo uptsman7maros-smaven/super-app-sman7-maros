@@ -690,45 +690,19 @@
   }
 
   .kb-print-header {
-    display: grid !important;
-    grid-template-columns: 24mm minmax(0, 1fr);
-    align-items: center;
-    gap: 2mm 4mm;
+    display: block !important;
     color: #111;
     page-break-after: avoid;
     text-align: center;
   }
 
-  .kb-print-header > img {
-    grid-row: 1 / span 2;
-    width: 22mm;
-    height: 22mm;
-    object-fit: contain;
+  .kb-print-header > .school-letterhead-preview {
+    margin-bottom: 3mm;
   }
 
-  .kb-print-header > div {
-    grid-column: 2;
-  }
-
-  .kb-print-header.no-logo > div {
-    grid-column: 1 / -1;
-  }
-
-  .kb-print-header > img[hidden] + div {
-    grid-column: 1 / -1;
-  }
-
-  .kb-print-header h1,
-  .kb-print-header h2 {
-    margin: 3px 0;
-  }
-
-  .kb-print-header hr {
-    grid-column: 1 / -1;
-    width: 100%;
-    border: 0;
-    border-top: 3px double #111;
-    margin: 2mm 0;
+  .kb-print-header > h2 {
+    margin: 2mm 0 0;
+    font-size: 12pt;
   }
 
   .kb-document-output-options {

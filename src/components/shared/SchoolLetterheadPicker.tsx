@@ -1,22 +1,14 @@
-import type { SchoolLetterhead, SchoolSettings, LetterheadSlot } from "../../services/masterDataService";
-import { hasAlternateSchoolLetterhead } from "../../services/masterDataService";
+import type { SyntheticEvent } from "react";
+import type { SchoolLetterhead, LetterheadSlot } from "../../services/masterDataService";
 import "./SchoolLetterheadPicker.css";
 
-type SettingsForLetterhead = Pick<
-  SchoolSettings,
-  "school_name" | "npsn" | "logo_url" | "letterhead" | "logo_url_2" | "letterhead_2"
->;
-
 export function SchoolLetterheadPicker({
-  settings,
   value,
   onChange,
 }: {
-  settings: SettingsForLetterhead | null;
   value: LetterheadSlot;
   onChange: (value: LetterheadSlot) => void;
 }) {
-  const alternateAvailable = hasAlternateSchoolLetterhead(settings);
   return (
     <label className="school-letterhead-picker">
       <span>Kop surat untuk dokumen</span>
@@ -26,9 +18,7 @@ export function SchoolLetterheadPicker({
         onChange={event => onChange(event.target.value === "2" ? "2" : "1")}
       >
         <option value="1">Kop Surat 1 · Utama</option>
-        <option value="2" disabled={!alternateAvailable}>
-          {alternateAvailable ? "Kop Surat 2 · Alternatif" : "Kop Surat 2 · Belum diatur"}
-        </option>
+        <option value="2">Kop Surat 2 · Alternatif</option>
       </select>
     </label>
   );
@@ -41,13 +31,43 @@ export function SchoolLetterheadPreview({
   letterhead: SchoolLetterhead;
   compact?: boolean;
 }) {
+  const logoError = (fallback: string) => (event: SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget;
+    if (image.dataset.fallbackApplied) {
+      image.hidden = true;
+      return;
+    }
+    image.dataset.fallbackApplied = "true";
+    image.src = fallback;
+  };
+
   return (
-    <div className={`school-letterhead-preview${compact ? " compact" : ""}${letterhead.logo_url ? "" : " no-logo"}`}>
-      {letterhead.logo_url && <img src={letterhead.logo_url} alt="" onError={event => { event.currentTarget.hidden = true; }} />}
-      <div className="school-letterhead-copy">
-        <h2>{letterhead.school_name || "SMAN 7 Maros"}</h2>
-        {letterhead.letterhead && <p>{letterhead.letterhead}</p>}
-        {letterhead.npsn && <small>NPSN {letterhead.npsn}</small>}
+    <div
+      className={`school-letterhead-preview kop-${letterhead.layout}${compact ? " compact" : ""}`}
+      role="group"
+      aria-label={`Pratinjau Kop Surat ${letterhead.layout}`}
+    >
+      <div className="school-letterhead-body">
+        <img
+          className="school-letterhead-province-logo"
+          src={letterhead.province_logo_url}
+          alt=""
+          onError={logoError("/logo-provinsi-sulsel.svg")}
+        />
+        <div className="school-letterhead-copy">
+          <p className="school-letterhead-government">PEMERINTAH PROVINSI SULAWESI SELATAN</p>
+          <p className="school-letterhead-department">DINAS PENDIDIKAN</p>
+          <h2>{letterhead.school_name || "UPT SMA NEGERI 7 MAROS"}</h2>
+          <p className="school-letterhead-address">{letterhead.letterhead}</p>
+        </div>
+        {letterhead.layout === "2" && (
+          <img
+            className="school-letterhead-school-logo"
+            src={letterhead.school_logo_url}
+            alt=""
+            onError={logoError("/logo-sekolah.png")}
+          />
+        )}
       </div>
       <span className="school-letterhead-rules" aria-hidden="true" />
     </div>

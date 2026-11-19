@@ -1,4 +1,5 @@
 import { PAGE_SIZE } from "../constants";
+import { SchoolLetterheadPreview } from "../../../components/shared/SchoolLetterheadPicker";
 import type { AcademicYearOption, ClassOption, KbRow, QueryFilters, SchoolHeader, SectionConfig, StudentOption } from "../types";
 import ReportActions from "./ReportActions";
 
@@ -65,14 +66,8 @@ export default function DataTable({
 
   return (
     <section className="kb-panel kb-data-panel">
-      <header className={`kb-print-header${schoolHeader.logo_url ? " has-logo" : " no-logo"}`}>
-        {schoolHeader.logo_url && <img src={schoolHeader.logo_url} alt="" onError={event => { event.currentTarget.hidden = true; }} />}
-        <div>
-          <h1>{schoolHeader.school_name}</h1>
-          {schoolHeader.letterhead && <p>{schoolHeader.letterhead}</p>}
-          {schoolHeader.npsn && <p>NPSN {schoolHeader.npsn}</p>}
-        </div>
-        <hr />
+      <header className="kb-print-header">
+        <SchoolLetterheadPreview letterhead={schoolHeader} />
         <h2>{config.key === "Catatan BK" ? "Agenda Harian Bimbingan dan Konseling" : `Laporan ${config.key}`}</h2>
       </header>
       <div className="kb-panel-heading">

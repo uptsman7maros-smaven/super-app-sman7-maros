@@ -42,12 +42,33 @@ async function imageAsPng(url: string): Promise<{ data: string; width: number; h
   }
 }
 
-async function schoolLogoDataUrl(settings: PdfSettings) {
-  for (const candidate of [settings.logo_url, "/logo-sekolah.png"].filter(Boolean)) {
-    const image = await imageAsPng(candidate);
-    if (image) return image;
-  }
-  return null;
+async function schoolLogoDataUrls(settings: PdfSettings) {
+  const imageWithFallback = async (url: string, fallback: string) =>
+    await imageAsPng(url) ?? (url === fallback ? null : imageAsPng(fallback));
+  const provinceUrl = settings.province_logo_url || "/logo-provinsi-sulsel.svg";
+  const schoolUrl = settings.school_logo_url || "/logo-sekolah.png";
+  const [provinceLogo, schoolLogo] = await Promise.all([
+    imageWithFallback(provinceUrl, "/logo-provinsi-sulsel.svg"),
+    settings.layout === "2"
+      ? imageWithFallback(schoolUrl, "/logo-sekolah.png")
+      : Promise.resolve(null),
+  ]);
+  return { provinceLogo, schoolLogo };
+}
+
+function drawLogo(
+  doc: jsPDF,
+  logo: { data: string; width: number; height: number } | null,
+  x: number,
+  y: number,
+  maxWidth: number,
+  maxHeight: number,
+) {
+  if (!logo) return;
+  const scale = Math.min(maxWidth / logo.width, maxHeight / logo.height);
+  const width = logo.width * scale;
+  const height = logo.height * scale;
+  doc.addImage(logo.data, "PNG", x + (maxWidth - width) / 2, y + (maxHeight - height) / 2, width, height, undefined, "FAST");
 }
 
 function addParagraph(doc: jsPDF, label: string, value: string, startY: number) {
@@ -79,28 +100,31 @@ function createPdf(data: RplPdfData, settings: PdfSettings) {
   doc.setProperties({ title: `RPL BK ${data.judul_topik}`, subject: "Rencana Pelaksanaan Layanan Bimbingan dan Konseling" });
 
   const render = async () => {
-    const logoData = await schoolLogoDataUrl(settings);
-    let headerY = 17;
-    if (logoData) {
-      const scale = Math.min(24 / logoData.width, 24 / logoData.height);
-      const logoWidth = logoData.width * scale;
-      const logoHeight = logoData.height * scale;
-      doc.addImage(logoData.data, "PNG", 16 + (24 - logoWidth) / 2, 12 + (24 - logoHeight) / 2, logoWidth, logoHeight, undefined, "FAST");
-      headerY = 16;
+    const logos = await schoolLogoDataUrls(settings);
+    const alternative = settings.layout === "2";
+    const headingFont = alternative ? "times" : "helvetica";
+    if (alternative) {
+      drawLogo(doc, logos.provinceLogo, 16, 11, 23, 27);
+      drawLogo(doc, logos.schoolLogo, pageWidth - 39, 11, 23, 27);
+    } else {
+      drawLogo(doc, logos.provinceLogo, (pageWidth - 20) / 2, 7, 20, 23);
     }
-    doc.setFont("helvetica", "bold");
+
+    doc.setFont(headingFont, "normal");
     doc.setFontSize(14);
-    doc.text(settings.school_name || "SMAN 7 Maros", pageWidth / 2, headerY, { align: "center" });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    const letterhead = settings.letterhead ? doc.splitTextToSize(settings.letterhead, pageWidth - 66) : [];
-    if (letterhead.length) doc.text(letterhead, pageWidth / 2, headerY + 5, { align: "center" });
-    const npsn = settings.npsn ? `NPSN ${settings.npsn}` : "";
-    if (npsn) doc.text(npsn, pageWidth / 2, headerY + 5 + letterhead.length * 3.5, { align: "center" });
-    const lineY = Math.max(39, headerY + 10 + letterhead.length * 3.5);
-    doc.setLineWidth(0.7);
+    doc.text("PEMERINTAH PROVINSI SULAWESI SELATAN", pageWidth / 2, alternative ? 20 : 35, { align: "center" });
+    doc.setFont(headingFont, "bold");
+    doc.setFontSize(16);
+    doc.text("DINAS PENDIDIKAN", pageWidth / 2, alternative ? 27 : 42, { align: "center" });
+    doc.setFontSize(18);
+    doc.text(settings.school_name || "UPT SMA NEGERI 7 MAROS", pageWidth / 2, alternative ? 34 : 50, { align: "center" });
+    doc.setFont(headingFont, "italic");
+    doc.setFontSize(alternative ? 6 : 7);
+    doc.text(settings.letterhead || "", pageWidth / 2, alternative ? 40 : 55, { align: "center", maxWidth: pageWidth - (alternative ? 66 : 30) });
+    const lineY = alternative ? 43 : 59;
+    doc.setLineWidth(1.1);
     doc.line(15, lineY, pageWidth - 15, lineY);
-    doc.setLineWidth(0.2);
+    doc.setLineWidth(0.35);
     doc.line(15, lineY + 1.4, pageWidth - 15, lineY + 1.4);
 
     doc.setFont("helvetica", "bold");

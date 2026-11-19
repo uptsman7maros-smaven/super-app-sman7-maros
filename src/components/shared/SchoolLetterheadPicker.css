@@ -5,3 +5,222 @@
 .school-letterhead-preview > img[hidden] ~ .school-letterhead-copy {
   grid-column: 1 / -1;
 }
+
+.school-letterhead-preview {
+  display: block;
+  padding: 12px 18px 8px;
+  border-radius: 0;
+  text-align: center;
+}
+
+.school-letterhead-preview.kop-1,
+.school-letterhead-preview.kop-2 {
+  display: block;
+}
+
+.school-letterhead-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  align-items: center;
+}
+
+.school-letterhead-preview img {
+  display: block;
+  width: 70px;
+  height: 75px;
+  object-fit: contain;
+}
+
+.school-letterhead-preview.kop-1 .school-letterhead-province-logo {
+  grid-row: 1;
+  margin-bottom: 4px;
+  width: 70px;
+  height: 75px;
+}
+
+.school-letterhead-copy {
+  min-width: 0;
+}
+
+.school-letterhead-copy p {
+  margin: 0;
+  white-space: normal;
+}
+
+.school-letterhead-copy .school-letterhead-government {
+  font: 400 clamp(14px, 2.2vw, 25px)/1.12 Arial, sans-serif;
+}
+
+.school-letterhead-copy .school-letterhead-department {
+  margin-top: 3px;
+  font: 700 clamp(15px, 2.3vw, 26px)/1.12 Arial, sans-serif;
+}
+
+.school-letterhead-preview.kop-1 .school-letterhead-copy h2 {
+  margin: 3px 0 0;
+  font: 700 clamp(18px, 2.6vw, 30px)/1.1 Arial, sans-serif;
+}
+
+.school-letterhead-copy .school-letterhead-address {
+  margin-top: 5px;
+  font: italic 400 clamp(8px, 1vw, 11px)/1.3 Arial, sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-body {
+  grid-template-columns: clamp(52px, 8vw, 92px) minmax(0, 1fr) clamp(52px, 8vw, 92px);
+  column-gap: 10px;
+}
+
+.school-letterhead-preview.kop-2 img {
+  width: 100%;
+  height: 90px;
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-province-logo {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-copy {
+  grid-column: 2;
+  grid-row: 1;
+  font-family: "Times New Roman", serif;
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-copy .school-letterhead-government {
+  font-family: "Times New Roman", serif;
+  font-size: clamp(14px, 2.1vw, 24px);
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-copy .school-letterhead-department {
+  font-family: "Times New Roman", serif;
+  font-size: clamp(16px, 2.45vw, 28px);
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-copy h2 {
+  font-family: "Times New Roman", serif;
+  font-size: clamp(18px, 2.75vw, 31px);
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-copy .school-letterhead-address {
+  font-family: "Times New Roman", serif;
+}
+
+.school-letterhead-preview.kop-2 .school-letterhead-school-logo {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.school-letterhead-preview.kop-1 .school-letterhead-rules,
+.school-letterhead-preview.kop-2 .school-letterhead-rules {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-top: 5px;
+  border-top: 3px solid #111;
+  border-bottom: 1px solid #111;
+}
+
+.school-letterhead-preview.compact {
+  grid-template-columns: 1fr;
+  padding: 8px 10px 6px;
+}
+
+.school-letterhead-preview.compact img {
+  width: 56px;
+  height: 60px;
+}
+
+.school-letterhead-preview.compact.kop-2 .school-letterhead-body {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  column-gap: 5px;
+}
+
+.school-letterhead-preview.compact.kop-2 img {
+  height: 56px;
+}
+
+@media print {
+  .school-letterhead-preview {
+    padding: 0 0 1mm;
+    border: 0;
+    background: #fff;
+    color: #111;
+  }
+
+  .school-letterhead-preview.kop-1 .school-letterhead-province-logo {
+    width: 19mm;
+    height: 22mm;
+    margin-bottom: 1mm;
+  }
+
+  .school-letterhead-preview.kop-2 .school-letterhead-body {
+    grid-template-columns: 23mm minmax(0, 1fr) 23mm;
+    column-gap: 3mm;
+  }
+
+  .school-letterhead-preview.kop-2 img {
+    width: 23mm;
+    height: 26mm;
+  }
+
+  .school-letterhead-preview .school-letterhead-copy .school-letterhead-government {
+    font-size: 15pt;
+  }
+
+  .school-letterhead-preview .school-letterhead-copy .school-letterhead-department {
+    margin-top: 1mm;
+    font-size: 16pt;
+  }
+
+  .school-letterhead-preview .school-letterhead-copy h2 {
+    margin-top: 1mm;
+    font-size: 18pt;
+  }
+
+  .school-letterhead-preview .school-letterhead-copy .school-letterhead-address {
+    margin-top: 2mm;
+    font-size: 8pt;
+    white-space: nowrap;
+  }
+
+  .school-letterhead-preview.kop-2 .school-letterhead-copy .school-letterhead-government {
+    font-size: 15pt;
+  }
+
+  .school-letterhead-preview.kop-2 .school-letterhead-copy .school-letterhead-department {
+    font-size: 16pt;
+  }
+
+  .school-letterhead-preview.kop-2 .school-letterhead-copy h2 {
+    font-size: 18pt;
+  }
+
+  .school-letterhead-preview.kop-2 .school-letterhead-copy .school-letterhead-address {
+    font-size: 8pt;
+  }
+
+  .school-letterhead-rules {
+    height: 2mm;
+    margin-top: 2mm;
+    border-top-width: 2pt;
+    border-bottom-width: .8pt;
+  }
+}
+
+@media (max-width: 560px) {
+  .school-letterhead-preview {
+    padding-inline: 8px;
+  }
+
+  .school-letterhead-preview.kop-2 .school-letterhead-body {
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    column-gap: 4px;
+  }
+
+  .school-letterhead-preview.kop-2 img {
+    height: 58px;
+  }
+}

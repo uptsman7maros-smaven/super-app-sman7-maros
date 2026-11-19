@@ -105,6 +105,9 @@ export default function KesiswaanBK({
     logo_url: "",
     letterhead_2: "",
     logo_url_2: "",
+    layout: "1",
+    province_logo_url: "",
+    school_logo_url: "",
   });
   const printSchoolHeader = useMemo(() => ({
     ...schoolHeader,
@@ -582,7 +585,7 @@ export default function KesiswaanBK({
       {view === "data" && canSeeSection && <>
         {isSensitive && <div className="kb-privacy">🔐 Agenda BK memuat informasi privat. Catatan rahasia hanya terlihat bagi Guru BK pengasuh dan Super Admin.</div>}
         {role !== "siswa" && <div className="kb-document-output-options">
-          <SchoolLetterheadPicker settings={schoolHeader} value={letterheadSlot} onChange={setLetterheadSlot} />
+          <SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot} />
         </div>}
         {isSensitive && !canSeePrivateNotes ? (
           <section className="kb-panel">

@@ -27,30 +27,46 @@ export type SchoolSettings = {
   letterhead: string;
   logo_url_2: string;
   letterhead_2: string;
+  province_logo_url: string;
 };
 
-export type SchoolLetterhead = Pick<SchoolSettings, "school_name" | "npsn" | "logo_url" | "letterhead">;
 export type LetterheadSlot = "1" | "2";
+export type SchoolLetterhead = {
+  layout: LetterheadSlot;
+  school_name: string;
+  npsn: string;
+  letterhead: string;
+  logo_url: string;
+  province_logo_url: string;
+  school_logo_url: string;
+};
 
-export function getSchoolLetterhead(
-  settings: Pick<SchoolSettings, "school_name" | "npsn" | "logo_url" | "letterhead" | "logo_url_2" | "letterhead_2"> | null,
-  slot: LetterheadSlot,
-): SchoolLetterhead {
-  if (!settings) {
-    return { school_name: "SMAN 7 Maros", npsn: "", logo_url: "", letterhead: "" };
-  }
-  return {
-    school_name: settings.school_name,
-    npsn: settings.npsn,
-    logo_url: slot === "2" ? settings.logo_url_2 : settings.logo_url,
-    letterhead: slot === "2" ? settings.letterhead_2 : settings.letterhead,
-  };
+export const DEFAULT_SCHOOL_LETTERHEAD_ADDRESS =
+  "Alamat : Jl. Poros Maros-Bone Kec. Mallawa Kabupaten Maros KP (90563) Tlp. 0411-3880500 Email : sman7mallawamaros@gmail.com";
+
+function officialSchoolName(value: string) {
+  const name = value.trim().replace(/\s+/g, " ").toLocaleUpperCase("id-ID");
+  if (!name) return "UPT SMA NEGERI 7 MAROS";
+  if (name.startsWith("UPT SMA NEGERI ")) return name;
+  const schoolName = name.match(/^(?:SMAN|SMA\s+NEGERI)\s*(.+)$/);
+  return schoolName ? `UPT SMA NEGERI ${schoolName[1]}` : name;
 }
 
-export function hasAlternateSchoolLetterhead(
-  settings: Pick<SchoolSettings, "logo_url_2" | "letterhead_2"> | null,
-) {
-  return Boolean(settings?.logo_url_2.trim() || settings?.letterhead_2.trim());
+export function getSchoolLetterhead(
+  settings: Pick<SchoolSettings, "school_name" | "npsn" | "logo_url" | "letterhead" | "logo_url_2" | "letterhead_2" | "province_logo_url"> | null,
+  slot: LetterheadSlot,
+): SchoolLetterhead {
+  const provinceLogoUrl = settings?.province_logo_url.trim() || "/logo-provinsi-sulsel.svg";
+  const schoolLogoUrl = settings?.logo_url_2.trim() || settings?.logo_url.trim() || "/logo-sekolah.png";
+  return {
+    layout: slot,
+    school_name: officialSchoolName(settings?.school_name || "SMAN 7 Maros"),
+    npsn: settings?.npsn || "",
+    logo_url: slot === "1" ? provinceLogoUrl : schoolLogoUrl,
+    province_logo_url: provinceLogoUrl,
+    school_logo_url: schoolLogoUrl,
+    letterhead: (slot === "2" ? settings?.letterhead_2 : settings?.letterhead)?.trim() || DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
+  };
 }
 
 export type AcademicYear = {
@@ -144,7 +160,7 @@ export async function loadSchoolContextData(
     loadIdentity(account),
     supabase
       .from("school_settings")
-      .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2")
+      .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2, province_logo_url")
       .order("id")
       .limit(1)
       .maybeSingle(),

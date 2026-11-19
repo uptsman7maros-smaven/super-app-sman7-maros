@@ -3,7 +3,7 @@ import { supabase } from "./lib/supabase";
 import { useSchoolContext } from "./context/useSchoolContext";
 import { logAppActivity } from "./services/activityLogService";
 import type { AppModuleRegistryEntry } from "./services/moduleRegistry";
-import { getSchoolLetterhead } from "./services/masterDataService";
+import { DEFAULT_SCHOOL_LETTERHEAD_ADDRESS, getSchoolLetterhead } from "./services/masterDataService";
 import { SchoolLetterheadPreview } from "./components/shared/SchoolLetterheadPicker";
 import {
   getMaintenanceStatus,
@@ -29,9 +29,10 @@ const initialSettings: SchoolSettingsForm = {
   npsn: "40308320",
   academic_year: "2026/2027",
   logo_url: "",
-  letterhead: "",
+  letterhead: DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
   logo_url_2: "",
-  letterhead_2: "",
+  letterhead_2: DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
+  province_logo_url: "",
 };
 
 export default function PengaturanIntegrasi({
@@ -55,6 +56,8 @@ export default function PengaturanIntegrasi({
   const settings = settingsDraft ?? (schoolSettings
     ? {
       ...schoolSettings,
+      letterhead: schoolSettings.letterhead || DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
+      letterhead_2: schoolSettings.letterhead_2 || DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
       academic_year: activeAcademicYear?.name ?? schoolSettings.academic_year,
     }
     : initialSettings);
@@ -84,7 +87,7 @@ export default function PengaturanIntegrasi({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [moduleSyncLoading, setModuleSyncLoading] = useState(false);
-  const [logoUploading, setLogoUploading] = useState<"1" | "2" | null>(null);
+  const [logoUploading, setLogoUploading] = useState<"province" | "school" | null>(null);
   const [message, setMessage] = useState("");
   const [newService, setNewService] = useState({ service_name: "", service_url: "", notes: "" });
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
@@ -202,7 +205,7 @@ export default function PengaturanIntegrasi({
     };
   }, [currentUser?.id, isSuperAdmin]);
 
-  async function uploadSchoolLogo(slot: "1" | "2", event: React.ChangeEvent<HTMLInputElement>) {
+  async function uploadSchoolLogo(target: "province" | "school", event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
@@ -215,14 +218,14 @@ export default function PengaturanIntegrasi({
       return;
     }
 
-    setLogoUploading(slot);
+    setLogoUploading(target);
     try {
       const bitmap = await createImageBitmap(file);
       const highResolution = bitmap.width >= 300 && bitmap.height >= 300;
       bitmap.close();
       if (!highResolution) throw new Error("Gunakan logo berukuran minimal 300 × 300 piksel agar tetap tajam saat dicetak.");
       const extension = file.type === "image/png" ? "png" : "jpg";
-      const path = `${currentUser.id}/letterhead-${slot}/logo-${Date.now()}.${extension}`;
+      const path = `${currentUser.id}/letterhead-${target}/logo-${Date.now()}.${extension}`;
       const { error } = await supabase.storage.from("school-letterheads").upload(path, file, {
         contentType: file.type,
         upsert: false,
@@ -231,9 +234,9 @@ export default function PengaturanIntegrasi({
       const { data } = supabase.storage.from("school-letterheads").getPublicUrl(path);
       setSettingsDraft({
         ...settings,
-        [slot === "1" ? "logo_url" : "logo_url_2"]: data.publicUrl,
+        [target === "province" ? "province_logo_url" : "logo_url_2"]: data.publicUrl,
       });
-      notify(`Logo Kop Surat ${slot} diunggah. Simpan perubahan identitas untuk menerapkannya.`);
+      notify(`${target === "province" ? "Lambang Provinsi Sulawesi Selatan" : "Logo sekolah"} diunggah. Simpan perubahan identitas untuk menerapkannya.`);
     } catch (error) {
       notify(error instanceof Error ? `Logo gagal diunggah: ${error.message}` : "Logo gagal diunggah.");
     } finally {
@@ -407,21 +410,21 @@ export default function PengaturanIntegrasi({
         <div className="pi-letterhead-grid pi-wide">
           <fieldset className="pi-letterhead-card">
             <legend>Kop Surat 1 · Utama</legend>
-            <label>{logoUploading === "1" ? "Mengunggah logo utama..." : "Logo sekolah (PNG/JPEG, min. 300 × 300 px, maks. 8 MB)"}
-              <input type="file" accept="image/png,image/jpeg" onChange={event => void uploadSchoolLogo("1", event)} disabled={logoUploading !== null} />
+            <label>{logoUploading === "province" ? "Mengunggah lambang provinsi..." : "Lambang Provinsi Sulawesi Selatan (PNG/JPEG, min. 300 × 300 px, maks. 8 MB)"}
+              <input type="file" accept="image/png,image/jpeg" onChange={event => void uploadSchoolLogo("province", event)} disabled={logoUploading !== null} />
             </label>
-            <label>Teks kop surat<textarea rows={4} value={settings.letterhead} onChange={e => setSettingsDraft({...settings, letterhead:e.target.value})} placeholder="Instansi, alamat, telepon, dan email..." /></label>
+            <label>Alamat surat<textarea rows={3} value={settings.letterhead} onChange={e => setSettingsDraft({...settings, letterhead:e.target.value})} /></label>
             <SchoolLetterheadPreview letterhead={getSchoolLetterhead(settings, "1")} />
           </fieldset>
           <fieldset className="pi-letterhead-card">
             <legend>Kop Surat 2 · Alternatif</legend>
-            <label>{logoUploading === "2" ? "Mengunggah logo alternatif..." : "Logo alternatif (PNG/JPEG, min. 300 × 300 px, maks. 8 MB)"}
-              <input type="file" accept="image/png,image/jpeg" onChange={event => void uploadSchoolLogo("2", event)} disabled={logoUploading !== null} />
+            <label>{logoUploading === "school" ? "Mengunggah logo sekolah..." : "Logo SMAN 7 Maros di sisi kanan (PNG/JPEG, min. 300 × 300 px, maks. 8 MB)"}
+              <input type="file" accept="image/png,image/jpeg" onChange={event => void uploadSchoolLogo("school", event)} disabled={logoUploading !== null} />
             </label>
-            <label>Teks kop surat alternatif<textarea rows={4} value={settings.letterhead_2} onChange={e => setSettingsDraft({...settings, letterhead_2:e.target.value})} placeholder="Instansi, alamat, telepon, dan email..." /></label>
+            <label>Alamat surat<textarea rows={3} value={settings.letterhead_2} onChange={e => setSettingsDraft({...settings, letterhead_2:e.target.value})} /></label>
             <SchoolLetterheadPreview letterhead={getSchoolLetterhead(settings, "2")} />
           </fieldset>
-          <p className="pi-letterhead-help">Logo beresolusi tinggi menjaga ketajaman saat dicetak. Kop 1 menjadi pilihan baku; Kop 2 tersedia pada dokumen setelah diisi. Unggahan diterapkan setelah pengaturan disimpan.</p>
+          <p className="pi-letterhead-help">Kop 1 memakai lambang Sulawesi Selatan di tengah; Kop 2 memakai lambang provinsi di kiri dan logo sekolah di kanan. Lambang provinsi bawaan dan logo sekolah dapat diganti di sini. Alamat mengikuti data sekolah dan otomatis dipakai pada dokumen.</p>
         </div>
         <div className="pi-wide pi-actions"><button className="pi-primary" disabled={busy || logoUploading !== null}>Simpan identitas</button><button type="button" className="pi-secondary" onClick={() => window.print()}>Cetak pratinjau</button></div>
       </form>
