@@ -178,9 +178,11 @@
 .letter-app .template-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
 .letter-app .template-actions .secondary,.letter-app .template-disable{padding:7px 9px;font-size:9px}
 .letter-app .template-disable{display:inline-flex;align-items:center;gap:5px;border:0;border-radius:8px;background:#fff0f0;color:#b64a4a;font-weight:700}
-.letter-app .template-modal .modal-card{width:min(1380px,96vw);max-height:94vh;padding:24px}
-.letter-app .template-studio{display:flex;flex-direction:column;gap:16px}
-.letter-app .template-studio-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.letter-app .modal-card.template-modal{display:flex;width:min(1440px,96vw);max-height:94vh;max-height:94dvh;flex-direction:column;overflow:hidden;padding:22px}
+.letter-app .template-modal>.modal-head{flex:none;margin-bottom:14px;padding-bottom:13px;border-bottom:1px solid #edf0f6}
+.letter-app .template-studio{display:flex;min-height:0;flex-direction:column;gap:12px;overflow:auto;padding-right:4px}
+.letter-app .template-studio>.form-actions{position:sticky;bottom:-1px;z-index:2;flex:none;margin-top:0;padding:12px 0 2px;background:#fff;border-top:1px solid #edf0f6}
+.letter-app .template-studio-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 12px}
 .letter-app .template-studio-fields>label,.letter-app .template-html-editor{display:flex;flex-direction:column;gap:7px;color:#5f7185;font-size:10px;font-weight:700}
 .letter-app .template-studio-fields input:not([type=checkbox]),.letter-app .template-studio-fields select,.letter-app .template-custom-token input,.letter-app .template-html-editor textarea,.letter-app .template-field-schema>input,.letter-app .template-field-schema>select{min-width:0;width:100%;border:1px solid #e1e8f0;border-radius:8px;background:#fbfcfe;padding:10px 11px;color:#2c4056;font-size:10px}
 .letter-app .template-studio-fields input[type=checkbox],.letter-app .template-approval-toggle input{width:auto}
@@ -189,6 +191,7 @@
 .letter-app .template-file-upload input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
 .letter-app .template-source-path{grid-column:1/-1;color:#77869b;font-size:9px}
 .letter-app .template-tagging-studio,.letter-app .template-schema-editor,.letter-app .template-preview-column{padding:13px;border:1px solid #e8eaf3;border-radius:11px;background:#fcfcff}
+.letter-app .template-tagging-studio{padding:11px 13px}
 .letter-app .template-studio-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;color:#5d54b5}
 .letter-app .template-studio-section-head>div{display:flex;flex-direction:column;gap:4px}
 .letter-app .template-studio-section-head strong{color:#31445f;font-size:11px}
@@ -199,13 +202,13 @@
 .letter-app .template-token-buttons button:hover{background:#e8e5ff}
 .letter-app .template-custom-token{display:flex;gap:8px;margin-top:10px}
 .letter-app .template-custom-token .secondary{flex:none;padding:8px 10px;font-size:9px}
-.letter-app .template-studio-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.82fr);align-items:start;gap:14px}
-.letter-app .template-editor-column{display:flex;min-width:0;flex-direction:column;gap:12px}
+.letter-app .template-studio-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(390px,.95fr);align-items:stretch;gap:14px}
+.letter-app .template-editor-column{display:flex;min-width:0;max-height:58vh;flex-direction:column;gap:12px;overflow:auto;padding-right:4px}
 .letter-app .template-html-editor textarea{min-height:235px;resize:vertical;font:10px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace}
 .letter-app .template-field-schema{display:grid;grid-template-columns:minmax(80px,.65fr) minmax(100px,1fr) minmax(100px,.9fr) auto;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #edf0f5}
 .letter-app .template-field-schema>strong{overflow:hidden;color:#5c51b7;font:600 9px ui-monospace,monospace;text-overflow:ellipsis}
 .letter-app .template-field-schema>label{display:flex;align-items:center;gap:4px;color:#7a8799;font-size:8px;white-space:nowrap}
-.letter-app .template-preview-column{position:sticky;top:0;max-height:68vh;overflow:auto}
+.letter-app .template-preview-column{display:flex;min-width:0;max-height:58vh;flex-direction:column;overflow:auto}
 .letter-app .template-letter-paper{width:100%;min-height:420px;padding:12mm 10mm}
 .letter-app .template-letter-paper .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}
 .letter-app .template-letter-paper .letter-document-header img{width:15mm;height:18mm}
@@ -214,13 +217,13 @@
 .letter-app .template-letter-paper .letter-document-heading h2{font-size:9pt}
 .letter-app .template-letter-paper .letter-document-heading p:last-child{font-size:6pt}
 .letter-app .template-letter-paper .letter-template-body{font-size:9pt}
-.letter-app .letter-action-modal .modal-card{width:min(1120px,96vw)}
+.letter-app .modal-card.letter-action-modal{width:min(1120px,96vw)}
 .letter-app .letter-action-preview{max-height:48vh;margin-bottom:14px;overflow:auto;background:#f1f3f8;padding:10px}
 .letter-app .letter-action-preview .letter-paper{min-height:257mm;padding:14mm}
 .letter-app .letter-action-modal .modal-form{display:grid;grid-template-columns:1fr 1fr;align-items:start}
 .letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:span 2}
 .letter-app .letter-action-modal .modal-form>button{justify-self:end}
-.letter-app .letter-preview-modal .modal-card{width:min(950px,96vw);background:#f1f3f8}
+.letter-app .modal-card.letter-preview-modal{width:min(950px,96vw);background:#f1f3f8}
 .letter-app .letter-preview-modal .modal-head{padding:0 5px}
 .letter-app .letter-preview-modal .letter-paper{max-height:70vh;overflow:auto}
 .letter-app .letter-preview-actions{display:flex;justify-content:flex-end;margin-top:14px}
@@ -229,5 +232,5 @@
 .letter-app .notification-row.is-read{opacity:.62}
 .letter-app .notification-row>span{min-width:0}
 .letter-app .notification-row:hover{background:#f7f8ff}
-@media(max-width:1000px){.letter-app .request-create-layout{grid-template-columns:1fr}.letter-app .request-live-preview{position:static;max-height:none}.letter-app .template-studio-workspace{grid-template-columns:1fr}.letter-app .template-preview-column{position:static;max-height:560px}}
-@media(max-width:700px){.letter-app .template-modal .modal-card,.letter-app .letter-action-modal .modal-card,.letter-app .letter-preview-modal .modal-card{width:100%;padding:16px}.letter-app .template-studio-fields{grid-template-columns:1fr}.letter-app .template-studio-fields>.template-source-path{grid-column:auto}.letter-app .template-custom-token{align-items:stretch;flex-direction:column}.letter-app .template-field-schema{grid-template-columns:minmax(65px,.6fr) minmax(90px,1fr);}.letter-app .template-field-schema>label{grid-column:span 2}.letter-app .letter-action-modal .modal-form{grid-template-columns:1fr}.letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:1}.letter-app .letter-paper{width:100%;min-height:230mm;padding:12mm 10mm}.letter-app .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}.letter-app .letter-document-header img{width:15mm;height:18mm}.letter-app .letter-document-heading p:first-child{font-size:7pt}.letter-app .letter-document-heading p:nth-child(2){font-size:8pt}.letter-app .letter-document-heading h2{font-size:9pt}.letter-app .letter-document-heading p:last-child{font-size:6pt}.letter-app .letter-document-render,.letter-app .letter-template-body{font-size:9pt}.letter-app .letter-preview-modal .letter-paper{max-height:67vh}}
+@media(max-width:1000px){.letter-app .request-create-layout{grid-template-columns:1fr}.letter-app .request-live-preview{position:static;max-height:none}.letter-app .template-studio-workspace{grid-template-columns:1fr}.letter-app .template-editor-column{max-height:none;overflow:visible;padding-right:0}.letter-app .template-preview-column{position:static;max-height:560px}}
+@media(max-width:700px){.letter-app .modal-card.template-modal,.letter-app .modal-card.letter-action-modal,.letter-app .modal-card.letter-preview-modal{width:100%;max-height:96vh;max-height:96dvh;padding:16px}.letter-app .template-modal>.modal-head{margin-bottom:10px;padding-bottom:10px}.letter-app .template-studio-fields{grid-template-columns:1fr}.letter-app .template-studio-fields>.template-source-path{grid-column:auto}.letter-app .template-custom-token{align-items:stretch;flex-direction:column}.letter-app .template-field-schema{grid-template-columns:minmax(65px,.6fr) minmax(90px,1fr);}.letter-app .template-field-schema>label{grid-column:span 2}.letter-app .letter-action-modal .modal-form{grid-template-columns:1fr}.letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:1}.letter-app .letter-paper{width:100%;min-height:230mm;padding:12mm 10mm}.letter-app .letter-document-header{grid-template-columns:16mm minmax(0,1fr) 16mm;gap:2mm}.letter-app .letter-document-header img{width:15mm;height:18mm}.letter-app .letter-document-heading p:first-child{font-size:7pt}.letter-app .letter-document-heading p:nth-child(2){font-size:8pt}.letter-app .letter-document-heading h2{font-size:9pt}.letter-app .letter-document-heading p:last-child{font-size:6pt}.letter-app .letter-document-render,.letter-app .letter-template-body{font-size:9pt}.letter-app .letter-preview-modal .letter-paper{max-height:67vh}}
