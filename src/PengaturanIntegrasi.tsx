@@ -260,11 +260,11 @@ export default function PengaturanIntegrasi({
 
   async function toggleModule(item: ModuleSetting) {
     try {
-      const { error } = await supabase.from("app_module_settings").update({
-        is_enabled: !item.is_enabled,
-        updated_at: new Date().toISOString(),
-        updated_by: currentUser?.id ?? null,
-      }).eq("id", item.id);
+      const nextEnabled = !item.is_enabled;
+      const { error } = await supabase.rpc("set_app_module_status", {
+        p_module_id: item.id,
+        p_is_enabled: nextEnabled,
+      });
       if (error) throw error;
       const auditWarning = await auditSettings(
         item.is_enabled ? "Modul dinonaktifkan" : "Modul diaktifkan",
