@@ -859,15 +859,27 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       .join('')
     const watermark=documentMarkup.isDraft?'<span class="letter-watermark">KONSEP / BELUM BERNOMOR</span>':''
     const documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(documentMarkup.title)}</title>${stylesheetLinks}${inlineStylesheets}<style>
+      html,body{margin:0;padding:0;background:#f1f3f8}
+      body{display:flex;justify-content:center;min-height:100vh}
+      .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:72px 12px 24px;background:#fff}
+      .letter-app .letter-paper{width:${paperWidth}mm;height:${paperHeight}mm;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:0 8px 26px #18274418;transform:none}
+      .letter-print-toolbar{position:fixed;inset:0 0 auto;z-index:10;display:flex;justify-content:flex-end;padding:12px 18px;background:#fff;border-bottom:1px solid #e7edf4}
+      .letter-print-toolbar button{border:0;border-radius:9px;padding:10px 15px;background:#2563eb;color:#fff;font:700 12px Arial,sans-serif;cursor:pointer}
+      .letter-print-toolbar button:hover{background:#1d4ed8}
       @page{size:${paperWidth}mm ${paperHeight}mm;margin:0}
-      html,body{width:${paperWidth}mm;height:${paperHeight}mm;margin:0;padding:0;background:#fff}
-      .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:0;background:#fff}
-      .letter-app .letter-paper{width:${paperWidth}mm;height:${paperHeight}mm;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:none;transform:none}
-      </style></head><body><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
+      @media print{
+        html,body{width:${paperWidth}mm;height:${paperHeight}mm;background:#fff}
+        body{display:block;min-height:0}
+        .letter-app{margin:0;background:#fff}
+        .letter-app .letter-paper{box-shadow:none}
+        .letter-print-toolbar{display:none!important}
+      }
+      </style></head><body><div class="letter-print-toolbar"><button id="letter-print-button" type="button">Cetak / Simpan PDF</button></div><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
     const printWindow=window.open('','_blank')
     if(!printWindow){notify('Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.');return}
     printWindow.opener=null
     printWindow.onload=()=>{
+      printWindow.document.getElementById('letter-print-button')?.addEventListener('click',()=>printWindow.print())
       printWindow.focus()
       printWindow.print()
     }
