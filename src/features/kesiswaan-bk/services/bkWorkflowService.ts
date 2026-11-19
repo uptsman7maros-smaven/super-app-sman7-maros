@@ -7,6 +7,7 @@ import type {
   CurhatThreadRow,
   HomeVisitRow,
   RplRow,
+  RplGeneratedDraft,
   StudentCounselingProfile,
 } from "../types";
 
@@ -42,6 +43,58 @@ async function invokeBkWritingAssistant(body: Record<string, unknown>) {
     throw new Error("Respons asisten AI tidak sesuai format.");
   }
   return data.draft;
+}
+
+export async function generateRpl(input: {
+  topic: string;
+  bidang_layanan: string;
+  komponen_layanan: string;
+  jenis_layanan: string;
+  sasaran_kelas: string;
+  durasi: string;
+  catatan_kebutuhan: string;
+}): Promise<RplGeneratedDraft> {
+  const { data, error } = await supabase.functions.invoke("generate-rpl", { body: input });
+  if (error) {
+    if (error.context instanceof Response) {
+      let payload: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = await error.context.clone().json();
+        if (isRecord(parsed)) payload = parsed;
+      } catch {
+        // The gateway can return a non-JSON response while the function is unavailable.
+      }
+      if (payload.code === "MISSING_GEMINI_KEY") {
+        throw new Error("GEMINI_API_KEY belum dikonfigurasi di Supabase. Gunakan template RPL bawaan atau minta admin mengatur secret.");
+      }
+      if (error.context.status === 404 || error.context.status === 503 && /function/i.test(String(payload.error ?? ""))) {
+        throw new Error("Edge Function generate-rpl belum tersedia. Deploy fungsi tersebut atau gunakan template RPL bawaan.");
+      }
+      if (typeof payload.error === "string") throw new Error(payload.error);
+    }
+    throw new Error(error.message || "Generator RPL AI tidak dapat dihubungi. Gunakan template RPL bawaan.");
+  }
+  if (!isRecord(data) || !isRecord(data.draft)) throw new Error("Respons Generator RPL tidak sesuai format.");
+  const draft = data.draft;
+  const scalarKeys = [
+    "judul_topik", "tujuan_umum", "metode_teknik", "media_alat", "materi_pokok",
+    "evaluasi_proses", "evaluasi_hasil",
+  ] as const;
+  for (const key of scalarKeys) if (typeof draft[key] !== "string" || !draft[key].trim()) {
+    throw new Error("Hasil Gemini tidak memiliki semua bagian RPL.");
+  }
+  if (!Array.isArray(draft.tujuan_khusus) || draft.tujuan_khusus.length < 3 || draft.tujuan_khusus.length > 4
+    || draft.tujuan_khusus.some(item => typeof item !== "string" || !item.trim())) {
+    throw new Error("Tujuan khusus pada hasil Gemini tidak valid.");
+  }
+  for (const key of ["tahap_awal", "tahap_inti", "tahap_penutup"] as const) {
+    const steps: unknown = draft[key];
+    if (!Array.isArray(steps) || steps.length === 0 || steps.some(step =>
+      !isRecord(step) || typeof step.kegiatan !== "string" || !step.kegiatan.trim()
+      || !Number.isInteger(step.estimasi_menit) || Number(step.estimasi_menit) < 1,
+    )) throw new Error("Langkah kegiatan pada hasil Gemini tidak valid.");
+  }
+  return draft as unknown as RplGeneratedDraft;
 }
 
 export async function generateBkRplDraft(input: {

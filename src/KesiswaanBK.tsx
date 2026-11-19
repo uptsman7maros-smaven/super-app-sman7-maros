@@ -99,6 +99,7 @@ export default function KesiswaanBK({
     npsn: "",
     letterhead: "",
     academic_year: "",
+    logo_url: "",
   });
   const [rows, setRows] = useState<KbRow[]>([]);
   const [count, setCount] = useState(0);

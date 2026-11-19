@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import type { ReactNode } from "react";
 import type { SchoolUser } from "../../../context/school-context";
 import ReportActions from "./ReportActions";
 import {
   createCurhatThread,
+  generateRpl,
   generateBkAkpdQuestions,
-  generateBkRplDraft,
   listAkpdForms,
   listAkpdResponses,
   listConsultations,
@@ -35,12 +35,15 @@ import type {
   CurhatThreadRow,
   HomeVisitRow,
   RplRow,
+  RplEditorContent,
+  RplGeneratedDraft,
   SchoolHeader,
   StudentCounselingProfile,
   StudentOption,
   AcademicYearOption,
   UserRole,
 } from "../types";
+import type { RplPdfData } from "../utils/rplPdfGenerator";
 
 export type CounselingWorkspaceTab =
   | "Konsultasi BK"
@@ -75,16 +78,19 @@ const RPL_PRESETS = [
   "Topik kustom",
 ] as const;
 const RPL_FIELDS = [
-  "Tujuan umum",
-  "Tujuan khusus",
-  "Metode dan teknik",
-  "Media / alat",
-  "Tahap awal / pendahuluan",
-  "Tahap inti",
-  "Tahap penutup",
-  "Evaluasi proses",
-  "Evaluasi hasil",
+  { key: "tujuan_umum", label: "Tujuan umum" },
+  { key: "tujuan_khusus", label: "Tujuan khusus (satu tujuan per baris)" },
+  { key: "metode_teknik", label: "Metode dan teknik" },
+  { key: "media_alat", label: "Media / alat" },
+  { key: "materi_pokok", label: "Materi pokok" },
+  { key: "tahap_awal", label: "Tahap awal / pendahuluan (satu langkah per baris)" },
+  { key: "tahap_inti", label: "Tahap inti (satu langkah per baris)" },
+  { key: "tahap_penutup", label: "Tahap penutup (satu langkah per baris)" },
+  { key: "evaluasi_proses", label: "Evaluasi proses" },
+  { key: "evaluasi_hasil", label: "Evaluasi hasil" },
 ] as const;
+const RPL_COMPONENTS = ["Layanan Dasar", "Layanan Responsif", "Perencanaan Individual", "Dukungan Sistem"] as const;
+const RPL_SERVICE_TYPES = ["Bimbingan Klasikal", "Bimbingan Kelompok", "Konseling Kelompok", "Layanan Informasi"] as const;
 const AKPD_DEFAULT_QUESTIONS = [
   { area: "Pribadi", text: "Saya membutuhkan cara untuk membangun kepercayaan diri dan menerima diri." },
   { area: "Pribadi", text: "Saya mengetahui cara mencari bantuan dan menjaga keamanan diri dari kekerasan atau perundungan." },
@@ -100,14 +106,70 @@ function weekday(date: string) {
   return date ? new Date(`${date}T00:00:00`).toLocaleDateString("id-ID", { weekday: "long" }) : "";
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, character => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  })[character] ?? character);
+const EMPTY_RPL_CONTENT: RplEditorContent = {
+  judul_topik: "",
+  tujuan_umum: "",
+  tujuan_khusus: "",
+  metode_teknik: "",
+  media_alat: "",
+  materi_pokok: "",
+  tahap_awal: "",
+  tahap_inti: "",
+  tahap_penutup: "",
+  evaluasi_proses: "",
+  evaluasi_hasil: "",
+};
+
+function stageToEditor(steps: RplGeneratedDraft["tahap_awal"]) {
+  return steps.map(step => `${step.kegiatan} (${step.estimasi_menit} menit)`).join("\n");
+}
+
+function toRplEditorContent(draft: RplGeneratedDraft): RplEditorContent {
+  return {
+    judul_topik: draft.judul_topik,
+    tujuan_umum: draft.tujuan_umum,
+    tujuan_khusus: draft.tujuan_khusus.map((goal, index) => `${index + 1}. ${goal}`).join("\n"),
+    metode_teknik: draft.metode_teknik,
+    media_alat: draft.media_alat,
+    materi_pokok: draft.materi_pokok,
+    tahap_awal: stageToEditor(draft.tahap_awal),
+    tahap_inti: stageToEditor(draft.tahap_inti),
+    tahap_penutup: stageToEditor(draft.tahap_penutup),
+    evaluasi_proses: draft.evaluasi_proses,
+    evaluasi_hasil: draft.evaluasi_hasil,
+  };
+}
+
+function storedRplContent(content: Record<string, string>, title: string): RplEditorContent {
+  return {
+    judul_topik: content.judul_topik || content.topik || title,
+    tujuan_umum: content.tujuan_umum || content["Tujuan umum"] || "",
+    tujuan_khusus: content.tujuan_khusus || content["Tujuan khusus"] || "",
+    metode_teknik: content.metode_teknik || content["Metode dan teknik"] || "",
+    media_alat: content.media_alat || content["Media / alat"] || "",
+    materi_pokok: content.materi_pokok || "",
+    tahap_awal: content.tahap_awal || content["Tahap awal / pendahuluan"] || "",
+    tahap_inti: content.tahap_inti || content["Tahap inti"] || "",
+    tahap_penutup: content.tahap_penutup || content["Tahap penutup"] || "",
+    evaluasi_proses: content.evaluasi_proses || content["Evaluasi proses"] || "",
+    evaluasi_hasil: content.evaluasi_hasil || content["Evaluasi hasil"] || "",
+  };
+}
+
+function templateRpl(topic: string): RplEditorContent {
+  return {
+    judul_topik: topic,
+    tujuan_umum: "Peserta didik memahami topik layanan dan mampu menerapkan strategi yang sehat dalam keseharian.",
+    tujuan_khusus: "1. Mengidentifikasi pengetahuan awal dan kebutuhan terkait topik.\n2. Menjelaskan konsep dan strategi yang relevan.\n3. Mempraktikkan strategi melalui kegiatan reflektif atau kolaboratif.\n4. Menyusun satu langkah penerapan dan mengetahui sumber bantuan yang aman.",
+    metode_teknik: "Bimbingan partisipatif, diskusi kelompok, studi situasi hipotetis, dan refleksi individu.",
+    media_alat: "Slide atau kartu situasi, papan tulis, lembar refleksi, dan alat tulis.",
+    materi_pokok: "Pengertian dan dampak topik; cara merespons secara aman; keterampilan mencari bantuan dari orang dewasa tepercaya dan layanan sekolah.",
+    tahap_awal: "Menyapa, membangun suasana aman, menyampaikan tujuan dan kesepakatan diskusi (10 menit)\nMenggali pemahaman awal dengan pertanyaan pemantik (5 menit)",
+    tahap_inti: "Menyampaikan materi inti secara ringkas dan kontekstual (10 menit)\nMenganalisis situasi hipotetis secara berkelompok (12 menit)\nBerbagi strategi dan menyusun langkah penerapan pribadi (5 menit)",
+    tahap_penutup: "Menyimpulkan pembelajaran, refleksi singkat, dan menyampaikan jalur bantuan (3 menit)",
+    evaluasi_proses: "Observasi keterlibatan, partisipasi, sikap saling menghargai, dan ketercapaian waktu setiap tahap.",
+    evaluasi_hasil: "Exit ticket atau refleksi singkat tentang pemahaman, strategi yang dipilih, dan komitmen penerapan.",
+  };
 }
 
 function safeExportRows(rows: Record<string, unknown>[]) {
@@ -238,9 +300,19 @@ export default function CounselingWorkflowPanel({
   const [rplTopic, setRplTopic] = useState(initialRplTopic);
   const [rplGrade, setRplGrade] = useState("");
   const [rplArea, setRplArea] = useState("Pribadi");
+  const [rplComponent, setRplComponent] = useState<(typeof RPL_COMPONENTS)[number]>("Layanan Dasar");
+  const [rplServiceType, setRplServiceType] = useState<(typeof RPL_SERVICE_TYPES)[number]>("Bimbingan Klasikal");
   const [rplDuration, setRplDuration] = useState("2 x 45 menit");
   const [rplYearId, setRplYearId] = useState(activeYear);
-  const [rplContent, setRplContent] = useState<Record<string, string>>({});
+  const [rplSemester, setRplSemester] = useState("1");
+  const [rplPrincipalName, setRplPrincipalName] = useState("");
+  const [rplNeedsNotes, setRplNeedsNotes] = useState("");
+  const [rplContent, setRplContent] = useState<RplEditorContent>(EMPTY_RPL_CONTENT);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewError, setPdfPreviewError] = useState("");
+  const pdfPreviewUrlRef = useRef("");
+  const pdfRequestId = useRef(0);
   const [questionDraft, setQuestionDraft] = useState("");
   const [formTitle, setFormTitle] = useState("Angket Kebutuhan Peserta Didik");
   const [akpdId, setAkpdId] = useState("");
@@ -251,6 +323,11 @@ export default function CounselingWorkflowPanel({
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({});
   const [messageDraft, setMessageDraft] = useState("");
   const [profileDraft, setProfileDraft] = useState<StudentCounselingProfile | null>(null);
+
+  useEffect(() => () => {
+    pdfRequestId.current += 1;
+    if (pdfPreviewUrlRef.current) URL.revokeObjectURL(pdfPreviewUrlRef.current);
+  }, []);
 
   async function reloadTab() {
     setError("");
@@ -372,6 +449,74 @@ export default function CounselingWorkflowPanel({
     }
   }
 
+  function getRplPdfData(content = rplContent, topic = rplTopic, overrides: Partial<RplPdfData> = {}): RplPdfData {
+    return {
+      ...content,
+      judul_topik: topic,
+      komponen_layanan: overrides.komponen_layanan ?? rplComponent,
+      bidang_layanan: overrides.bidang_layanan ?? rplArea,
+      jenis_layanan: overrides.jenis_layanan ?? rplServiceType,
+      sasaran_kelas: overrides.sasaran_kelas ?? rplGrade,
+      durasi: overrides.durasi ?? rplDuration,
+      fungsi_layanan: overrides.fungsi_layanan ?? "Pemahaman, pencegahan, dan pengembangan",
+      semester: overrides.semester ?? rplSemester,
+    };
+  }
+
+  function getRplPdfSettings(yearId = rplYearId) {
+    return {
+      ...schoolHeader,
+      academicYear: academicYears.find(year => year.id === yearId)?.name ?? schoolHeader.academic_year,
+      counselorName: currentUser.full_name || currentUser.username,
+      principalName: rplPrincipalName,
+    };
+  }
+
+  async function renderRplPdfPreview(
+    content = rplContent,
+    topic = rplTopic,
+    overrides: Partial<RplPdfData> = {},
+    yearId = rplYearId,
+  ) {
+    const requestId = ++pdfRequestId.current;
+    setPdfPreviewLoading(true);
+    setPdfPreviewError("");
+    try {
+      const { generateRplPdfBlobUrl } = await import("../utils/rplPdfGenerator");
+      const result = await generateRplPdfBlobUrl(getRplPdfData(content, topic, overrides), getRplPdfSettings(yearId));
+      if (requestId !== pdfRequestId.current) {
+        URL.revokeObjectURL(result.url);
+        return;
+      }
+      if (pdfPreviewUrlRef.current) URL.revokeObjectURL(pdfPreviewUrlRef.current);
+      pdfPreviewUrlRef.current = result.url;
+      setPdfPreviewUrl(result.url);
+    } catch (previewError) {
+      if (requestId === pdfRequestId.current) {
+        setPdfPreviewError(previewError instanceof Error ? previewError.message : "PDF gagal dibuat.");
+      }
+    } finally {
+      if (requestId === pdfRequestId.current) setPdfPreviewLoading(false);
+    }
+  }
+
+  async function downloadCurrentRplPdf() {
+    try {
+      const { downloadRplPdf } = await import("../utils/rplPdfGenerator");
+      await downloadRplPdf(getRplPdfData(), getRplPdfSettings());
+    } catch (downloadError) {
+      setPdfPreviewError(downloadError instanceof Error ? downloadError.message : "PDF gagal diunduh.");
+    }
+  }
+
+  function applyRplDraft(draft: RplEditorContent, topic: string, noticeText: string) {
+    setRplTitle(topic);
+    setRplTopic(topic);
+    setRplContent(draft);
+    setNotice(noticeText);
+    void renderRplPdfPreview(draft, topic);
+  }
+
   async function generateRplDraft() {
     if (!rplTopic.trim()) {
       setError("Isi topik layanan sebelum meminta bantuan AI.");
@@ -381,16 +526,20 @@ export default function CounselingWorkflowPanel({
     setError("");
     setNotice("");
     try {
-      const draft = await generateBkRplDraft({
+      const draft = await generateRpl({
         topic: rplTopic.trim(),
-        area: rplArea,
-        targetClass: rplGrade,
-        duration: rplDuration,
+        bidang_layanan: rplArea,
+        komponen_layanan: rplComponent,
+        jenis_layanan: rplServiceType,
+        sasaran_kelas: rplGrade,
+        durasi: rplDuration,
+        catatan_kebutuhan: rplNeedsNotes,
       });
-      setRplContent(draft);
-      setNotice("Draf RPL dibuat. Tinjau dan sesuaikan sebelum disimpan.");
+      applyRplDraft(toRplEditorContent(draft), draft.judul_topik, "Draf RPL Gemini siap ditinjau. Pratinjau PDF juga sudah diperbarui.");
     } catch (draftError) {
-      setError(draftError instanceof Error ? draftError.message : "Draf RPL gagal dibuat.");
+      const message = draftError instanceof Error ? draftError.message : "Draf RPL gagal dibuat.";
+      setError(message);
+      if (/template RPL bawaan/i.test(message)) setNotice("Generator AI belum tersedia. Anda tetap dapat memakai template RPL bawaan.");
     } finally {
       setAiBusy(false);
     }
@@ -437,24 +586,32 @@ export default function CounselingWorkflowPanel({
   function openRpl(row: RplRow) {
     setRplId(row.id);
     setRplTitle(row.title);
-    setRplTopic(row.title);
+    setRplTopic(row.content.judul_topik || row.content.topik || row.title);
     setRplGrade(row.target_class);
     setRplArea(row.service_area);
-    setRplContent(row.content);
+    setRplComponent((RPL_COMPONENTS.includes(row.content.komponen_layanan as (typeof RPL_COMPONENTS)[number])
+      ? row.content.komponen_layanan : "Layanan Dasar") as (typeof RPL_COMPONENTS)[number]);
+    setRplServiceType((RPL_SERVICE_TYPES.includes(row.content.jenis_layanan as (typeof RPL_SERVICE_TYPES)[number])
+      ? row.content.jenis_layanan : "Bimbingan Klasikal") as (typeof RPL_SERVICE_TYPES)[number]);
+    setRplContent(storedRplContent(row.content, row.title));
+    setRplDuration(row.content.durasi || "2 x 45 menit");
+    setRplSemester(row.content.semester || "1");
+    setRplPrincipalName(row.content.nama_kepala_sekolah || "");
+    setRplNeedsNotes(row.content.catatan_kebutuhan || "");
     setRplYearId(row.academic_year_id ?? activeYear);
-  }
-
-  function printRpl() {
-    const html = escapeHtml;
-    const doc = `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${html(rplTitle || rplTopic)}</title><style>body{font-family:Arial,sans-serif;color:#111;line-height:1.55;margin:32px}header{text-align:center;border-bottom:3px double #111;padding-bottom:12px}h1{font-size:20px;margin:4px}h2{text-align:center;font-size:18px}table{width:100%;border-collapse:collapse}td{padding:7px;vertical-align:top;border:1px solid #999}.sign{display:flex;justify-content:space-between;margin-top:55px}.sign div{width:40%;text-align:center}</style></head><body><header>${schoolHeader.letterhead ? `<p>${html(schoolHeader.letterhead)}</p>` : ""}<h1>${html(schoolHeader.school_name)}</h1><p>NPSN ${html(schoolHeader.npsn)} · Tahun Ajaran ${html(academicYears.find(year => year.id === rplYearId)?.name ?? schoolHeader.academic_year)}</p></header><h2>RENCANA PELAKSANAAN LAYANAN BIMBINGAN DAN KONSELING</h2><table><tr><td>Sasaran / kelas</td><td>${html(rplGrade)}</td><td>Waktu</td><td>${html(rplDuration)}</td></tr><tr><td>Topik</td><td colspan="3">${html(rplTopic)}</td></tr><tr><td>Bidang layanan</td><td>${html(rplArea)}</td><td>Komponen</td><td>Layanan dasar</td></tr>${RPL_FIELDS.map(field => `<tr><td colspan="4"><strong>${html(field)}</strong><br>${html(rplContent[field] ?? "").replaceAll("\n", "<br>")}</td></tr>`).join("")}</table><div class="sign"><div>Mengetahui,<br>Kepala Sekolah<br><br><br><br>(................................)</div><div>Guru BK<br><br><br><br><br>(................................)</div></div><script>window.print()</script></body></html>`;
-    const popup = window.open("", "_blank");
-    if (!popup) {
-      setError("Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.");
-      return;
-    }
-    popup.opener = null;
-    popup.document.write(doc);
-    popup.document.close();
+    void renderRplPdfPreview(
+      storedRplContent(row.content, row.title),
+      row.content.judul_topik || row.content.topik || row.title,
+      {
+        komponen_layanan: row.content.komponen_layanan || "Layanan Dasar",
+        bidang_layanan: row.service_area,
+        jenis_layanan: row.content.jenis_layanan || "Bimbingan Klasikal",
+        sasaran_kelas: row.target_class,
+        durasi: row.content.durasi || "2 x 45 menit",
+        semester: row.content.semester || "1",
+      },
+      row.academic_year_id ?? activeYear,
+    );
   }
 
   if (!canManage && !isStudent) {
@@ -601,7 +758,7 @@ export default function CounselingWorkflowPanel({
     return (
       <section className="kb-panel kb-workflow-panel">
         <PrintHeader header={schoolHeader} title="Rencana Pelaksanaan Layanan Bimbingan dan Konseling" />
-        <div className="kb-panel-heading"><div><span className="kb-eyebrow">PERENCANAAN LAYANAN</span><h2>Generator RPL</h2></div><div className="kb-export-actions"><button className="kb-secondary" type="button" onClick={printRpl}>Cetak / Simpan PDF</button></div></div>
+        <div className="kb-panel-heading"><div><span className="kb-eyebrow">PERENCANAAN LAYANAN</span><h2>Generator RPL</h2></div></div>
         {error && <div className="kb-alert" role="alert">{error}</div>}{notice && <div className="kb-success" role="status">{notice}</div>}
         <form className="kb-form" onSubmit={event => {
           event.preventDefault();
@@ -609,32 +766,85 @@ export default function CounselingWorkflowPanel({
             const result = await saveRpl({
               id: rplId || undefined,
               title: rplTitle || rplTopic,
-              academic_year_id: rplYearId || null,
+              academic_year_id: rplYearId || activeYear || null,
               target_class: rplGrade,
               service_area: rplArea,
-              content: { ...rplContent, durasi: rplDuration, topik: rplTopic },
+              content: {
+                ...rplContent,
+                topik: rplTopic,
+                komponen_layanan: rplComponent,
+                jenis_layanan: rplServiceType,
+                durasi: rplDuration,
+                catatan_kebutuhan: rplNeedsNotes,
+                semester: rplSemester,
+                nama_kepala_sekolah: rplPrincipalName,
+              },
             });
             setRplId(result.id);
           }, "RPL berhasil disimpan.");
         }}>
-          <label>Preset topik<select value={RPL_PRESETS.includes(rplTopic as (typeof RPL_PRESETS)[number]) ? rplTopic : "Topik kustom"} onChange={event => {
-            const topic = event.target.value === "Topik kustom" ? "" : event.target.value;
-            setRplTopic(topic); setRplTitle(topic);
-          }}><option value="">Pilih preset...</option>{RPL_PRESETS.map(topic => <option key={topic}>{topic}</option>)}</select></label>
-          <label><LabelCaption required>Topik layanan</LabelCaption><input required value={rplTopic} onChange={event => { setRplTopic(event.target.value); setRplTitle(event.target.value); }} /></label>
-          <label><LabelCaption required>Kelas / fase sasaran</LabelCaption><select required value={rplGrade} onChange={event => setRplGrade(event.target.value)}><option value="">Pilih kelas...</option>{classes.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}<option value="Semua kelas">Semua kelas</option></select></label>
-          <label><LabelCaption required>Bidang layanan</LabelCaption><select required value={rplArea} onChange={event => setRplArea(event.target.value)}>{AREA_OPTIONS.map(area => <option key={area}>{area}</option>)}</select></label>
-          <label>Waktu / durasi<input value={rplDuration} onChange={event => setRplDuration(event.target.value)} /></label>
-          <label>Tahun ajaran<select value={rplYearId} onChange={event => setRplYearId(event.target.value)}>{academicYears.map(year => <option key={year.id} value={year.id}>{year.name}{year.is_active ? " · Aktif" : ""}</option>)}</select></label>
-          <div className="kb-ai-assistant">
-            <p>Gemini hanya menerima topik, bidang, kelas, dan durasi. Jangan masukkan identitas atau kasus pribadi siswa.</p>
-            <button className="kb-secondary" type="button" disabled={aiBusy} aria-busy={aiBusy} onClick={() => void generateRplDraft()}>
-              {aiBusy ? "Menyusun draf..." : "Bantu susun draf dengan Gemini"}
-            </button>
+          <div className="kb-rpl-presets">
+            <span>Pilih topik cepat</span>
+            <div>{RPL_PRESETS.slice(0, 4).map(topic => <button key={topic} className="kb-secondary" type="button" onClick={() => {
+              setRplTopic(topic);
+              setRplTitle(topic);
+              setRplContent(current => ({ ...current, judul_topik: topic }));
+            }}>{topic.includes("Bullying") ? "Bullying / Perundungan" : topic.includes("Kepercayaan") ? "Kepercayaan Diri" : topic.includes("Kekerasan") ? "Kekerasan Seksual" : "Hubungan Pertemanan"}</button>)}</div>
           </div>
-          {RPL_FIELDS.map(field => <label key={field}>{field}<textarea rows={3} value={rplContent[field] ?? ""} onChange={event => setRplContent(current => ({ ...current, [field]: event.target.value }))} /></label>)}
-          <div className="kb-actions"><button className="kb-primary" disabled={busy || aiBusy}>{busy ? "Menyimpan..." : "Simpan RPL"}</button><button className="kb-secondary" type="button" onClick={() => { setRplId(""); setRplTitle(""); setRplTopic(""); setRplContent({}); }}>RPL baru</button></div>
+          <label><LabelCaption required>Topik layanan</LabelCaption><input required value={rplTopic} onChange={event => { setRplTopic(event.target.value); setRplTitle(event.target.value); }} /></label>
+          <label><LabelCaption required>Bidang layanan</LabelCaption><select required value={rplArea} onChange={event => setRplArea(event.target.value)}>{AREA_OPTIONS.map(area => <option key={area}>{area}</option>)}</select></label>
+          <label><LabelCaption required>Komponen layanan</LabelCaption><select required value={rplComponent} onChange={event => setRplComponent(event.target.value as (typeof RPL_COMPONENTS)[number])}>{RPL_COMPONENTS.map(item => <option key={item}>{item}</option>)}</select></label>
+          <label><LabelCaption required>Jenis layanan</LabelCaption><select required value={rplServiceType} onChange={event => setRplServiceType(event.target.value as (typeof RPL_SERVICE_TYPES)[number])}>{RPL_SERVICE_TYPES.map(item => <option key={item}>{item}</option>)}</select></label>
+          <label><LabelCaption required>Kelas sasaran</LabelCaption><select required value={rplGrade} onChange={event => setRplGrade(event.target.value)}><option value="">Pilih kelas...</option>{classes.map(item => <option key={item.id} value={item.name}>{item.name}</option>)}<option value="Semua kelas">Semua kelas</option></select></label>
+          <label><LabelCaption required>Alokasi waktu</LabelCaption><input required value={rplDuration} onChange={event => setRplDuration(event.target.value)} placeholder="1 x 45 Menit" /></label>
+          <label><LabelCaption required>Tahun ajaran</LabelCaption><select required value={rplYearId || activeYear} onChange={event => setRplYearId(event.target.value)}><option value="">Pilih tahun ajaran...</option>{academicYears.map(year => <option key={year.id} value={year.id}>{year.name}{year.is_active ? " · Aktif" : ""}</option>)}</select></label>
+          <label><LabelCaption required>Semester</LabelCaption><select required value={rplSemester} onChange={event => setRplSemester(event.target.value)}><option value="1">Semester 1</option><option value="2">Semester 2</option></select></label>
+          <label>Nama Kepala Sekolah (pengesahan)<input value={rplPrincipalName} onChange={event => setRplPrincipalName(event.target.value)} placeholder="Opsional" /></label>
+          <label>Catatan kebutuhan (tanpa identitas siswa)<textarea rows={3} maxLength={1000} value={rplNeedsNotes} onChange={event => setRplNeedsNotes(event.target.value)} placeholder="Ringkasan kebutuhan umum, bukan data kasus pribadi." /></label>
+          <div className="kb-ai-assistant">
+            <p>Gemini hanya menerima konteks umum RPL. Jangan masukkan nama, NISN, atau catatan kasus pribadi siswa. Jika fungsi AI belum tersedia, gunakan template bawaan.</p>
+            <div className="kb-rpl-generator-actions">
+              <button className="kb-primary" type="button" disabled={aiBusy} aria-busy={aiBusy} onClick={() => void generateRplDraft()}>
+                {aiBusy ? "Menyusun RPL..." : "Generate RPL dengan AI (Gemini)"}
+              </button>
+              <button className="kb-secondary" type="button" onClick={() => {
+                const topic = rplTopic.trim() || "Layanan Bimbingan dan Konseling";
+                applyRplDraft(templateRpl(topic), topic, "Template RPL bawaan dibuat dan pratinjau PDF sudah siap. Silakan sesuaikan.");
+              }}>Gunakan Template RPL Bawaan</button>
+            </div>
+          </div>
+          {RPL_FIELDS.map(field => <label key={field.key}><LabelCaption>{field.label}</LabelCaption><textarea rows={field.key === "materi_pokok" ? 5 : 3} value={rplContent[field.key]} onChange={event => {
+            const value = event.target.value;
+            setRplContent(current => ({ ...current, [field.key]: value }));
+          }} /></label>)}
+          <div className="kb-actions">
+            <button className="kb-secondary" type="button" disabled={pdfPreviewLoading || !rplTopic.trim()} onClick={() => void renderRplPdfPreview()}>
+              {pdfPreviewLoading ? "Membuat PDF..." : "Buat / Perbarui Pratinjau PDF"}
+            </button>
+            <button className="kb-primary" disabled={busy || aiBusy || !rplTopic.trim()}>{busy ? "Menyimpan..." : "Simpan ke Riwayat RPL"}</button>
+            <button className="kb-secondary" type="button" onClick={() => {
+              setRplId("");
+              setRplTitle("");
+              setRplTopic("");
+              setRplContent(EMPTY_RPL_CONTENT);
+              setRplPrincipalName("");
+              setPdfPreviewError("");
+            }}>RPL baru</button>
+          </div>
         </form>
+        {pdfPreviewError && <div className="kb-alert" role="alert">{pdfPreviewError}</div>}
+        {(pdfPreviewUrl || pdfPreviewLoading) && <section className="kb-rpl-preview" aria-label="Pratinjau PDF RPL">
+          <div className="kb-panel-heading"><div><span className="kb-eyebrow">DOKUMEN SIAP CETAK</span><h3>Pratinjau PDF</h3></div>
+            <div className="kb-rpl-generator-actions">
+              <button className="kb-primary" type="button" onClick={() => void downloadCurrentRplPdf()} disabled={!pdfPreviewUrl}>Unduh PDF</button>
+              {pdfPreviewUrl && <a className="kb-secondary kb-rpl-open-link" href={pdfPreviewUrl} target="_blank" rel="noopener noreferrer">Buka PDF di Tab Baru</a>}
+            </div>
+          </div>
+          {pdfPreviewLoading ? <p className="kb-loading" role="status">Menyusun pratinjau PDF…</p> : pdfPreviewUrl && <>
+            <iframe className="kb-rpl-pdf-frame" src={pdfPreviewUrl} title="Pratinjau Dokumen RPL PDF" />
+            <p className="kb-rpl-preview-fallback">Jika pratinjau tidak tampil di perangkat ini, gunakan tombol “Buka PDF di Tab Baru” atau “Unduh PDF”.</p>
+          </>}
+        </section>}
         <div className="kb-workflow-list">{rpls.map(row => <article key={row.id}><div><strong>{row.title}</strong><small>{row.target_class} · {row.service_area} · {academicYears.find(year => year.id === row.academic_year_id)?.name ?? "Tahun ajaran"}</small></div><button className="kb-mini" type="button" onClick={() => openRpl(row)}>Buka / edit</button></article>)}{!rpls.length && <div className="kb-empty">Belum ada RPL tersimpan.</div>}</div><Signatures />
       </section>
     );

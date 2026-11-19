@@ -58,7 +58,7 @@ export type StudentOption = {
 
 export type AcademicYearOption = { id: string; name: string; is_active: boolean };
 export type ClassOption = { id: string; name: string; grade_level: number; academic_year_id: string };
-export type SchoolHeader = { school_name: string; npsn: string; letterhead: string; academic_year: string };
+export type SchoolHeader = { school_name: string; npsn: string; letterhead: string; academic_year: string; logo_url: string };
 export type CounselorOption = { id: string; name: string };
 export type AssignmentStudent = StudentOption & { counselor_profile_id: string | null };
 
@@ -152,6 +152,34 @@ export type RplRow = {
   service_area: string;
   content: Record<string, string>;
   created_at: string;
+};
+
+export type RplGeneratedDraft = {
+  judul_topik: string;
+  tujuan_umum: string;
+  tujuan_khusus: string[];
+  metode_teknik: string;
+  media_alat: string;
+  materi_pokok: string;
+  tahap_awal: Array<{ kegiatan: string; estimasi_menit: number }>;
+  tahap_inti: Array<{ kegiatan: string; estimasi_menit: number }>;
+  tahap_penutup: Array<{ kegiatan: string; estimasi_menit: number }>;
+  evaluasi_proses: string;
+  evaluasi_hasil: string;
+};
+
+export type RplEditorContent = {
+  judul_topik: string;
+  tujuan_umum: string;
+  tujuan_khusus: string;
+  metode_teknik: string;
+  media_alat: string;
+  materi_pokok: string;
+  tahap_awal: string;
+  tahap_inti: string;
+  tahap_penutup: string;
+  evaluasi_proses: string;
+  evaluasi_hasil: string;
 };
 
 export type AkpdFormRow = {

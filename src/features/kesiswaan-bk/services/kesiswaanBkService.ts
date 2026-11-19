@@ -142,7 +142,7 @@ export async function loadStudentsAndYears(role: UserRole): Promise<{
 
 export async function loadSchoolHeader(): Promise<SchoolHeader> {
   const { data, error } = await supabase.from("school_settings")
-    .select("school_name,npsn,letterhead,academic_year")
+    .select("school_name,npsn,letterhead,academic_year,logo_url")
     .order("id")
     .limit(1)
     .maybeSingle();
@@ -152,6 +152,7 @@ export async function loadSchoolHeader(): Promise<SchoolHeader> {
     npsn: data?.npsn || "",
     letterhead: data?.letterhead || "",
     academic_year: data?.academic_year || "",
+    logo_url: data?.logo_url || "",
   };
 }
 
