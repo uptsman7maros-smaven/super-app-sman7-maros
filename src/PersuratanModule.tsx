@@ -820,9 +820,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       .letter-document-header.logo-top:not(.kop-2) .letter-document-heading{grid-column:1;grid-row:2}
       .letter-document-header.logo-top:not(.kop-2) .letter-document-rules{grid-column:1;grid-row:3}
       .letter-document-heading p,.letter-document-heading h2{margin:0}
-      .letter-document-heading p:first-child{font-size:11pt}
-      .letter-document-heading p:nth-child(2){font-size:13pt;font-weight:bold}
-      .letter-document-heading h2{font-size:14pt}
+      .letter-document-heading p:first-child{font-size:12pt}
+      .letter-document-heading p:nth-child(2){font-size:14pt;font-weight:bold}
+      .letter-document-heading h2{font-size:15pt}
       .letter-document-heading p:last-child{margin-top:2mm;font-size:8pt}
       .letter-document-rules{grid-column:1/-1;width:100%;height:2mm;border-top:2pt solid #111;border-bottom:.8pt solid #111}
       .letter-template-body{font:12pt/1.5 "Times New Roman",serif;color:#000}
