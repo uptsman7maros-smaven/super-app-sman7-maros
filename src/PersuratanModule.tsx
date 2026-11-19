@@ -735,8 +735,11 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         const converted=await mammoth.convertToHtml({arrayBuffer:await file.arrayBuffer()})
         html=converted.value
       }else{
-        const pdfjsLib=await import('pdfjs-dist')
-        pdfjsLib.GlobalWorkerOptions.workerSrc=new URL('pdfjs-dist/build/pdf.worker.min.mjs',import.meta.url).toString()
+        const [pdfjsLib,pdfWorker]=await Promise.all([
+          import('pdfjs-dist'),
+          import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+        ])
+        pdfjsLib.GlobalWorkerOptions.workerSrc=pdfWorker.default
         const document=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise
         const paragraphs:string[]=[]
         for(let pageNumber=1;pageNumber<=document.numPages;pageNumber+=1){

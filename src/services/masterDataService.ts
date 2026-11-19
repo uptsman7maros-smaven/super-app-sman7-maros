@@ -30,7 +30,7 @@ export type SchoolSettings = {
   province_logo_url: string;
 };
 
-export type LetterheadSlot = "1" | "2";
+export type LetterheadSlot = "1" | "2" | "3";
 export type SchoolLetterhead = {
   layout: LetterheadSlot;
   school_name: string;
@@ -65,12 +65,13 @@ export function getSchoolLetterhead(
   const primarySchoolLogo =
     typeof settings?.logo_url === "string" ? settings.logo_url.trim() : "";
   const schoolLogoUrl = alternateSchoolLogo || primarySchoolLogo || "/logo-sekolah.png";
+  const thirdLetterheadLogo = "/logo-kop-3.png";
   return {
     layout: slot,
     school_name: officialSchoolName(settings?.school_name || "SMAN 7 Maros"),
     npsn: settings?.npsn || "",
-    logo_url: slot === "1" ? provinceLogoUrl : schoolLogoUrl,
-    province_logo_url: provinceLogoUrl,
+    logo_url: slot === "1" ? provinceLogoUrl : slot === "3" ? thirdLetterheadLogo : schoolLogoUrl,
+    province_logo_url: slot === "3" ? thirdLetterheadLogo : provinceLogoUrl,
     school_logo_url: schoolLogoUrl,
     letterhead: (slot === "2" ? settings?.letterhead_2 : settings?.letterhead)?.trim() || DEFAULT_SCHOOL_LETTERHEAD_ADDRESS,
   };

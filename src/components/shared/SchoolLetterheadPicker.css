@@ -210,7 +210,8 @@
 }
 
 .school-letterhead-preview.kop-1,
-.school-letterhead-preview.kop-2 {
+.school-letterhead-preview.kop-2,
+.school-letterhead-preview.kop-3 {
   display: block;
 }
 
@@ -228,7 +229,8 @@
   object-fit: contain;
 }
 
-.school-letterhead-preview.kop-1 .school-letterhead-province-logo {
+.school-letterhead-preview.kop-1 .school-letterhead-province-logo,
+.school-letterhead-preview.kop-3 .school-letterhead-province-logo {
   grid-row: 1;
   margin-bottom: 4px;
   width: 70px;
@@ -253,7 +255,8 @@
   font: 700 clamp(15px, 2.3vw, 26px)/1.12 Arial, sans-serif;
 }
 
-.school-letterhead-preview.kop-1 .school-letterhead-copy h2 {
+.school-letterhead-preview.kop-1 .school-letterhead-copy h2,
+.school-letterhead-preview.kop-3 .school-letterhead-copy h2 {
   margin: 3px 0 0;
   font: 700 clamp(18px, 2.6vw, 30px)/1.1 Arial, sans-serif;
 }
@@ -312,7 +315,8 @@
 }
 
 .school-letterhead-preview.kop-1 .school-letterhead-rules,
-.school-letterhead-preview.kop-2 .school-letterhead-rules {
+.school-letterhead-preview.kop-2 .school-letterhead-rules,
+.school-letterhead-preview.kop-3 .school-letterhead-rules {
   display: block;
   width: 100%;
   height: 6px;
@@ -348,7 +352,8 @@
     color: #111;
   }
 
-  .school-letterhead-preview.kop-1 .school-letterhead-province-logo {
+  .school-letterhead-preview.kop-1 .school-letterhead-province-logo,
+  .school-letterhead-preview.kop-3 .school-letterhead-province-logo {
     width: 19mm;
     height: 22mm;
     margin-bottom: 1mm;

@@ -612,7 +612,11 @@ useEffect(() => {
   let active = true;
   let receivedRealtimeUpdate = false;
 
-  void getMaintenanceStatus()
+  void withTimeout(
+    getMaintenanceStatus(),
+    8_000,
+    "Pemeriksaan status pemeliharaan melewati batas waktu.",
+  )
     .then((status) => {
       if (active && !receivedRealtimeUpdate) setMaintenanceStatus(status);
     })

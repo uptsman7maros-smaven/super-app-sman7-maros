@@ -18,7 +18,7 @@ export function SchoolLetterheadPicker({
   const pickerId = useId();
   const labelId = `${pickerId}-label`;
   const menuId = `${pickerId}-menu`;
-  const activeOption = value === "2" ? 1 : 0;
+  const activeOption = value === "2" ? 1 : value === "3" ? 2 : 0;
   const options = [
     {
       value: "1" as const,
@@ -33,6 +33,13 @@ export function SchoolLetterheadPicker({
       variant: "Alternatif",
       description: "Logo provinsi dan sekolah di sisi kiri-kanan",
       Icon: Building2,
+    },
+    {
+      value: "3" as const,
+      label: "Kop Surat 3",
+      variant: "Lambang alternatif",
+      description: "Lambang Sulawesi Selatan alternatif di atas nama sekolah",
+      Icon: Landmark,
     },
   ];
 

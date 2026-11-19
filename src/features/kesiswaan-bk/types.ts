@@ -59,7 +59,7 @@ export type StudentOption = {
 export type AcademicYearOption = { id: string; name: string; is_active: boolean };
 export type ClassOption = { id: string; name: string; grade_level: number; academic_year_id: string };
 export type SchoolHeader = {
-  layout: "1" | "2";
+  layout: "1" | "2" | "3";
   school_name: string;
   npsn: string;
   letterhead: string;
