@@ -229,10 +229,20 @@ Deno.serve(async request => {
         signal: AbortSignal.timeout(45_000),
       },
     );
-    let response = await requestModel("gemini-2.5-flash");
-    if (response.status === 404) {
-      console.warn("Gemini 2.5 Flash tidak tersedia; mencoba alias Gemini Flash terbaru.");
-      response = await requestModel("gemini-flash-latest");
+    const requestWithRetry = async (model: string) => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await requestModel(model);
+        if (![502, 503, 504].includes(response.status) || attempt === 1) return response;
+        await response.body?.cancel();
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      throw new Error("Permintaan Gemini tidak menghasilkan respons.");
+    };
+    let response = await requestWithRetry("gemini-2.5-flash");
+    if ([404, 502, 503, 504].includes(response.status)) {
+      console.warn("Gemini 2.5 Flash tidak tersedia sementara; mencoba alias Gemini Flash terbaru.");
+      await response.body?.cancel();
+      response = await requestWithRetry("gemini-flash-latest");
     }
     const result: unknown = await response.json().catch(() => null);
     if (!response.ok) {
@@ -271,6 +281,14 @@ Deno.serve(async request => {
       }
       if (response.status === 404) {
         return jsonResponse({ code: "GEMINI_MODEL_UNAVAILABLE", error: "Model Gemini tidak ditemukan atau tidak tersedia untuk API key ini." }, 502);
+      }
+      if ([502, 503, 504].includes(response.status)) {
+        return jsonResponse({
+          code: "GEMINI_TEMPORARY_UNAVAILABLE",
+          error: providerMessage
+            ? `Gemini sedang tidak tersedia: ${providerMessage}`
+            : "Layanan Gemini sedang sibuk. Coba beberapa menit lagi atau gunakan template bawaan.",
+        }, 503);
       }
       return jsonResponse({
         code: "GEMINI_ERROR",
