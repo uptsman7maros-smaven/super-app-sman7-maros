@@ -1,4 +1,4 @@
-import { createElement, Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { createElement, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
   ArrowRight,
@@ -248,6 +248,57 @@ function withTimeout<T>(
   });
 
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
+}
+
+type CachedSessionUser = {
+  id: string;
+  username: string;
+  role: string;
+};
+
+function sessionProfileCacheKey(userId: string) {
+  return `super-app:verified-profile:${userId}`;
+}
+
+function readCachedSessionUser(userId: string): CachedSessionUser | null {
+  try {
+    const raw = window.sessionStorage.getItem(sessionProfileCacheKey(userId));
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("id" in value) ||
+      !("username" in value) ||
+      !("role" in value) ||
+      value.id !== userId ||
+      typeof value.username !== "string" ||
+      typeof value.role !== "string"
+    ) {
+      return null;
+    }
+    return { id: value.id, username: value.username, role: value.role };
+  } catch (error) {
+    console.warn("Cache profil sesi tidak dapat dibaca:", error);
+    return null;
+  }
+}
+
+function writeCachedSessionUser(user: CachedSessionUser) {
+  try {
+    window.sessionStorage.setItem(sessionProfileCacheKey(user.id), JSON.stringify(user));
+  } catch (error) {
+    console.warn("Cache profil sesi tidak dapat disimpan:", error);
+  }
+}
+
+function clearCachedSessionUser(userId: string | null | undefined) {
+  if (!userId) return;
+  try {
+    window.sessionStorage.removeItem(sessionProfileCacheKey(userId));
+  } catch (error) {
+    console.warn("Cache profil sesi tidak dapat dihapus:", error);
+  }
 }
 
 function isTemporarySessionFailure(error: unknown) {
@@ -556,6 +607,12 @@ function AppContent() {
     refreshSchoolContext,
     contextError,
   } = useSchoolContext();
+  const currentUserRef = useRef<CachedSessionUser | null>(currentUser);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+  const dashboardFeedRefreshState = useRef(new Map<string, { lastRequestedAt: number; inFlight: boolean }>());
+  const dashboardStatsRefreshState = useRef(new Map<string, { lastRequestedAt: number; inFlight: boolean }>());
   const [activePage, setActivePage] = useState("Dashboard");
   const [parentLetterPrefill, setParentLetterPrefill] = useState<{
     id: string;
@@ -702,10 +759,17 @@ useEffect(() => {
 
   const account = currentUser;
   let active = true;
-  let requestInFlight = false;
+  let realtimeRefreshTimer = 0;
+  const requestState = dashboardFeedRefreshState.current.get(account.id) ?? {
+    lastRequestedAt: 0,
+    inFlight: false,
+  };
+  dashboardFeedRefreshState.current.set(account.id, requestState);
   const refreshFeed = async () => {
-    if (!active || requestInFlight) return;
-    requestInFlight = true;
+    if (!active || requestState.inFlight) return;
+    if (Date.now() - requestState.lastRequestedAt < 90_000) return;
+    requestState.inFlight = true;
+    requestState.lastRequestedAt = Date.now();
     setDashboardFeedLoading(true);
     try {
       const feed = await loadDashboardFeed(account);
@@ -723,17 +787,20 @@ useEffect(() => {
       setDashboardFeedError(message);
       console.error("Notifikasi dashboard gagal dimuat:", error);
     } finally {
-      requestInFlight = false;
+      requestState.inFlight = false;
       if (active) setDashboardFeedLoading(false);
     }
   };
 
   void refreshFeed();
-  const realtimeTables = new Set<string>(["school_notifications", "school_announcements"]);
   if (account.role === "siswa") {
-    ["academic_records", "library_loans", "library_loan_requests", "library_digital_access", "letter_requests"]
-      .forEach((table) => realtimeTables.add(table));
-  } else if (account.role === "guru" && account.teacher_id) {
+    return () => {
+      active = false;
+    };
+  }
+
+  const realtimeTables = new Set<string>(["school_notifications", "school_announcements"]);
+  if (account.role === "guru" && account.teacher_id) {
     ["academic_records", "attendance_qr_records", "letter_requests"]
       .forEach((table) => realtimeTables.add(table));
   } else if (account.role === "guru_bk") {
@@ -749,7 +816,10 @@ useEffect(() => {
     channel = channel.on(
       "postgres_changes",
       { event: "*", schema: "public", table },
-      () => void refreshFeed(),
+      () => {
+        if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
+        realtimeRefreshTimer = window.setTimeout(() => void refreshFeed(), 1000);
+      },
     );
   });
   channel.subscribe((status, error) => {
@@ -770,6 +840,7 @@ useEffect(() => {
   return () => {
     active = false;
     window.clearInterval(intervalId);
+    if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
     document.removeEventListener("visibilitychange", onVisibilityChange);
     void supabase.removeChannel(channel);
   };
@@ -1386,49 +1457,6 @@ const saveEditedUser = async (
 const [supabaseStatus, setSupabaseStatus] = useState("Memeriksa koneksi...");
 
 useEffect(() => {
-  let active = true;
-
-  async function checkConnection() {
-    try {
-      const session = await getValidSupabaseSession();
-      if (!session) {
-        if (active) setSupabaseStatus("Sesi login tidak aktif");
-        return;
-      }
-
-      const { error } = await supabase
-        .from("school_settings")
-        .select("id")
-        .limit(1);
-
-      if (error) throw error;
-
-      if (active) {
-        setSupabaseStatus("Database terhubung");
-      }
-    } catch (error) {
-      if (active) {
-        const statusError = error as { code?: string; message?: string };
-        const message = isSupabaseRateLimitError(error)
-          ? "Supabase sementara menolak permintaan (HTTP 429)"
-          : statusError.code === "42501"
-            ? "Database terhubung — akses pengaturan terbatas"
-            : statusError.message?.includes("Failed to fetch")
-              ? "Koneksi database tidak tersedia"
-              : "Database belum dapat diperiksa";
-        setSupabaseStatus(message);
-      }
-    }
-  }
-
-  void checkConnection();
-
-  return () => {
-    active = false;
-  };
-}, []);
-
-useEffect(() => {
   let mounted = true;
   let sessionSyncId = 0;
   let recoveryTimer = 0;
@@ -1439,18 +1467,27 @@ useEffect(() => {
     recoveryTimer = 0;
   }
 
-  function scheduleSessionRecovery(syncId: number) {
+  function scheduleSessionRecovery(syncId: number, staleAccount?: CachedSessionUser | null) {
     if (!mounted || syncId !== sessionSyncId) return;
     recoveryAttempt += 1;
+    const backoffDelay = Math.min(
+      30_000 * 2 ** (recoveryAttempt - 1) + Math.floor(Math.random() * 30_000),
+      5 * 60_000,
+    );
     const retryDelay = Math.max(
       getSupabaseSessionRetryDelayMs(),
-      Math.min(15_000 * 2 ** (recoveryAttempt - 1), 5 * 60_000),
+      backoffDelay,
     );
+    if (staleAccount) {
+      currentUserRef.current = staleAccount;
+      setCurrentUser(staleAccount);
+      setAuthReady(true);
+    }
     setAuthError("");
     setSessionRecoveryMessage(
-      "Supabase sedang membatasi permintaan. Sesi tetap tersimpan; aplikasi akan mencoba kembali otomatis.",
+      "Koneksi Supabase sedang dibatasi. Data yang sudah dimuat tetap tersedia; pemulihan dilakukan dengan jeda.",
     );
-    setAuthReady(false);
+    setSupabaseStatus("Supabase membatasi permintaan sementara");
     clearRecoveryTimer();
     recoveryTimer = window.setTimeout(() => {
       recoveryTimer = 0;
@@ -1474,6 +1511,8 @@ useEffect(() => {
       if (!userId) {
         if (mounted && syncId === sessionSyncId) {
           recoveryAttempt = 0;
+          clearCachedSessionUser(currentUserRef.current?.id);
+          currentUserRef.current = null;
           setSessionRecoveryMessage("");
           setCurrentUser(null);
           setAuthError("");
@@ -1494,7 +1533,10 @@ useEffect(() => {
       if (profileError) {
         if (isTemporarySessionFailure(profileError)) {
           retryScheduled = true;
-          scheduleSessionRecovery(syncId);
+          const staleAccount = currentUserRef.current?.id === userId
+            ? currentUserRef.current
+            : readCachedSessionUser(userId);
+          scheduleSessionRecovery(syncId, staleAccount);
           return;
         }
         console.error("Profil pengguna gagal diperiksa:", profileError);
@@ -1505,6 +1547,8 @@ useEffect(() => {
       if (!profile || profile.status !== "active" || profile.role === "pending") {
         await supabase.auth.signOut({ scope: "local" });
         if (syncId !== sessionSyncId || !mounted) return;
+        clearCachedSessionUser(userId);
+        currentUserRef.current = null;
         setCurrentUser(null);
         setAuthError("");
         setActivePage("Dashboard");
@@ -1519,6 +1563,12 @@ useEffect(() => {
         username: profile.username,
         role: profile.role,
       };
+      writeCachedSessionUser(nextUser);
+      currentUserRef.current = {
+        ...currentUserRef.current,
+        ...nextUser,
+      };
+      setSupabaseStatus("Database terhubung");
       setCurrentUser((currentUser) =>
         currentUser !== null &&
         currentUser.id === nextUser.id &&
@@ -1531,7 +1581,20 @@ useEffect(() => {
       if (mounted && syncId === sessionSyncId) {
         if (isTemporarySessionFailure(error)) {
           retryScheduled = true;
-          scheduleSessionRecovery(syncId);
+          let staleAccount: CachedSessionUser | null = null;
+          try {
+            const { data, error: localSessionError } = await supabase.auth.getSession();
+            if (localSessionError) throw localSessionError;
+            const userId = data.session?.user.id;
+            if (userId) {
+              staleAccount = currentUserRef.current?.id === userId
+                ? currentUserRef.current
+                : readCachedSessionUser(userId);
+            }
+          } catch (cacheError) {
+            console.error("Profil sesi cadangan gagal dibaca:", cacheError);
+          }
+          scheduleSessionRecovery(syncId, staleAccount);
           return;
         }
         console.error("Pemeriksaan sesi gagal:", error);
@@ -1551,6 +1614,8 @@ useEffect(() => {
     if (event === "SIGNED_OUT") {
       clearRecoveryTimer();
       recoveryAttempt = 0;
+      clearCachedSessionUser(currentUserRef.current?.id);
+      currentUserRef.current = null;
       sessionSyncId += 1;
       setCurrentUser(null);
       setAuthError("");
@@ -1609,13 +1674,19 @@ useEffect(() => {
   const dashboardUser = currentUser;
   let active = true;
   const canViewSchoolTotals = ["super_admin", "operator"].includes(dashboardUser.role);
-  let statsRequestInFlight = false;
+  const requestState = dashboardStatsRefreshState.current.get(dashboardUser.id) ?? {
+    lastRequestedAt: 0,
+    inFlight: false,
+  };
+  dashboardStatsRefreshState.current.set(dashboardUser.id, requestState);
   async function loadDashboardStats() {
-    if (!active || statsRequestInFlight) return;
+    if (!active || requestState.inFlight) return;
+    if (Date.now() - requestState.lastRequestedAt < 120_000) return;
     if (dashboardUser.role === "guru_bk") {
       return;
     }
-    statsRequestInFlight = true;
+    requestState.inFlight = true;
+    requestState.lastRequestedAt = Date.now();
     setDashboardRefreshing(true);
 
     if (!canViewSchoolTotals) {
@@ -1761,7 +1832,7 @@ useEffect(() => {
               });
         }
       } finally {
-        statsRequestInFlight = false;
+        requestState.inFlight = false;
         if (active) setDashboardRefreshing(false);
       }
       return;
@@ -1843,7 +1914,7 @@ useEffect(() => {
             previous.attendance.value !== "—" ||
             previous.letters.value !== "—";
           const note = isRateLimited
-            ? "Supabase membatasi pembaruan sesi (HTTP 429). Data terakhir tetap ditampilkan."
+            ? "Supabase membatasi permintaan sementara (HTTP 429). Data terakhir tetap ditampilkan."
             : `${wasLoaded ? "Gagal diperbarui" : "Gagal dimuat"}: ${message}`;
           const trend = isRateLimited
             ? "Jeda sementara sebelum mencoba lagi"
@@ -1862,7 +1933,7 @@ useEffect(() => {
         }
       }
     } finally {
-      statsRequestInFlight = false;
+      requestState.inFlight = false;
       if (active) setDashboardRefreshing(false);
     }
   }
@@ -2176,6 +2247,18 @@ const renderManagedUserTable = (
       <p role="status" aria-live="polite">
         {sessionRecoveryMessage || "Memeriksa sesi dan status pemeliharaan..."}
       </p>
+      {sessionRecoveryMessage && (
+        <button
+          type="button"
+          onClick={() => {
+            setSessionRecoveryMessage("");
+            setAuthReady(false);
+            setSessionRetry((retry) => retry + 1);
+          }}
+        >
+          Muat ulang sesi
+        </button>
+      )}
     </div>
   );
 }
@@ -2525,6 +2608,21 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
           </div>
         </header>
 
+        {sessionRecoveryMessage && currentUser && (
+          <div className="session-recovery-banner" role="status">
+            <span>{sessionRecoveryMessage}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setSessionRecoveryMessage("");
+                setSessionRetry((retry) => retry + 1);
+              }}
+            >
+              Muat ulang
+            </button>
+          </div>
+        )}
+
         <div className="page-content">
           <AnimatePresence>
             {isDashboard ? (
@@ -2558,6 +2656,10 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
                     className="text-button"
                     disabled={dashboardRefreshing}
                     onClick={() => {
+                      const feedState = dashboardFeedRefreshState.current.get(currentUser.id);
+                      if (feedState) feedState.lastRequestedAt = 0;
+                      const statsState = dashboardStatsRefreshState.current.get(currentUser.id);
+                      if (statsState) statsState.lastRequestedAt = 0;
                       setDashboardReload((reload) => reload + 1);
                       setDashboardFeedReload((reload) => reload + 1);
                     }}

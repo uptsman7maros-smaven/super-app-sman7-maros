@@ -103,6 +103,13 @@ export type SummaryStats = {
   permitsToday: number | null;
   achievements: number | null;
 };
+export type StudentServiceSummary = {
+  curhatCount: number;
+  unreadCurhatCount: number;
+  akpdCompletedCount: number;
+  consultationCount: number;
+  pendingConsultationCount: number;
+};
 
 export type StudentProfile = {
   student: StudentOption;

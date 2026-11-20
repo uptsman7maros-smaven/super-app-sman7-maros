@@ -2,11 +2,79 @@ import { createClient, type Session } from "@supabase/supabase-js";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const METADATA_CACHE_TTL_MS = 90_000;
+const METADATA_CACHE_MAX_ENTRIES = 200;
+const metadataResponseCache = new Map<string, {
+  table: string;
+  response: Response;
+  cachedAt: number;
+}>();
 
 if (!url || !key) {
   throw new Error(
     "Konfigurasi Supabase belum lengkap. Set VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY pada environment aplikasi.",
   );
+}
+
+function retryableApiRateLimitResponse() {
+  const retryAfterMs = Math.max(0, apiRetryAfter - Date.now());
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (retryAfterMs > 0) headers.set("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  return new Response(
+    JSON.stringify({
+      code: "request_rate_limited",
+      message: "Supabase membatasi permintaan sementara. Data terakhir tetap digunakan selama jeda.",
+    }),
+    { status: 429, statusText: "Too Many Requests", headers },
+  );
+}
+
+function getMetadataTable(url: URL) {
+  return url.pathname.match(/\/rest\/v1\/(school_settings|classes|academic_years)$/)?.[1] ?? null;
+}
+
+function metadataCacheKey(url: URL, accessToken: string) {
+  return `${url.href}:${accessToken}`;
+}
+
+function getCachedMetadataResponse(url: URL, accessToken: string) {
+  const cacheKey = metadataCacheKey(url, accessToken);
+  const cached = metadataResponseCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt >= METADATA_CACHE_TTL_MS) {
+    metadataResponseCache.delete(cacheKey);
+    return null;
+  }
+  return cached.response.clone();
+}
+
+function cacheMetadataResponse(table: string, url: URL, accessToken: string, response: Response) {
+  const now = Date.now();
+  for (const [cacheKey, entry] of metadataResponseCache) {
+    if (now - entry.cachedAt >= METADATA_CACHE_TTL_MS) metadataResponseCache.delete(cacheKey);
+  }
+  metadataResponseCache.set(metadataCacheKey(url, accessToken), {
+    table,
+    response: response.clone(),
+    cachedAt: now,
+  });
+  while (metadataResponseCache.size > METADATA_CACHE_MAX_ENTRIES) {
+    const oldestKey = metadataResponseCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    metadataResponseCache.delete(oldestKey);
+  }
+}
+
+function invalidateMetadataCache(table: string) {
+  for (const [cacheKey, entry] of metadataResponseCache) {
+    if (entry.table === table) metadataResponseCache.delete(cacheKey);
+  }
+}
+
+function clearApiRateLimit() {
+  apiRetryAfter = 0;
+  apiRateLimitAttempts = 0;
+  lastApiRateLimitAt = 0;
 }
 
 function getErrorStatus(error: unknown) {
@@ -166,6 +234,10 @@ async function authenticatedFetch(
     return fetch(input, init);
   }
 
+  const method = (init?.method ??
+    (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")
+  ).toUpperCase();
+  const metadataTable = getMetadataTable(parsedUrl);
   const sendWithSession = (accessToken: string) => {
     const request = typeof Request !== "undefined" && input instanceof Request
       ? input.clone()
@@ -189,18 +261,48 @@ async function authenticatedFetch(
     return authFailureResponse(new Error("Sesi login tidak aktif. Silakan masuk kembali."));
   }
 
+  if (metadataTable && method === "GET") {
+    const cachedResponse = getCachedMetadataResponse(parsedUrl, session.access_token);
+    if (cachedResponse) return cachedResponse;
+  } else if (metadataTable) {
+    invalidateMetadataCache(metadataTable);
+  }
+
+  if (Date.now() < apiRetryAfter) {
+    return retryableApiRateLimitResponse();
+  }
+
   const response = await sendWithSession(session.access_token);
-  if (response.status !== 401) return response;
+  if (response.status === 429) {
+    rememberApiRateLimit(response.headers.get("Retry-After"));
+    return response;
+  }
+  if (metadataTable && method === "GET" && response.ok) {
+    cacheMetadataResponse(metadataTable, parsedUrl, session.access_token, response);
+  }
+  if (response.status !== 401) {
+    if (response.ok) clearApiRateLimit();
+    return response;
+  }
 
   try {
     const latestSession = cachedSession;
+    const tokenExpiresSoon = (session.expires_at ?? 0) <=
+      Math.floor(Date.now() / 1000) + ACCESS_TOKEN_SAFETY_WINDOW_SECONDS;
     const retrySession = latestSession && latestSession.access_token !== session.access_token
       ? latestSession
-      : await refreshSupabaseSession();
+      : tokenExpiresSoon
+        ? await refreshSupabaseSession()
+        : null;
 
     if (!retrySession) return response;
 
     const retryResponse = await sendWithSession(retrySession.access_token);
+    if (retryResponse.status === 429) {
+      rememberApiRateLimit(retryResponse.headers.get("Retry-After"));
+      return retryResponse;
+    }
+    if (retryResponse.ok) clearApiRateLimit();
     if (retryResponse.status === 401) {
       const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
       if (signOutError) throw signOutError;
@@ -215,7 +317,7 @@ async function authenticatedFetch(
 export const supabase = createClient(url, key, {
   auth: {
     persistSession: true,
-    autoRefreshToken: true,
+    autoRefreshToken: false,
     detectSessionInUrl: true,
   },
   global: { fetch: authenticatedFetch },
@@ -226,9 +328,13 @@ let sessionRetryAfter = 0;
 let sessionRateLimitError: unknown = null;
 let sessionRateLimitAttempts = 0;
 let lastSessionRateLimitAt = 0;
-const SESSION_RATE_LIMIT_BASE_MS = 60_000;
+let apiRetryAfter = 0;
+let apiRateLimitAttempts = 0;
+let lastApiRateLimitAt = 0;
+const SESSION_RATE_LIMIT_BASE_MS = 30_000;
 const SESSION_RATE_LIMIT_MAX_MS = 15 * 60_000;
 const SESSION_RATE_LIMIT_DEDUP_MS = 30_000;
+const ACCESS_TOKEN_SAFETY_WINDOW_SECONDS = 120;
 
 function clearSessionRateLimit() {
   sessionRetryAfter = 0;
@@ -254,7 +360,7 @@ export function isSupabaseRateLimitError(error: unknown) {
 }
 
 export function getSupabaseSessionRetryDelayMs() {
-  return Math.max(0, sessionRetryAfter - Date.now());
+  return Math.max(0, sessionRetryAfter - Date.now(), apiRetryAfter - Date.now());
 }
 
 function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
@@ -268,9 +374,10 @@ function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
     SESSION_RATE_LIMIT_BASE_MS * 2 ** Math.max(0, sessionRateLimitAttempts - 1),
     SESSION_RATE_LIMIT_MAX_MS,
   );
+  const jitterMs = Math.floor(Math.random() * SESSION_RATE_LIMIT_BASE_MS);
   const retryAfterMs = Math.min(
     SESSION_RATE_LIMIT_MAX_MS,
-    Math.max(backoffMs, serverRetryAfterMs),
+    Math.max(backoffMs + jitterMs, serverRetryAfterMs),
   );
   sessionRateLimitError = error instanceof Error
     ? error
@@ -278,7 +385,33 @@ function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
   sessionRetryAfter = Math.max(sessionRetryAfter, now + retryAfterMs);
 }
 
+function rememberApiRateLimit(serverRetryAfter: string | null) {
+  const now = Date.now();
+  if (now - lastApiRateLimitAt > SESSION_RATE_LIMIT_DEDUP_MS) {
+    apiRateLimitAttempts += 1;
+  }
+  lastApiRateLimitAt = now;
+  const backoffMs = Math.min(
+    SESSION_RATE_LIMIT_BASE_MS * 2 ** Math.max(0, apiRateLimitAttempts - 1),
+    SESSION_RATE_LIMIT_MAX_MS,
+  );
+  const jitterMs = Math.floor(Math.random() * SESSION_RATE_LIMIT_BASE_MS);
+  const retryAfterMs = Math.min(
+    SESSION_RATE_LIMIT_MAX_MS,
+    Math.max(backoffMs + jitterMs, getRetryAfterMs(serverRetryAfter)),
+  );
+  apiRetryAfter = Math.max(apiRetryAfter, now + retryAfterMs);
+}
+
 function refreshSupabaseSession() {
+  if (Date.now() < sessionRetryAfter) {
+    return Promise.reject(
+      sessionRateLimitError instanceof Error
+        ? sessionRateLimitError
+        : new Error("Supabase membatasi pembaruan sesi sementara. Coba lagi setelah jeda."),
+    );
+  }
+
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try {
@@ -307,21 +440,6 @@ function refreshSupabaseSession() {
 }
 
 export async function getValidSupabaseSession() {
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (
-    cachedSession &&
-    typeof cachedSession.expires_at === "number" &&
-    cachedSession.expires_at > nowSeconds
-  ) {
-    return cachedSession;
-  }
-
-  if (Date.now() < sessionRetryAfter) {
-    throw sessionRateLimitError instanceof Error
-      ? sessionRateLimitError
-      : new Error("Supabase membatasi pembaruan sesi sementara. Coba lagi sebentar lagi.");
-  }
-
   if (!sessionPromise) {
     sessionPromise = (async () => {
       let timeoutId = 0;
@@ -340,8 +458,21 @@ export async function getValidSupabaseSession() {
         if (error) throw error;
 
         cachedSession = data.session;
-        clearSessionRateLimit();
-        return data.session;
+        if (!data.session) return null;
+
+        const expiresAt = data.session.expires_at ?? 0;
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        if (expiresAt > nowSeconds + ACCESS_TOKEN_SAFETY_WINDOW_SECONDS) {
+          return data.session;
+        }
+
+        if (Date.now() < sessionRetryAfter) {
+          throw sessionRateLimitError instanceof Error
+            ? sessionRateLimitError
+            : new Error("Supabase membatasi pembaruan sesi sementara. Coba lagi setelah jeda.");
+        }
+
+        return await refreshSupabaseSession();
       } catch (error) {
         rememberSessionRateLimit(error);
         throw error;

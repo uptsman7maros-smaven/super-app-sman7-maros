@@ -27,6 +27,16 @@ type RelatedClass = {
   academic_year: { name: string } | { name: string }[] | null;
 };
 
+type StudentsAndYears = {
+  students: StudentOption[];
+  academicYears: AcademicYearOption[];
+  classes: ClassOption[];
+};
+
+const STUDENTS_AND_YEARS_CACHE_MS = 90_000;
+const studentsAndYearsCache = new Map<string, { data: StudentsAndYears; cachedAt: number }>();
+const studentsAndYearsRequests = new Map<string, Promise<StudentsAndYears>>();
+
 function throwOnError(error: { message: string } | null) {
   if (error) throw new Error(error.message);
 }
@@ -84,25 +94,17 @@ function toStudentOption(
   };
 }
 
-export async function loadStudentsAndYears(role: UserRole): Promise<{
-  students: StudentOption[];
-  academicYears: AcademicYearOption[];
-  classes: ClassOption[];
-}> {
+async function fetchStudentsAndYears(role: UserRole): Promise<StudentsAndYears> {
   if (role === "siswa") {
-    const [contextResult, yearsResult] = await Promise.all([
-      supabase.rpc("kb_student_self_context"),
-      supabase.from("academic_years").select("id,name,is_active").order("start_date", { ascending: false }),
-    ]);
+    const contextResult = await supabase.rpc("kb_student_self_context");
     throwOnError(contextResult.error);
-    throwOnError(yearsResult.error);
     const context = Array.isArray(contextResult.data) ? contextResult.data[0] : contextResult.data;
     const students = context
       ? [toStudentOption(context as Record<string, unknown>, typeof context.counselor_profile_id === "string" ? context.counselor_profile_id : null)]
       : [];
     return {
       students,
-      academicYears: (yearsResult.data ?? []) as AcademicYearOption[],
+      academicYears: [],
       classes: context?.class_id && context?.class_name
         ? [{ id: String(context.class_id), name: String(context.class_name), grade_level: Number(context.grade_level ?? 0), academic_year_id: String(context.academic_year_id ?? "") }]
         : [],
@@ -138,6 +140,36 @@ export async function loadStudentsAndYears(role: UserRole): Promise<{
     academicYears: (yearsResult.data ?? []) as AcademicYearOption[],
     classes: (classesResult.data ?? []) as ClassOption[],
   };
+}
+
+export async function loadStudentsAndYears(
+  role: UserRole,
+  accountId: string,
+): Promise<StudentsAndYears> {
+  const cacheKey = `${accountId}:${role}`;
+  const cached = studentsAndYearsCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < STUDENTS_AND_YEARS_CACHE_MS) return cached.data;
+  const existingRequest = studentsAndYearsRequests.get(cacheKey);
+  if (existingRequest) return existingRequest;
+
+  const request = fetchStudentsAndYears(role).then(data => {
+    studentsAndYearsCache.set(cacheKey, { data, cachedAt: Date.now() });
+    return data;
+  });
+  studentsAndYearsRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    if (studentsAndYearsRequests.get(cacheKey) === request) {
+      studentsAndYearsRequests.delete(cacheKey);
+    }
+  }
+}
+
+export function invalidateStudentsAndYearsCache(accountId: string) {
+  for (const cacheKey of studentsAndYearsCache.keys()) {
+    if (cacheKey.startsWith(`${accountId}:`)) studentsAndYearsCache.delete(cacheKey);
+  }
 }
 
 export async function loadSchoolHeader(): Promise<SchoolHeader> {

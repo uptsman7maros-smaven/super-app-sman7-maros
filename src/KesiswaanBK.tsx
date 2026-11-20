@@ -23,10 +23,12 @@ import {
   loadStudentsAndYears,
   loadAllSectionRows,
   loadSummaryStats,
+  invalidateStudentsAndYearsCache,
   markAttendanceAlertRead,
   saveCounselorAssignment,
   saveSectionRecord,
 } from "./features/kesiswaan-bk/services/kesiswaanBkService";
+import { loadStudentServiceSummary } from "./features/kesiswaan-bk/services/bkWorkflowService";
 import type {
   AcademicYearOption,
   AssignmentStudent,
@@ -39,6 +41,7 @@ import type {
   SectionKey,
   StudentOption,
   SummaryStats,
+  StudentServiceSummary,
   SchoolHeader,
   UserRole,
   ViewMode,
@@ -124,10 +127,16 @@ export default function KesiswaanBK({
   const [consultationStudentId, setConsultationStudentId] = useState<string | null>(null);
   const [consultationPrefillTopic, setConsultationPrefillTopic] = useState("");
   const [stats, setStats] = useState<SummaryStats>(EMPTY_STATS);
+  const [studentServiceSummaryState, setStudentServiceSummaryState] = useState<{
+    key: string;
+    data: StudentServiceSummary | null;
+  } | null>(null);
+  const [studentSummaryReload, setStudentSummaryReload] = useState(0);
   const [alerts, setAlerts] = useState<AttendanceBkAlert[]>([]);
   const [assignmentStudents, setAssignmentStudents] = useState<AssignmentStudent[]>([]);
   const [counselors, setCounselors] = useState<CounselorOption[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadedMasterDataKey, setLoadedMasterDataKey] = useState("");
   const [alertsLoading, setAlertsLoading] = useState(false);
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -143,6 +152,7 @@ export default function KesiswaanBK({
     .filter(() => !isCounselingModule || ["guru_bk", "super_admin", "operator"].includes(role));
   const config = SECTION_BY_KEY[active];
   const isSensitive = config.private === true;
+  const isStudentCounseling = isCounselingModule && role === "siswa";
   const canSeePrivateNotes = role === "super_admin" || role === "guru_bk";
   const canManageAssignments = role === "super_admin" || role === "operator" || role === "guru_bk";
   const workflowTabs: CounselingWorkspaceTab[] = role === "siswa"
@@ -165,6 +175,13 @@ export default function KesiswaanBK({
   const canSeeSection = moduleSections.some(section => section.key === active)
     && (active !== "Rencana Karir" || canSeePrivateNotes);
   const studentById = useMemo(() => new Map(students.map(student => [student.id, student])), [students]);
+  const currentStudent = students.find(student => student.profile_id === currentUser.id) ?? students[0] ?? null;
+  const masterDataKey = `${currentUser.id}:${role}:${isStudentCounseling}`;
+  const masterDataLoading = loadedMasterDataKey !== masterDataKey;
+  const studentSummaryKey = `${currentUser.id}:${studentSummaryReload}`;
+  const studentServiceSummary = studentServiceSummaryState?.key === studentSummaryKey
+    ? studentServiceSummaryState.data
+    : null;
   const statsFilters = useMemo(() => ({
     ...EMPTY_FILTERS,
     academicYearId: filters.academicYearId,
@@ -211,7 +228,7 @@ export default function KesiswaanBK({
 
   useEffect(() => {
     let activeEffect = true;
-    void loadStudentsAndYears(role).then(result => {
+    void loadStudentsAndYears(role, currentUser.id).then(result => {
       if (!activeEffect) return;
       setStudents(result.students);
       setAcademicYears(result.academicYears);
@@ -220,14 +237,18 @@ export default function KesiswaanBK({
       if (currentYear) setFilters(current => current.academicYearId ? current : { ...current, academicYearId: currentYear.id });
     }).catch(loadError => {
       if (activeEffect) setError(messageOf(loadError, "Data siswa dan tahun ajaran gagal dimuat."));
+    }).finally(() => {
+      if (activeEffect) setLoadedMasterDataKey(masterDataKey);
     });
-    void loadSchoolHeader().then(header => {
-      if (activeEffect) setSchoolHeader(header);
-    }).catch(loadError => {
-      if (activeEffect) setError(messageOf(loadError, "Identitas sekolah gagal dimuat."));
-    });
+    if (!isStudentCounseling) {
+      void loadSchoolHeader().then(header => {
+        if (activeEffect) setSchoolHeader(header);
+      }).catch(loadError => {
+        if (activeEffect) setError(messageOf(loadError, "Identitas sekolah gagal dimuat."));
+      });
+    }
     return () => { activeEffect = false; };
-  }, [role]);
+  }, [currentUser.id, isStudentCounseling, masterDataKey, role]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void refreshRows(); }, filters.search ? 280 : 0);
@@ -238,6 +259,7 @@ export default function KesiswaanBK({
   }, [filters, refreshRows]);
 
   useEffect(() => {
+    if (isStudentCounseling) return;
     let activeEffect = true;
     void loadSummaryStats(role, statsFilters).then(result => {
       if (activeEffect) setStats(result);
@@ -245,7 +267,19 @@ export default function KesiswaanBK({
       if (activeEffect) setError(messageOf(statsError, "Ringkasan statistik gagal dimuat."));
     });
     return () => { activeEffect = false; };
-  }, [role, statsFilters]);
+  }, [isStudentCounseling, role, statsFilters]);
+
+  useEffect(() => {
+    const student = students.find(item => item.profile_id === currentUser.id) ?? students[0];
+    if (!isStudentCounseling || !student) return;
+    let activeEffect = true;
+    void loadStudentServiceSummary().then(result => {
+      if (activeEffect) setStudentServiceSummaryState({ key: studentSummaryKey, data: result });
+    }).catch(summaryError => {
+      if (activeEffect) setError(messageOf(summaryError, "Ringkasan layanan siswa gagal dimuat."));
+    });
+    return () => { activeEffect = false; };
+  }, [currentUser.id, isStudentCounseling, studentSummaryKey, students]);
 
   useEffect(() => {
     if (view !== "alerts" || !canSeeAlerts) return;
@@ -463,6 +497,7 @@ export default function KesiswaanBK({
     setNotice("");
     try {
       await saveCounselorAssignment(studentId, counselorId);
+      invalidateStudentsAndYearsCache(currentUser.id);
       setAssignmentStudents(current => current.map(student => student.id === studentId
         ? { ...student, counselor_profile_id: counselorId || null }
         : student));
@@ -529,13 +564,37 @@ export default function KesiswaanBK({
         <div className="kb-hero-icon">✦</div>
       </div>
 
-      <StatsHeader
-        stats={stats}
-        academicYearId={filters.academicYearId}
-        academicYears={academicYears}
-        semester={filters.semester}
-        module={module}
-      />
+      {isStudentCounseling ? (
+        <div className="kb-stats kb-student-overview">
+          <div className="kb-stat purple"><span>👤</span><div>
+            <small>Nama & kelas siswa</small>
+            <strong>{currentStudent?.full_name || (masterDataLoading ? "Memuat profil siswa" : "Profil belum terhubung")}</strong>
+            <small>{currentStudent?.class_name ? `Kelas ${currentStudent.class_name}` : masterDataLoading ? "Sedang memuat Data Induk" : "Hubungi administrator sekolah"}</small>
+            <small>Guru BK: {currentStudent?.counselor_name || "Belum ditetapkan"}</small>
+          </div></div>
+          <div className="kb-stat blue"><span>💬</span><div>
+            <small>Curhat & konsultasi saya</small>
+            <strong>{studentServiceSummary ? `${studentServiceSummary.curhatCount} curhat · ${studentServiceSummary.consultationCount} konsultasi` : "Memuat status layanan"}</strong>
+            <small>{studentServiceSummary ? `${studentServiceSummary.unreadCurhatCount} curhat belum dibaca · ${studentServiceSummary.pendingConsultationCount} konsultasi menunggu` : "Status layanan pribadi"}</small>
+          </div></div>
+          <div className="kb-stat orange"><span>📝</span><div>
+            <small>Angket kebutuhan saya</small>
+            <strong>{studentServiceSummary ? `${studentServiceSummary.akpdCompletedCount} angket diisi` : "Memuat status angket"}</strong>
+            <small>Jawaban hanya terlihat oleh Anda dan petugas BK berwenang</small>
+          </div></div>
+        </div>
+      ) : (
+        <StatsHeader
+          stats={stats}
+          academicYearId={filters.academicYearId}
+          academicYears={academicYears}
+          semester={filters.semester}
+          module={module}
+        />
+      )}
+      {isStudentCounseling && !currentStudent && !masterDataLoading && !error && (
+        <div className="kb-privacy" role="status">Profil siswa belum terhubung ke Data Induk. Hubungi administrator sekolah agar akun dapat ditautkan.</div>
+      )}
       {error && <div className="kb-alert" role="alert">{error}</div>}
       {notice && <div className="kb-success" role="status">{notice}</div>}
 
@@ -561,7 +620,11 @@ export default function KesiswaanBK({
       </nav>
 
       {view === "workflow" && workflowTabs.includes(workflowTab) && (
-        <CounselingWorkflowPanel
+        isStudentCounseling && masterDataLoading
+          ? <section className="kb-panel"><div className="kb-empty" role="status">Memuat profil siswa dan layanan pribadi…</div></section>
+          : isStudentCounseling && !currentStudent && error
+            ? null
+            : <CounselingWorkflowPanel
           key={workflowTab}
           tab={workflowTab}
           role={role}
@@ -573,13 +636,14 @@ export default function KesiswaanBK({
           initialRplTopic={rplPrefillTopic}
           consultationStudentId={consultationStudentId}
           consultationPrefillTopic={consultationPrefillTopic}
+          onStudentServiceChange={() => setStudentSummaryReload(value => value + 1)}
           onCreateRplFromTopic={topic => {
             setRplPrefillTopic(topic);
             setWorkflowTab("Generator RPL");
             setView("workflow");
             setNotice(`Topik RPL diisi dari angket: ${topic}`);
           }}
-        />
+          />
       )}
 
       {view === "data" && canSeeSection && <>

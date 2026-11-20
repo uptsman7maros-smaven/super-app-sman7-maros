@@ -1,4 +1,4 @@
-import { supabase } from "../lib/supabase";
+import { getValidSupabaseSession, supabase } from "../lib/supabase";
 
 export type AppActivityInput = {
   actorId?: string;
@@ -9,20 +9,16 @@ export type AppActivityInput = {
 };
 
 export async function logAppActivity(input: AppActivityInput): Promise<void> {
-  const { data: authData, error: authError } = input.actorId
-    ? { data: { user: null }, error: null }
-    : await supabase.auth.getUser();
-  if (authError) {
-    throw new Error(`Pengguna aktivitas tidak dapat diverifikasi: ${authError.message}`);
-  }
-  const actorId = input.actorId?.trim() || authData.user?.id;
+  const session = input.actorId ? null : await getValidSupabaseSession();
+  const authUser = session?.user ?? null;
+  const actorId = input.actorId?.trim() || authUser?.id;
   if (!actorId) {
     throw new Error("ID pengguna tidak tersedia untuk mencatat aktivitas.");
   }
-  const metadataName = authData.user?.user_metadata?.full_name;
+  const metadataName = authUser?.user_metadata?.full_name;
   const actorLabel = input.actorLabel?.trim() ||
     (typeof metadataName === "string" ? metadataName : "") ||
-    authData.user?.email ||
+    authUser?.email ||
     "Pengguna";
 
   const { error } = await supabase.from("app_activity_logs").insert({

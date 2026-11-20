@@ -538,6 +538,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [myNip,setMyNip]=useState('')
   const [myPosition,setMyPosition]=useState('')
   const loadRequestRef=useRef<{userId:string|null;generation:number;promise:Promise<void>|null}>({userId:null,generation:0,promise:null})
+  const lastAutoRefreshAt=useRef(0)
   const loadedUserIdRef=useRef<string|null>(null)
   const cleanupAttemptedUserRef=useRef<string|null>(null)
   const isAdmin=role==='administrator'
@@ -617,6 +618,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const loadAll=useCallback(async(silent=false):Promise<void>=>{
     const uid=session?.user.id
     if(!uid)return
+    lastAutoRefreshAt.current=Date.now()
     const currentRequest=loadRequestRef.current
     if(currentRequest.userId===uid&&currentRequest.promise)return currentRequest.promise
     const generation=currentRequest.generation+1
@@ -711,7 +713,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   useEffect(()=>{
     if(!sessionUserId)return
     const refreshVisibleData=()=>{
-      if(document.visibilityState==='visible')void loadAll(true)
+      if(document.visibilityState==='visible'&&Date.now()-lastAutoRefreshAt.current>=120_000){
+        lastAutoRefreshAt.current=Date.now()
+        void loadAll(true)
+      }
     }
     const intervalId=window.setInterval(refreshVisibleData,5*60_000)
     document.addEventListener('visibilitychange',refreshVisibleData)

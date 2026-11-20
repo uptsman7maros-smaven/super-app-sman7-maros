@@ -119,6 +119,10 @@ export type ClassOption = {
   academic_year_id: string;
 };
 
+const SCHOOL_CONTEXT_CACHE_MS = 90_000;
+const schoolContextCache = new Map<string, { data: SchoolContextData; cachedAt: number }>();
+const schoolContextRequests = new Map<string, Promise<SchoolContextData>>();
+
 function throwOnError(error: { message: string } | null, operation: string) {
   if (error) throw new Error(`${operation}: ${error.message}`);
 }
@@ -165,38 +169,60 @@ async function loadIdentity(account: SchoolAccount): Promise<MasterIdentity> {
 
 export async function loadSchoolContextData(
   account: SchoolAccount,
+  options: { force?: boolean } = {},
 ): Promise<SchoolContextData> {
-  const [identity, settingsResult, yearResult, modulesResult] = await Promise.all([
-    loadIdentity(account),
-    supabase
-      .from("school_settings")
-      .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2, province_logo_url, principal_name, principal_nip")
-      .order("id")
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("academic_years")
-      .select("id, name, is_active, start_date, end_date")
-      .eq("is_active", true)
-      .order("start_date", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("app_module_settings")
-      .select("id, module_key, label, is_enabled, route_key")
-      .order("label"),
-  ]);
+  const cacheKey = JSON.stringify([account.id, account.role]);
+  const cached = schoolContextCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.cachedAt < SCHOOL_CONTEXT_CACHE_MS) {
+    return cached.data;
+  }
+  const existingRequest = schoolContextRequests.get(cacheKey);
+  if (existingRequest) return existingRequest;
 
-  throwOnError(settingsResult.error, "Pengaturan sekolah gagal dimuat");
-  throwOnError(yearResult.error, "Tahun ajaran aktif gagal dimuat");
-  throwOnError(modulesResult.error, "Konfigurasi modul gagal dimuat");
+  const request = (async () => {
+    const [identity, settingsResult, yearResult, modulesResult] = await Promise.all([
+      loadIdentity(account),
+      supabase
+        .from("school_settings")
+        .select("id, school_name, npsn, academic_year, logo_url, letterhead, logo_url_2, letterhead_2, province_logo_url, principal_name, principal_nip")
+        .order("id")
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("academic_years")
+        .select("id, name, is_active, start_date, end_date")
+        .eq("is_active", true)
+        .order("start_date", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("app_module_settings")
+        .select("id, module_key, label, is_enabled, route_key")
+        .order("label"),
+    ]);
 
-  return {
-    identity,
-    schoolSettings: settingsResult.data,
-    activeAcademicYear: yearResult.data,
-    moduleSettings: modulesResult.data ?? [],
-  };
+    throwOnError(settingsResult.error, "Pengaturan sekolah gagal dimuat");
+    throwOnError(yearResult.error, "Tahun ajaran aktif gagal dimuat");
+    throwOnError(modulesResult.error, "Konfigurasi modul gagal dimuat");
+
+    const data = {
+      identity,
+      schoolSettings: settingsResult.data,
+      activeAcademicYear: yearResult.data,
+      moduleSettings: modulesResult.data ?? [],
+    };
+    schoolContextCache.set(cacheKey, { data, cachedAt: Date.now() });
+    return data;
+  })();
+
+  schoolContextRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    if (schoolContextRequests.get(cacheKey) === request) {
+      schoolContextRequests.delete(cacheKey);
+    }
+  }
 }
 
 function cleanSearch(value: string) {

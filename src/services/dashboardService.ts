@@ -126,7 +126,7 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
   await collectRows(
     "Notifikasi sekolah",
     supabase.from("school_notifications")
-      .select("*")
+      .select("id,title,body,category,is_read,created_at")
       .order("created_at", { ascending: false })
       .limit(10),
     (rows) => {
@@ -188,98 +188,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
           fieldDate(row, "due_date"),
         )),
       );
-      await collectRows(
-        "Kehadiran mapel guru",
-        supabase.from("attendance_qr_records")
-          .select("id,attendance_date,class_name,subject")
-          .eq("teacher_id", account.teacher_id)
-          .eq("attendance_date", today)
-          .order("created_at", { ascending: false })
-          .limit(3),
-        (rows) => rows.forEach((row, index) => addNotification(
-          `teacher-attendance-${fieldText(row, "id", String(index))}`,
-          "Kehadiran mapel hari ini",
-          [fieldText(row, "class_name"), fieldText(row, "subject")].filter(Boolean).join(" · ") || "Terdapat catatan kehadiran mapel hari ini.",
-          "Absensi Digital",
-          "Absensi Digital",
-          fieldDate(row, "attendance_date"),
-          false,
-        )),
-      );
     }
 
-    await collectRows(
-      "Peminjaman perpustakaan",
-      supabase.from("library_loans")
-        .select("id,due_at,returned_at")
-        .eq("profile_id", account.id)
-        .is("returned_at", null)
-        .lte("due_at", soon)
-        .order("due_at", { ascending: true })
-        .limit(5),
-      (rows) => rows.forEach((row, index) => addNotification(
-        `student-loan-${fieldText(row, "id", String(index))}`,
-        "Buku mendekati tanggal pengembalian",
-        `Batas pengembalian ${fieldText(row, "due_at", "segera")}`,
-        "Perpustakaan",
-        "Perpustakaan",
-        fieldDate(row, "due_at"),
-      )),
-    );
-
-    await collectRows(
-      "Permintaan perpustakaan",
-      supabase.from("library_loan_requests")
-        .select("id,status,requested_at")
-        .eq("student_id", account.id)
-        .eq("status", "pending")
-        .order("requested_at", { ascending: false })
-        .limit(3),
-      (rows) => rows.forEach((row, index) => addNotification(
-        `student-loan-request-${fieldText(row, "id", String(index))}`,
-        "Permintaan peminjaman menunggu persetujuan",
-        "Periksa status permintaan buku Anda.",
-        "Perpustakaan",
-        "Perpustakaan",
-        fieldDate(row, "requested_at"),
-      )),
-    );
-
-    await collectRows(
-      "Akses perpustakaan digital",
-      supabase.from("library_digital_access")
-        .select("id,status,requested_at")
-        .eq("student_id", account.id)
-        .eq("status", "pending")
-        .order("requested_at", { ascending: false })
-        .limit(3),
-      (rows) => rows.forEach((row, index) => addNotification(
-        `student-digital-access-${fieldText(row, "id", String(index))}`,
-        "Akses buku digital menunggu persetujuan",
-        "Permintaan akses digital Anda sedang diperiksa.",
-        "Perpustakaan",
-        "Perpustakaan",
-        fieldDate(row, "requested_at"),
-      )),
-    );
-
-    await collectRows(
-      "Status pengajuan surat",
-      supabase.from("letter_requests")
-        .select("id,subject,status,created_at")
-        .eq("requester_id", account.id)
-        .in("status", actionableLetterStatuses)
-        .order("created_at", { ascending: false })
-        .limit(5),
-      (rows) => rows.forEach((row, index) => addNotification(
-        `student-letter-${fieldText(row, "id", String(index))}`,
-        fieldText(row, "subject", "Pengajuan surat"),
-        `Status: ${fieldText(row, "status", "diproses")}`,
-        "Persuratan",
-        "Persuratan",
-        fieldDate(row, "created_at"),
-      )),
-    );
   } else if (account.role === "guru" && account.teacher_id) {
     await collectRows(
       "Tugas akademik",

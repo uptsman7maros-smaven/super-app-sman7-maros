@@ -111,12 +111,13 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
   async function submitTransaction(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError("");
     if (!canManageFinance) { setSaving(false); setError("Role Anda hanya dapat melihat data keuangan."); return; }
-    const { data: auth } = await supabase.auth.getUser();
+    const actorId = currentUser?.id;
+    if (!actorId) { setSaving(false); setError("Sesi login tidak aktif. Silakan masuk kembali."); return; }
     const { error: insertError } = await supabase.from("finance_transactions").insert({
       ...form,
       amount: Number(form.amount),
       status: "menunggu",
-      created_by: auth.user?.id ?? null,
+      created_by: actorId,
       academic_year_id: activeAcademicYear?.id ?? null,
     });
     if (insertError) setError(insertError.message);
@@ -124,7 +125,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
       let auditWarning = "";
       try {
         await logAppActivity({
-          actorId: auth.user?.id,
+          actorId,
           actorLabel: currentUser?.full_name || currentUser?.username || "Pengguna",
           action: "Transaksi keuangan diajukan",
           moduleKey: "Keuangan",
@@ -144,11 +145,12 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
   async function submitBudget(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError("");
     if (!canManageFinance) { setSaving(false); setError("Role Anda tidak dapat mengubah anggaran."); return; }
-    const { data: auth } = await supabase.auth.getUser();
+    const actorId = currentUser?.id;
+    if (!actorId) { setSaving(false); setError("Sesi login tidak aktif. Silakan masuk kembali."); return; }
     const { error: insertError } = await supabase.from("finance_budgets").insert({
       fiscal_year: Number(budgetForm.fiscal_year), name: budgetForm.name,
       category: budgetForm.category, planned_amount: Number(budgetForm.planned_amount),
-      realized_amount: 0, status: "aktif", created_by: auth.user?.id ?? null,
+      realized_amount: 0, status: "aktif", created_by: actorId,
       academic_year_id: activeAcademicYear?.id ?? null
     });
     if (insertError) setError(insertError.message);
@@ -156,7 +158,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
       let auditWarning = "";
       try {
         await logAppActivity({
-          actorId: auth.user?.id,
+          actorId,
           actorLabel: currentUser?.full_name || currentUser?.username || "Pengguna",
           action: "Anggaran dibuat",
           moduleKey: "Keuangan",
@@ -176,9 +178,10 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
   async function reviewTransaction(id: string, status: "disetujui" | "ditolak") {
     if (!canManageFinance) { setError("Role Anda tidak dapat menyetujui transaksi."); return; }
     setError("");
-    const { data: auth } = await supabase.auth.getUser();
+    const actorId = currentUser?.id;
+    if (!actorId) { setError("Sesi login tidak aktif. Silakan masuk kembali."); return; }
     const { data: updatedTransaction, error: updateError } = await supabase.from("finance_transactions").update({
-      status, reviewed_by: auth.user?.id ?? null, reviewed_at: new Date().toISOString()
+      status, reviewed_by: actorId, reviewed_at: new Date().toISOString()
     }).eq("id", id).eq("status", "menunggu").select("id").maybeSingle();
     if (updateError) {
       setError(updateError.message);
@@ -187,7 +190,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
     } else {
       try {
         await logAppActivity({
-          actorId: auth.user?.id ?? "",
+          actorId,
           actorLabel: currentUser?.full_name || currentUser?.username || "Pengguna",
           action: status === "disetujui" ? "Transaksi disetujui" : "Transaksi ditolak",
           moduleKey: "Keuangan",

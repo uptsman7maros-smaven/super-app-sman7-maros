@@ -37,7 +37,7 @@ export function SchoolProvider({ children }: { children: ReactNode }) {
     setLoadingRefresh(true);
     setLoadError(null);
     try {
-      const data = await loadSchoolContextData(account);
+      const data = await loadSchoolContextData(account, { force: true });
       setLoadedContext({ key, data });
     } catch (error) {
       const message = error instanceof Error

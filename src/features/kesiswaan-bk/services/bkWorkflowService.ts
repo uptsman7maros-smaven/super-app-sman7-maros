@@ -9,6 +9,7 @@ import type {
   RplRow,
   RplGeneratedDraft,
   StudentCounselingProfile,
+  StudentServiceSummary,
 } from "../types";
 
 type ConsultationInput = Omit<ConsultationRow, "id"> & { id?: string };
@@ -184,12 +185,35 @@ export async function saveAkpdForm(input: Omit<AkpdFormRow, "id"> & { id?: strin
   return data as AkpdFormRow;
 }
 
-export async function listAkpdResponses(formId?: string) {
+export async function listAkpdResponses(formId?: string, studentId?: string) {
   let query = supabase.from("kb_akpd_responses").select("*").order("created_at", { ascending: false }).limit(1000);
   if (formId) query = query.eq("form_id", formId);
+  if (studentId) query = query.eq("student_id", studentId);
   const { data, error } = await query;
   throwOnError(error);
   return (data ?? []) as AkpdResponseRow[];
+}
+
+export async function loadStudentServiceSummary(): Promise<StudentServiceSummary | null> {
+  const { data, error } = await supabase.rpc("kb_student_service_summary");
+  throwOnError(error);
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  if (typeof row !== "object" || row === null) {
+    throw new Error("Ringkasan layanan siswa tidak sesuai format.");
+  }
+  const values = row as Record<string, unknown>;
+  const summary = {
+    curhatCount: Number(values.curhat_count),
+    unreadCurhatCount: Number(values.unread_curhat_count),
+    akpdCompletedCount: Number(values.akpd_completed_count),
+    consultationCount: Number(values.consultation_count),
+    pendingConsultationCount: Number(values.pending_consultation_count),
+  };
+  if (Object.values(summary).some(value => !Number.isInteger(value) || value < 0)) {
+    throw new Error("Ringkasan layanan siswa tidak lengkap.");
+  }
+  return summary;
 }
 
 export async function saveAkpdResponse(input: Omit<AkpdResponseRow, "id" | "created_at">) {

@@ -68,6 +68,7 @@ type Props = {
   initialRplTopic?: string;
   consultationStudentId?: string | null;
   consultationPrefillTopic?: string;
+  onStudentServiceChange?: () => void;
   onCreateRplFromTopic: (topic: string) => void;
 };
 
@@ -241,6 +242,7 @@ export default function CounselingWorkflowPanel({
   initialRplTopic = "",
   consultationStudentId = null,
   consultationPrefillTopic = "",
+  onStudentServiceChange,
   onCreateRplFromTopic,
 }: Props) {
   const isStudent = role === "siswa";
@@ -335,6 +337,10 @@ export default function CounselingWorkflowPanel({
 
   async function reloadTab() {
     setError("");
+    if (isStudent && !student) {
+      setError("Profil siswa belum terhubung ke Data Induk. Hubungi administrator sekolah.");
+      return;
+    }
     try {
       if (tab === "Konsultasi BK" || tab === "Pengajuan Konsultasi") {
         setConsultations(await listConsultations(isStudent ? student?.id : undefined));
@@ -345,7 +351,7 @@ export default function CounselingWorkflowPanel({
       } else if (tab === "Angket Kebutuhan Siswa") {
         const [loadedForms, loadedResponses] = await Promise.all([
           listAkpdForms(isStudent),
-          listAkpdResponses(),
+          listAkpdResponses(undefined, isStudent ? student?.id : undefined),
         ]);
         setForms(loadedForms);
         setResponses(loadedResponses);
@@ -444,6 +450,7 @@ export default function CounselingWorkflowPanel({
     setNotice("");
     try {
       await action();
+      if (isStudent) onStudentServiceChange?.();
       setNotice(success);
       await reloadTab();
     } catch (saveError) {
@@ -620,6 +627,10 @@ export default function CounselingWorkflowPanel({
 
   if (!canManage && !isStudent) {
     return <section className="kb-panel"><div className="kb-privacy">Bagian ini hanya tersedia untuk siswa atau petugas Bimbingan dan Konseling yang berwenang.</div></section>;
+  }
+
+  if (isStudent && !student) {
+    return <section className="kb-panel"><div className="kb-privacy" role="status">Profil siswa belum terhubung ke Data Induk. Hubungi administrator sekolah agar akun dapat ditautkan.</div></section>;
   }
 
   if (tab === "Konsultasi BK" || tab === "Pengajuan Konsultasi") {
