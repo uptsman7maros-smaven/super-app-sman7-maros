@@ -510,6 +510,7 @@ export default function DataInduk({ userRole = "" }: DataIndukProps) {
 const [loadingStudents, setLoadingStudents] = useState(false);
 const [studentError, setStudentError] = useState("");
 const [studentNotice, setStudentNotice] = useState("");
+  const [studentSessionVersion, setStudentSessionVersion] = useState(0);
 
 const [showStudentForm, setShowStudentForm] = useState(false);
 const [editingStudent, setEditingStudent] =
@@ -609,6 +610,24 @@ const logMasterChange = async (action: string, details: string) => {
 
 useEffect(() => {
   if (activeMenu !== "siswa") return;
+  let active = true;
+  let refreshTimer = 0;
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    if ((event !== "TOKEN_REFRESHED" && event !== "SIGNED_IN") || !session) return;
+    refreshTimer = window.setTimeout(() => {
+      if (active) setStudentSessionVersion((version) => version + 1);
+    }, 0);
+  });
+
+  return () => {
+    active = false;
+    window.clearTimeout(refreshTimer);
+    subscription.unsubscribe();
+  };
+}, [activeMenu]);
+
+useEffect(() => {
+  if (activeMenu !== "siswa") return;
 
   let cancelled = false;
 
@@ -661,7 +680,7 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [activeMenu]);
+}, [activeMenu, studentSessionVersion]);
 
 useEffect(() => {
   if (activeMenu !== "siswa" || userRole !== "super_admin") return;
@@ -679,7 +698,7 @@ useEffect(() => {
       }
     });
   return () => { cancelled = true; };
-}, [activeMenu, userRole]);
+}, [activeMenu, studentSessionVersion, userRole]);
 
 const getStudentAccountStatus = (student: Student) => {
   if (student.profile_id) return "Sudah Ada Akun";
