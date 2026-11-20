@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { Session } from '@supabase/supabase-js'
 import {
   LayoutDashboard, FilePlus2, Files, Inbox, Send, Archive, ClipboardCheck, Search, Bell,
@@ -22,6 +23,7 @@ type LetterRole = 'administrator' | 'operator' | 'guru_staf' | 'pemohon' | 'staf
 type LetterStatus = 'draft' | 'submitted' | 'in_review' | 'revision' | 'resubmitted' | 'approved' | 'awaiting_number' | 'issued' | 'rejected' | 'archived'
 type PaperSize = 'A4' | 'F4'
 type LogoPosition = 'left' | 'top'
+type LetterDocumentMarkup = { html: string; header: string; paperSize: PaperSize; isDraft: boolean; title: string }
 type TemplateField = {
   name: string
   label: string
@@ -247,41 +249,26 @@ function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlo
   </div>`
 }
 
-function waitForLetterAssetLoad(element:HTMLElement,assetName:string){
-  return new Promise<void>((resolve,reject)=>{
-    const timer=window.setTimeout(()=>reject(new Error(`${assetName} gagal dimuat dalam waktu yang ditentukan.`)),15000)
-    const cleanup=()=>{
-      window.clearTimeout(timer)
-      element.removeEventListener('load',onLoad)
-      element.removeEventListener('error',onError)
-    }
-    const onLoad=()=>{cleanup();resolve()}
-    const onError=()=>{cleanup();reject(new Error(`${assetName} gagal dimuat.`))}
-    element.addEventListener('load',onLoad,{once:true})
-    element.addEventListener('error',onError,{once:true})
-  })
-}
-
-async function waitForLetterAssets(doc:Document,assetsRoot:ParentNode=doc){
-  await Promise.all(Array.from(doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).map(link=>{
-    if(link.sheet)return Promise.resolve()
-    return waitForLetterAssetLoad(link,'Gaya surat')
-  }))
-  await Promise.all(Array.from(assetsRoot.querySelectorAll('img')).map(async image=>{
+async function waitForPrintImages(root:ParentNode){
+  await Promise.all(Array.from(root.querySelectorAll('img')).map(async image=>{
     if(!image.getAttribute('src')){image.remove();return}
-    if(!image.complete)await waitForLetterAssetLoad(image,'Logo atau gambar surat')
+    if(!image.complete){
+      await new Promise<void>((resolve,reject)=>{
+        const timer=window.setTimeout(()=>reject(new Error('Logo atau gambar surat gagal dimuat dalam waktu yang ditentukan.')),15000)
+        const cleanup=()=>{
+          window.clearTimeout(timer)
+          image.removeEventListener('load',onLoad)
+          image.removeEventListener('error',onError)
+        }
+        const onLoad=()=>{cleanup();resolve()}
+        const onError=()=>{cleanup();reject(new Error('Logo atau gambar surat gagal dimuat.'))}
+        image.addEventListener('load',onLoad,{once:true})
+        image.addEventListener('error',onError,{once:true})
+      })
+    }
     if(image.naturalWidth===0)throw new Error('Logo atau gambar surat gagal dimuat.')
     try{await image.decode()}catch{throw new Error('Logo atau gambar surat gagal didekode untuk dicetak.')}
   }))
-  let fontTimer=0
-  try{
-    await Promise.race([
-      doc.fonts?.ready??Promise.resolve(),
-      new Promise<never>((_,reject)=>{fontTimer=window.setTimeout(()=>reject(new Error('Font surat terlalu lama dimuat.')),15000)}),
-    ])
-  }finally{
-    if(fontTimer)window.clearTimeout(fontTimer)
-  }
 }
 
 function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null) {
@@ -386,6 +373,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [tokenDraft,setTokenDraft]=useState('')
   const [requestDraftId,setRequestDraftId]=useState<string|null>(null)
   const [previewRequest,setPreviewRequest]=useState<LetterRequest|null>(null)
+  const [printTarget,setPrintTarget]=useState<LetterDocumentMarkup|null>(null)
   const [reviewRequest,setReviewRequest]=useState<LetterRequest|null>(null)
   const [reviewDecision,setReviewDecision]=useState<'approved'|'revision'|'rejected'>('revision')
   const [reviewNote,setReviewNote]=useState('')
@@ -393,6 +381,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [issueForm,setIssueForm]=useState<IssueForm>({letter_number:'',issue_date:new Date().toISOString().slice(0,10),signer_name:'',signer_position:'Kepala Sekolah',signer_nip:'',ktu_fields:{}})
   const [profileReady,setProfileReady]=useState(false)
   const templateHtmlRef=useRef<HTMLTextAreaElement>(null)
+  const printPortalRef=useRef<HTMLDivElement>(null)
   const [selectedTemplate,setSelectedTemplate]=useState('')
   const [requestData,setRequestData]=useState<LetterForm>({})
   const [personFields,setPersonFields]=useState<Record<string,PersonOption>>({})
@@ -869,7 +858,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(error)notify(error.message);else{notify('Surat masuk berhasil dicatat');setModal(null);setForm({});await loadAll(true)}
     setBusy(false)
   }
-  const getRequestTemplate=(request:LetterRequest)=>{
+  const getRequestTemplate=(request:LetterRequest):LetterDocumentMarkup|null=>{
     const activeTemplate=templates.find(template=>template.id===request.template_id)
     const issued=Array.isArray(request.letter_issued)?request.letter_issued[0]:request.letter_issued
     const html=activeTemplate?.html_content||request.letter_templates?.html_content||issued?.html_snapshot||''
@@ -884,156 +873,56 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     }
   }
   const openPreview=(request:LetterRequest)=>{setPreviewRequest(request);setModal({type:'preview'})}
-  const printLetter=async(request:LetterRequest)=>{
-    if(printing)return
+  const printLetter=(request:LetterRequest)=>{
+    if(printing||pdfBusy)return
     const documentMarkup=getRequestTemplate(request)
     if(!documentMarkup){notify('Konten template surat tidak tersedia untuk pratinjau.');return}
     setPrinting(true)
-    const paperWidth=documentMarkup.paperSize==='F4'?215:210
-    const paperHeight=documentMarkup.paperSize==='F4'?330:297
-    let documentHtml:string
-    try{
-      const stylesheetLinks=Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
-        .filter(link=>new URL(link.href).origin===window.location.origin)
-        .map(link=>`<link rel="stylesheet" href="${escapeHtml(link.href)}">`)
-        .join('')
-      const inlineStylesheets=Array.from(document.querySelectorAll<HTMLStyleElement>('style'))
-        .map(style=>`<style>${style.textContent||''}</style>`)
-        .join('')
-      const watermark=documentMarkup.isDraft?'<span class="letter-watermark">KONSEP / BELUM BERNOMOR</span>':''
-      documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><base href="${escapeHtml(window.location.origin)}/"><title>${escapeHtml(documentMarkup.title)}</title>${stylesheetLinks}${inlineStylesheets}<style>
-        html,body{margin:0;padding:0;background:#fff;color:#000}
-        .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:0;background:#fff;color:#000}
-        .letter-app .letter-paper{width:${paperWidth}mm;height:auto;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:none;transform:none;overflow:visible;color:#000}
-        .letter-document-header img[src=""]{display:none}
-        @page{size:${paperWidth}mm ${paperHeight}mm;margin:0}
-        @media print{
-          html,body{width:${paperWidth}mm;min-height:${paperHeight}mm;height:auto;background:#fff;color:#000}
-          .letter-app{margin:0;background:#fff;color:#000}
-        }
-        </style></head><body><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
-    }catch(error){
-      setPrinting(false)
-      notify(`Dokumen cetak gagal disiapkan: ${error instanceof Error?error.message:'Terjadi kesalahan yang tidak diketahui.'}`)
-      return
-    }
-    const createPaper=()=>{
-      const paper=document.createElement('div')
-      paper.className=`letter-paper letter-paper-preview${documentMarkup.paperSize==='F4'?' paper-f4':''}`
-      if(documentMarkup.isDraft){
-        const draftMark=document.createElement('span')
-        draftMark.className='letter-watermark'
-        draftMark.textContent='KONSEP / BELUM BERNOMOR'
-        paper.appendChild(draftMark)
-      }
-      const content=document.createElement('div')
-      content.className='letter-document-render letter-paper-preview'
-      content.innerHTML=`${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article>`
-      paper.appendChild(content)
-      return paper
-    }
-    let iframe:HTMLIFrameElement|null=null
-    let iframeCleanupTimer=0
-    let fallbackCleanupTimer=0
-    let printingFinished=false
-    const finishPrinting=()=>{
-      if(printingFinished)return
-      printingFinished=true
-      setPrinting(false)
-    }
-    const removeIframe=()=>{
-      if(iframeCleanupTimer)window.clearTimeout(iframeCleanupTimer)
-      iframe?.remove()
-      iframe=null
-    }
-    const fallbackPrint=async()=>{
-      const fallbackHost=document.createElement('div')
-      fallbackHost.className=`letter-app letter-fallback-print-host${documentMarkup.paperSize==='F4'?' letter-fallback-print-host-f4':''}`
-      fallbackHost.appendChild(createPaper())
-      const pageStyle=document.createElement('style')
-      pageStyle.textContent=`@media print{@page{size:${paperWidth}mm ${paperHeight}mm;margin:0}}`
-      document.head.appendChild(pageStyle)
-      document.body.appendChild(fallbackHost)
-      document.body.classList.add('letter-fallback-print-active')
-      const cleanup=()=>{
-        fallbackHost.remove()
-        pageStyle.remove()
-        document.body.classList.remove('letter-fallback-print-active')
-        if(fallbackCleanupTimer)window.clearTimeout(fallbackCleanupTimer)
-        finishPrinting()
-      }
-      window.addEventListener('afterprint',cleanup,{once:true})
-      fallbackCleanupTimer=window.setTimeout(cleanup,60000)
-      try{
-        await waitForLetterAssets(document,fallbackHost)
-        window.focus()
-        window.print()
-      }catch(error){
-        cleanup()
-        throw error
-      }
-    }
-    let fallbackAttempted=false
-    const printFallback=async()=>{
-      fallbackAttempted=true
-      await fallbackPrint()
-    }
-    try{
-      iframe=document.createElement('iframe')
-      iframe.setAttribute('title','Cetak surat')
-      iframe.setAttribute('aria-hidden','true')
-      Object.assign(iframe.style,{
-        position:'fixed',left:'-10000px',top:'0',width:`${paperWidth}mm`,height:`${paperHeight}mm`,
-        border:'0',opacity:'0',pointerEvents:'none',
-      })
-      const iframeLoaded=new Promise<void>((resolve,reject)=>{
-        const timer=window.setTimeout(()=>reject(new Error('Dokumen iframe cetak gagal dimuat dalam waktu yang ditentukan.')),15000)
-        iframe!.onload=()=>{window.clearTimeout(timer);resolve()}
-        iframe!.onerror=()=>{window.clearTimeout(timer);reject(new Error('Dokumen iframe cetak gagal dimuat.'))}
-      })
-      iframe.srcdoc=documentHtml
-      document.body.appendChild(iframe)
-      await iframeLoaded
-      const iframeDoc=iframe.contentDocument
-      const iframeWindow=iframe.contentWindow
-      if(!iframeDoc||!iframeWindow)throw new Error('Browser tidak menyediakan dokumen cetak tersembunyi.')
-      await waitForLetterAssets(iframeDoc)
-      if(!iframeDoc.body.innerText.trim())throw new Error('Isi surat pada dokumen cetak kosong; proses cetak dibatalkan.')
-      await new Promise<void>(resolve=>iframeWindow.requestAnimationFrame(()=>iframeWindow.requestAnimationFrame(()=>resolve())))
-      await new Promise<void>(resolve=>window.setTimeout(resolve,150))
-
-      let beforePrintFired=false
-      iframeWindow.addEventListener('beforeprint',()=>{beforePrintFired=true},{once:true})
-      iframeWindow.addEventListener('afterprint',()=>{removeIframe();finishPrinting()},{once:true})
-      iframeCleanupTimer=window.setTimeout(()=>{removeIframe();finishPrinting()},60000)
-      iframeWindow.focus()
-      iframeWindow.print()
-      await new Promise<void>(resolve=>window.setTimeout(resolve,150))
-      if(!beforePrintFired){
-        removeIframe()
-        await printFallback()
-      }
-    }catch(printError){
-      removeIframe()
-      if(!fallbackAttempted){
-        try{
-          await printFallback()
-        }catch(fallbackError){
-          finishPrinting()
-          notify(`Gagal membuka dialog cetak: ${fallbackError instanceof Error?fallbackError.message:printError instanceof Error?printError.message:'Browser tidak mengizinkan pencetakan.'}`)
-        }
-      }else{
-        finishPrinting()
-        notify(`Gagal membuka dialog cetak: ${printError instanceof Error?printError.message:'Browser tidak mengizinkan pencetakan.'}`)
-      }
-    }
+    setPrintTarget(documentMarkup)
   }
-  const handlePrintLetter=()=>{
-    if(!previewRequest)return
-    void printLetter(previewRequest).catch(printError=>{
+  useEffect(()=>{
+    if(!printTarget)return
+    let cancelled=false
+    let finished=false
+    let cleanupTimer=0
+    const cleanup=()=>{
+      if(finished)return
+      finished=true
+      if(cleanupTimer)window.clearTimeout(cleanupTimer)
+      window.removeEventListener('afterprint',cleanup)
+      setPrintTarget(null)
       setPrinting(false)
-      notify(`Gagal membuka dialog cetak: ${printError instanceof Error?printError.message:'Terjadi kesalahan yang tidak diketahui.'}`)
-    })
+    }
+    const prepareAndPrint=async()=>{
+      try{
+        const portal=printPortalRef.current
+        const content=portal?.querySelector<HTMLElement>('.letter-print-content')
+        if(!portal||!content)throw new Error('Area dokumen cetak tidak tersedia.')
+        await waitForPrintImages(portal)
+        await document.fonts.ready
+        if(!content.textContent?.trim())throw new Error('Isi surat untuk dicetak kosong.')
+        await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+        await new Promise<void>(resolve=>window.setTimeout(resolve,150))
+        if(cancelled)return
+        window.addEventListener('afterprint',cleanup,{once:true})
+        cleanupTimer=window.setTimeout(cleanup,60000)
+        window.print()
+      }catch(printError){
+        if(cancelled)return
+        cleanup()
+        setToast(`Gagal menyiapkan cetak: ${printError instanceof Error?printError.message:'Terjadi kesalahan yang tidak diketahui.'}`)
+        window.setTimeout(()=>setToast(''),3200)
+      }
+    }
+    void prepareAndPrint()
+    return ()=>{
+      cancelled=true
+      if(cleanupTimer)window.clearTimeout(cleanupTimer)
+      window.removeEventListener('afterprint',cleanup)
+    }
+  },[printTarget])
+  const handlePrintLetter=()=>{
+    if(previewRequest)printLetter(previewRequest)
   }
   const downloadLetterPdf=async(request:LetterRequest)=>{
     if(pdfBusy)return
@@ -1219,7 +1108,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     ['Diterbitkan',requests.filter(r=>r.status==='issued').length,Send],['Perlu Revisi',requests.filter(r=>r.status==='revision').length,RefreshCw]
   ] as const
   if(!session) return <div className="letter-app"><div className="sso-state"><div className="sso-card"><div className="brand-mark">7</div><span className="eyebrow">SUPER APP · SMAN 7 MAROS</span><h1>{sessionReady?'Sesi masuk tidak ditemukan':'Memverifikasi sesi masuk'}</h1><p>{sessionReady?error||'Persuratan menggunakan sesi login dari Super App. Kembali ke halaman utama untuk masuk.':'Memeriksa sesi Super App…'}</p>{sessionReady&&onBack&&<button className="primary" onClick={onBack}><ChevronLeft size={17}/> Kembali ke Super App</button>}</div></div></div>
-  return <div className="letter-app"><div className="app-shell">
+  return <><div className="letter-app"><div className="app-shell">
     <header className="portal-header">
       <button className="brand brand-button" onClick={()=>setPage('dashboard')} aria-label="Buka dashboard Persuratan"><div className="brand-mark small">{schoolSettings?.logo_url&&/^https?:\/\//i.test(schoolSettings.logo_url)?<img src={schoolSettings.logo_url} alt="" width="39" height="39"/>:'7'}</div><div><b>{schoolSettings?.school_name||'SMAN 7 MAROS'}</b><small>Persuratan Digital</small></div></button>
       <div className="portal-actions">{onBack&&<button className="back-portal" onClick={onBack}><ChevronLeft size={17}/> Super App</button>}<button className="icon-btn notification" onClick={()=>setModal({type:'notifications'})} aria-label="Notifikasi"><Bell size={19}/>{notifications.some(n=>!n.is_read)&&<i/>}</button><div className="top-user"><div className="avatar">{(person?.username||session.user.email||'U')[0].toUpperCase()}</div><span><b>{person?.username||session.user.email}</b><small>{role?roleLabels[role]:person?.role||'Pengguna'}</small></span></div></div>
@@ -1389,6 +1278,15 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     </Modal>}
     {modal?.type==='notifications'&&<Modal title="Notifikasi" close={()=>setModal(null)}><div className="notification-list">{notifications.length?notifications.map(notification=><button type="button" className={`notification-row${notification.is_read?' is-read':''}`} key={notification.id} onClick={()=>void markNotificationRead(notification)}><Bell size={17}/><span><b>{notification.title}</b><p>{notification.body}</p><small>{new Date(notification.created_at).toLocaleString('id-ID')}</small></span></button>):<p className="muted">Belum ada notifikasi.</p>}</div></Modal>}
   </div></div>
+  {printTarget&&createPortal(<div id="letter-print-portal" ref={printPortalRef} data-paper-size={printTarget.paperSize}>
+    <style>{`@page{size:${printTarget.paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:0}`}</style>
+    <div className={`letter-app letter-print-app${printTarget.paperSize==='F4'?' letter-print-app-f4':''}`}>
+      <div className={`letter-paper letter-paper-preview${printTarget.paperSize==='F4'?' paper-f4':''}`}>
+        {printTarget.isDraft&&<span className="letter-watermark">KONSEP / BELUM BERNOMOR</span>}
+        <div className="letter-document-render letter-paper-preview letter-print-content" dangerouslySetInnerHTML={{__html:`${printTarget.header}<article class="letter-template-body">${printTarget.html}</article>`}}/>
+      </div>
+    </div>
+  </div>,document.body)}</>
 }
 function DataPanel({title,subtitle,search,setSearch,action,actionLabel,children}: {
   title:string; subtitle:string; search:string; setSearch:(value:string)=>void;
