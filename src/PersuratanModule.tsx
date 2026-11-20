@@ -22,7 +22,7 @@ type Page = 'dashboard' | 'create' | 'requests' | 'approvals' | 'issued' | 'arch
 type LetterRole = 'administrator' | 'operator' | 'guru_staf' | 'pemohon' | 'staf_tu' | 'kepala_tu' | 'kepala_sekolah'
 type LetterStatus = 'draft' | 'submitted' | 'in_review' | 'revision' | 'resubmitted' | 'approved' | 'awaiting_number' | 'issued' | 'rejected' | 'archived'
 type PaperSize = 'A4' | 'F4'
-type LogoPosition = 'left' | 'top'
+type LogoPosition = 'left' | 'top' | 'none'
 type LetterDocumentMarkup = { html: string; header: string; paperSize: PaperSize; isDraft: boolean; title: string }
 type TemplateField = {
   name: string
@@ -237,6 +237,7 @@ function renderTemplateContent(
 }
 
 function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlot, logoPosition: LogoPosition) {
+  if(logoPosition==='none')return ''
   const header = getSchoolLetterhead(settings, slot)
   const safeImageUrl = (url: string) => /^(?:https?:\/\/|\/(?!\/))/i.test(url) ? escapeHtml(url) : ''
   return `<div class="letter-document-header kop-${header.layout} logo-${logoPosition}">
@@ -1329,7 +1330,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
             <div className="template-preview-controls">
               <label><span>Ukuran kertas</span><select aria-label="Ukuran kertas pratinjau" value={normalizePaperSize(form.paper_size)} onChange={event=>setForm(previous=>({...previous,paper_size:normalizePaperSize(event.target.value)}))}><option value="A4">A4 · 210 × 297 mm</option><option value="F4">F4 / Folio · 215 × 330 mm</option></select></label>
               <label><span>Kop surat</span><select aria-label="Pilih kop surat untuk pratinjau" value={letterheadSlot} onChange={event=>setLetterheadSlot(event.target.value as LetterheadSlot)}><option value="1">Kop Surat 1</option><option value="2">Kop Surat 2</option><option value="3">Kop Surat 3</option></select></label>
-              <label><span>Posisi logo{letterheadSlot==='2'?' · Kop 2 tetap kiri-kanan':''}</span><select aria-label="Pilih posisi logo untuk kop surat" value={logoPosition} disabled={letterheadSlot==='2'} title={letterheadSlot==='2'?'Kop Surat 2 menggunakan susunan dua logo kiri-kanan.':''} onChange={event=>setLogoPosition(event.target.value as LogoPosition)}><option value="top">Di atas · kecil</option><option value="left">Di kiri</option></select></label>
+              <label><span>Tampilan kop{letterheadSlot==='2'&&logoPosition!=='none'?' · Kop 2 tetap kiri-kanan':''}</span><select aria-label="Pilih tampilan kop surat" value={logoPosition} title={letterheadSlot==='2'?'Kop Surat 2 menggunakan susunan dua logo kiri-kanan.':''} onChange={event=>setLogoPosition(event.target.value as LogoPosition)}><option value="top" disabled={letterheadSlot==='2'}>Kop · logo di atas</option><option value="left" disabled={letterheadSlot==='2'}>Kop · logo di kiri</option><option value="none">Tanpa kop surat</option></select></label>
             </div>
             <FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,logoPosition)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{},templateFields)}</article>`} className="template-studio-preview"/>
           </div>
