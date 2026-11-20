@@ -237,6 +237,84 @@ const initialDashboardStats: DashboardStats = {
   letters: { value: "—", note: "Memuat pengajuan aktif", trend: "Sinkronisasi Persuratan" },
 };
 
+function isDashboardMetric(value: unknown): value is DashboardMetric {
+  return typeof value === "object" &&
+    value !== null &&
+    "value" in value &&
+    typeof value.value === "string" &&
+    "note" in value &&
+    typeof value.note === "string" &&
+    "trend" in value &&
+    typeof value.trend === "string";
+}
+
+function isDashboardStats(value: unknown): value is DashboardStats {
+  return typeof value === "object" &&
+    value !== null &&
+    "students" in value &&
+    isDashboardMetric(value.students) &&
+    "staff" in value &&
+    isDashboardMetric(value.staff) &&
+    "attendance" in value &&
+    isDashboardMetric(value.attendance) &&
+    "letters" in value &&
+    isDashboardMetric(value.letters);
+}
+
+function dashboardStatsCacheKey(userId: string) {
+  return `super-app:dashboard-stats:${userId}`;
+}
+
+function readCachedDashboardStats(userId: string): DashboardStats | null {
+  try {
+    const raw = window.localStorage.getItem(dashboardStatsCacheKey(userId));
+    if (!raw) return null;
+    const cached: unknown = JSON.parse(raw);
+    if (
+      typeof cached !== "object" ||
+      cached === null ||
+      !("savedAt" in cached) ||
+      typeof cached.savedAt !== "number" ||
+      Date.now() - cached.savedAt > 24 * 60 * 60_000 ||
+      !("stats" in cached) ||
+      !isDashboardStats(cached.stats)
+    ) {
+      return null;
+    }
+
+    const refreshedAt = new Intl.DateTimeFormat("id-ID", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(cached.savedAt);
+    const withCacheNote = (metric: DashboardMetric): DashboardMetric => ({
+      ...metric,
+      note: "Data terakhir tersimpan",
+      trend: `Diperbarui ${refreshedAt}`,
+    });
+
+    return {
+      students: withCacheNote(cached.stats.students),
+      staff: withCacheNote(cached.stats.staff),
+      attendance: withCacheNote(cached.stats.attendance),
+      letters: withCacheNote(cached.stats.letters),
+    };
+  } catch (error) {
+    console.warn("Cache ringkasan dashboard tidak dapat dibaca:", error);
+    return null;
+  }
+}
+
+function writeCachedDashboardStats(userId: string, stats: DashboardStats) {
+  try {
+    window.localStorage.setItem(
+      dashboardStatsCacheKey(userId),
+      JSON.stringify({ savedAt: Date.now(), stats }),
+    );
+  } catch (error) {
+    console.warn("Cache ringkasan dashboard tidak dapat disimpan:", error);
+  }
+}
+
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs = 8000,
@@ -261,43 +339,49 @@ function sessionProfileCacheKey(userId: string) {
 }
 
 function readCachedSessionUser(userId: string): CachedSessionUser | null {
-  try {
-    const raw = window.sessionStorage.getItem(sessionProfileCacheKey(userId));
-    if (!raw) return null;
-    const value: unknown = JSON.parse(raw);
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      !("id" in value) ||
-      !("username" in value) ||
-      !("role" in value) ||
-      value.id !== userId ||
-      typeof value.username !== "string" ||
-      typeof value.role !== "string"
-    ) {
-      return null;
+  for (const storageName of ["localStorage", "sessionStorage"] as const) {
+    try {
+      const raw = window[storageName].getItem(sessionProfileCacheKey(userId));
+      if (!raw) continue;
+      const value: unknown = JSON.parse(raw);
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        "id" in value &&
+        "username" in value &&
+        "role" in value &&
+        value.id === userId &&
+        typeof value.username === "string" &&
+        typeof value.role === "string"
+      ) {
+        return { id: value.id, username: value.username, role: value.role };
+      }
+    } catch (error) {
+      console.warn("Cache profil sesi tidak dapat dibaca:", error);
     }
-    return { id: value.id, username: value.username, role: value.role };
-  } catch (error) {
-    console.warn("Cache profil sesi tidak dapat dibaca:", error);
-    return null;
   }
+  return null;
 }
 
 function writeCachedSessionUser(user: CachedSessionUser) {
-  try {
-    window.sessionStorage.setItem(sessionProfileCacheKey(user.id), JSON.stringify(user));
-  } catch (error) {
-    console.warn("Cache profil sesi tidak dapat disimpan:", error);
+  const serializedUser = JSON.stringify(user);
+  for (const storageName of ["localStorage", "sessionStorage"] as const) {
+    try {
+      window[storageName].setItem(sessionProfileCacheKey(user.id), serializedUser);
+    } catch (error) {
+      console.warn("Cache profil sesi tidak dapat disimpan:", error);
+    }
   }
 }
 
 function clearCachedSessionUser(userId: string | null | undefined) {
   if (!userId) return;
-  try {
-    window.sessionStorage.removeItem(sessionProfileCacheKey(userId));
-  } catch (error) {
-    console.warn("Cache profil sesi tidak dapat dihapus:", error);
+  for (const storageName of ["localStorage", "sessionStorage"] as const) {
+    try {
+      window[storageName].removeItem(sessionProfileCacheKey(userId));
+    } catch (error) {
+      console.warn("Cache profil sesi tidak dapat dihapus:", error);
+    }
   }
 }
 
@@ -1481,8 +1565,8 @@ useEffect(() => {
     if (staleAccount) {
       currentUserRef.current = staleAccount;
       setCurrentUser(staleAccount);
-      setAuthReady(true);
     }
+    setAuthReady(true);
     setAuthError("");
     setSessionRecoveryMessage(
       "Koneksi Supabase sedang dibatasi. Data yang sudah dimuat tetap tersedia; pemulihan dilakukan dengan jeda.",
@@ -1674,6 +1758,11 @@ useEffect(() => {
   const dashboardUser = currentUser;
   let active = true;
   const canViewSchoolTotals = ["super_admin", "operator"].includes(dashboardUser.role);
+  if (canViewSchoolTotals) {
+    setDashboardStats(
+      readCachedDashboardStats(dashboardUser.id) ?? initialDashboardStats,
+    );
+  }
   const requestState = dashboardStatsRefreshState.current.get(dashboardUser.id) ?? {
     lastRequestedAt: 0,
     inFlight: false,
@@ -1903,6 +1992,24 @@ useEffect(() => {
           previous.letters,
         ),
       }));
+      if (
+        canViewSchoolTotals &&
+        !studentsResult.error &&
+        !staffResult.error &&
+        !attendanceResult.error &&
+        !lettersResult.error &&
+        studentsResult.count !== null &&
+        staffResult.count !== null &&
+        attendanceResult.count !== null &&
+        lettersResult.count !== null
+      ) {
+        writeCachedDashboardStats(dashboardUser.id, {
+          students: dashboardMetric("siswa", studentsResult.count, null, initialDashboardStats.students),
+          staff: dashboardMetric("guru & staf", staffResult.count, null, initialDashboardStats.staff),
+          attendance: dashboardMetric("kehadiran", attendanceResult.count, null, initialDashboardStats.attendance),
+          letters: dashboardMetric("surat diproses", lettersResult.count, null, initialDashboardStats.letters),
+        });
+      }
     } catch (error) {
       const isRateLimited = isSupabaseRateLimitError(error);
       if (!isRateLimited) console.error("Ringkasan dashboard gagal dimuat:", error);
@@ -2296,6 +2403,20 @@ if (!currentUser) {
   return (
     <div className={`login-portal-shell login-theme-${loginTheme}`}>
       <MaintenanceBanner />
+      {sessionRecoveryMessage && (
+        <div className="session-recovery-banner" role="status">
+          <span>{sessionRecoveryMessage}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setSessionRecoveryMessage("");
+              setSessionRetry((retry) => retry + 1);
+            }}
+          >
+            Coba pulihkan sesi
+          </button>
+        </div>
+      )}
       <div className="login-portal-tabs" aria-label="Pilih portal login">
         {portals.map((item) => (
           <button
@@ -2318,6 +2439,8 @@ if (!currentUser) {
         maintenanceMessage={maintenanceStatus?.message ?? "Aplikasi sedang dalam perbaikan atau pembaruan. Silakan cek kembali beberapa saat lagi."}
         onThemeChange={setLoginTheme}
         onLoginSuccess={(user) => {
+          writeCachedSessionUser(user);
+          currentUserRef.current = user;
           setAuthError("");
           setCurrentUser(user);
           setActivePage("Dashboard");
@@ -2491,6 +2614,20 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
       </aside>
 
       <main className="main-area">
+        {sessionRecoveryMessage && (
+          <div className="session-recovery-banner" role="status">
+            <span>{sessionRecoveryMessage}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setSessionRecoveryMessage("");
+                setSessionRetry((retry) => retry + 1);
+              }}
+            >
+              Coba pulihkan sesi
+            </button>
+          </div>
+        )}
         {moduleStatuses[activePage] === "active" && moduleEnabledOverrides[activePage] !== false && activePage !== "Absensi Digital" && (
           <div className="module-fullshell-back-wrap">
             <button type="button" className="module-fullshell-back" onClick={() => setActivePage("Dashboard")}>

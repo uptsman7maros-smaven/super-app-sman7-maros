@@ -247,7 +247,33 @@ async function authenticatedFetch(
         (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined),
     );
     headers.set("Authorization", `Bearer ${accessToken}`);
-    return fetch(request, { ...init, headers });
+    const requestSignal = init?.signal ??
+      (typeof Request !== "undefined" && input instanceof Request ? input.signal : undefined);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 15_000);
+    const abortRequest = () => controller.abort(requestSignal?.reason);
+
+    if (requestSignal?.aborted) {
+      abortRequest();
+    } else {
+      requestSignal?.addEventListener("abort", abortRequest, { once: true });
+    }
+
+    return fetch(request, { ...init, headers, signal: controller.signal })
+      .catch((error: unknown) => {
+        if (timedOut) {
+          throw new Error("Permintaan Supabase melewati batas waktu.", { cause: error });
+        }
+        throw error;
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+        requestSignal?.removeEventListener("abort", abortRequest);
+      });
   };
 
   let session;
