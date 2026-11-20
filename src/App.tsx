@@ -45,6 +45,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  getCachedSupabaseSession,
   getSupabaseSessionRetryDelayMs,
   getValidSupabaseSession,
   isSupabaseRateLimitError,
@@ -1713,19 +1714,14 @@ useEffect(() => {
       if (mounted && syncId === sessionSyncId) {
         if (isTemporarySessionFailure(error)) {
           retryScheduled = true;
-          let staleAccount: CachedSessionUser | null = null;
-          try {
-            const { data, error: localSessionError } = await supabase.auth.getSession();
-            if (localSessionError) throw localSessionError;
-            const userId = data.session?.user.id;
-            if (userId) {
-              staleAccount = currentUserRef.current?.id === userId
-                ? currentUserRef.current
-                : readCachedSessionUser(userId);
-            }
-          } catch (cacheError) {
-            console.error("Profil sesi cadangan gagal dibaca:", cacheError);
-          }
+          const userId = getCachedSupabaseSession()?.user.id
+            ?? currentUserRef.current?.id
+            ?? null;
+          const staleAccount = userId
+            ? currentUserRef.current?.id === userId
+              ? currentUserRef.current
+              : readCachedSessionUser(userId)
+            : null;
           scheduleSessionRecovery(syncId, staleAccount);
           return;
         }

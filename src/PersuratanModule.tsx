@@ -8,7 +8,7 @@ import {
   Check, FileText, Sparkles, Upload, Copy, Pencil, Eye, Trash2, UserRound, Settings2
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { isSupabaseRateLimitError, supabase } from './lib/supabase'
+import { getValidSupabaseSession, isSupabaseRateLimitError, supabase } from './lib/supabase'
 import { isLetterInProgress } from './lib/letterMetrics'
 import { logAppActivity } from './services/activityLogService'
 import { useSchoolContext } from './context/useSchoolContext'
@@ -689,10 +689,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
 
   useEffect(()=>{
     let active=true
-    supabase.auth.getSession().then(({data,error:sessionError})=>{
+    getValidSupabaseSession().then((session)=>{
       if(!active)return
-      if(sessionError)setError(sessionError.message)
-      acceptSession(data.session)
+      acceptSession(session)
       setSessionReady(true)
     }).catch(sessionError=>{
       if(!active)return

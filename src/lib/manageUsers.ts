@@ -57,8 +57,12 @@ async function invokeManageUsersAction(
     if (response) {
       try {
         const body: unknown = await response.clone().json();
-        if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
-          responseMessage = body.error;
+        if (body && typeof body === "object") {
+          if ("error" in body && typeof body.error === "string") {
+            responseMessage = body.error;
+          } else if ("message" in body && typeof body.message === "string") {
+            responseMessage = body.message;
+          }
         }
       } catch {
         responseMessage = "";
@@ -145,29 +149,10 @@ export async function createManagedUser(
 }
 
 export async function getManagedUsers(): Promise<ManagedUser[]> {
-  const {
-    data,
-    error,
-  } = await supabase.functions.invoke("manage-users", {
-    body: {
-      action: "list",
-    },
-  });
-
-  if (error) {
-    console.error("Gagal memanggil manage-users:", error);
-    throw new Error(
-      "Gagal terhubung ke layanan pengguna. Periksa sesi login dan log Edge Function.",
-    );
+  const data = await invokeManageUsersAction("list", {});
+  if (!Array.isArray(data.users)) {
+    throw new Error("Respons daftar pengguna tidak valid.");
   }
-
-  if (!data || !Array.isArray(data.users)) {
-    console.error("Respons manage-users tidak sesuai:", data);
-    throw new Error(
-      data?.error || "Respons daftar pengguna tidak valid.",
-    );
-  }
-
   return data.users as ManagedUser[];
 }
 

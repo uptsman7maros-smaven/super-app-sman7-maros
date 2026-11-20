@@ -361,6 +361,11 @@ const SESSION_RATE_LIMIT_BASE_MS = 30_000;
 const SESSION_RATE_LIMIT_MAX_MS = 15 * 60_000;
 const SESSION_RATE_LIMIT_DEDUP_MS = 30_000;
 const ACCESS_TOKEN_SAFETY_WINDOW_SECONDS = 120;
+const ACCESS_TOKEN_REFRESH_WINDOW_SECONDS = 45 + Math.floor(Math.random() * 76);
+
+export function getCachedSupabaseSession() {
+  return cachedSession;
+}
 
 function clearSessionRateLimit() {
   sessionRetryAfter = 0;
@@ -488,7 +493,7 @@ export async function getValidSupabaseSession() {
 
         const expiresAt = data.session.expires_at ?? 0;
         const nowSeconds = Math.floor(Date.now() / 1000);
-        if (expiresAt > nowSeconds + ACCESS_TOKEN_SAFETY_WINDOW_SECONDS) {
+        if (expiresAt > nowSeconds + ACCESS_TOKEN_REFRESH_WINDOW_SECONDS) {
           return data.session;
         }
 
