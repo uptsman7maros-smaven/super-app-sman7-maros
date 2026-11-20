@@ -731,7 +731,7 @@ useEffect(() => {
     });
   const intervalId = window.setInterval(() => {
     if (document.visibilityState === "visible") void refreshFeed();
-  }, 60_000);
+  }, 5 * 60_000);
   const onVisibilityChange = () => {
     if (document.visibilityState === "visible") void refreshFeed();
   };
@@ -1930,7 +1930,7 @@ useEffect(() => {
   void loadDashboardStats();
   const intervalId = window.setInterval(() => {
     if (document.visibilityState === "visible") void loadDashboardStats();
-  }, 60_000);
+  }, 5 * 60_000);
   const handleVisibilityChange = () => {
     if (document.visibilityState === "visible") void loadDashboardStats();
   };

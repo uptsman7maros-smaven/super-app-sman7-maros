@@ -17,7 +17,11 @@ function getErrorStatus(error: unknown) {
 
 function authFailureResponse(error: unknown) {
   const status = getErrorStatus(error);
-  const responseStatus = status === 429 ? 429 : status === 503 ? 503 : 401;
+  const responseStatus = status === 429
+    ? 429
+    : status === 503 || isSupabaseRateLimitError(error)
+      ? 503
+      : 401;
   const message = error instanceof Error
     ? error.message
     : "Sesi Supabase tidak tersedia. Silakan masuk kembali.";
@@ -26,6 +30,28 @@ function authFailureResponse(error: unknown) {
     JSON.stringify({ code: "session_unavailable", message }),
     { status: responseStatus, headers: { "Content-Type": "application/json" } },
   );
+}
+
+function retryableSessionRateLimitResponse(retryAfterMs: number) {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (retryAfterMs > 0) {
+    headers.set("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  }
+  return new Response(
+    JSON.stringify({
+      code: "session_rate_limited",
+      message: "Supabase membatasi pembaruan sesi sementara. Sesi dipertahankan dan akan dicoba lagi.",
+    }),
+    { status: 503, statusText: "Service Unavailable", headers },
+  );
+}
+
+function getRetryAfterMs(value: string | null) {
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const retryAt = Date.parse(value);
+  return Number.isNaN(retryAt) ? 0 : Math.max(0, retryAt - Date.now());
 }
 
 function isProtectedSupabaseRequest(url: URL) {
@@ -69,12 +95,7 @@ async function fetchAuthRequest(
 ): Promise<Response> {
   const isRefreshRequest = isRefreshTokenRequest(input);
   if (isRefreshRequest && Date.now() < sessionRetryAfter) {
-    return authFailureResponse(
-      sessionRateLimitError ?? {
-        status: 429,
-        message: "Supabase membatasi pembaruan sesi sementara.",
-      },
-    );
+    return retryableSessionRateLimitResponse(sessionRetryAfter - Date.now());
   }
 
   const requestSignal = init?.signal ??
@@ -99,7 +120,9 @@ async function fetchAuthRequest(
       rememberSessionRateLimit({
         status: 429,
         message: "Supabase membatasi pembaruan sesi sementara.",
-      });
+      }, getRetryAfterMs(response.headers.get("Retry-After")));
+      // Supabase Auth treats 429 as permanent; 503 keeps the session retryable.
+      return retryableSessionRateLimitResponse(sessionRetryAfter - Date.now());
     }
     return response;
   } catch (error) {
@@ -201,13 +224,23 @@ export const supabase = createClient(url, key, {
 let cachedSession: Session | null = null;
 let sessionRetryAfter = 0;
 let sessionRateLimitError: unknown = null;
-const SESSION_RATE_LIMIT_COOLDOWN_MS = 60_000;
+let sessionRateLimitAttempts = 0;
+let lastSessionRateLimitAt = 0;
+const SESSION_RATE_LIMIT_BASE_MS = 60_000;
+const SESSION_RATE_LIMIT_MAX_MS = 15 * 60_000;
+const SESSION_RATE_LIMIT_DEDUP_MS = 30_000;
+
+function clearSessionRateLimit() {
+  sessionRetryAfter = 0;
+  sessionRateLimitError = null;
+  sessionRateLimitAttempts = 0;
+  lastSessionRateLimitAt = 0;
+}
 
 supabase.auth.onAuthStateChange((event, session) => {
   cachedSession = session;
   if (event === "SIGNED_IN" || event === "SIGNED_OUT" || (event === "TOKEN_REFRESHED" && session)) {
-    sessionRetryAfter = 0;
-    sessionRateLimitError = null;
+    clearSessionRateLimit();
   }
 });
 
@@ -220,10 +253,25 @@ export function isSupabaseRateLimitError(error: unknown) {
   return /rate limit|membatasi pembaruan sesi/i.test(message);
 }
 
-function rememberSessionRateLimit(error: unknown) {
+function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
   if (!isSupabaseRateLimitError(error)) return;
-  sessionRateLimitError = error;
-  sessionRetryAfter = Date.now() + SESSION_RATE_LIMIT_COOLDOWN_MS;
+  const now = Date.now();
+  if (now - lastSessionRateLimitAt > SESSION_RATE_LIMIT_DEDUP_MS) {
+    sessionRateLimitAttempts += 1;
+  }
+  lastSessionRateLimitAt = now;
+  const backoffMs = Math.min(
+    SESSION_RATE_LIMIT_BASE_MS * 2 ** Math.max(0, sessionRateLimitAttempts - 1),
+    SESSION_RATE_LIMIT_MAX_MS,
+  );
+  const retryAfterMs = Math.min(
+    SESSION_RATE_LIMIT_MAX_MS,
+    Math.max(backoffMs, serverRetryAfterMs),
+  );
+  sessionRateLimitError = error instanceof Error
+    ? error
+    : new Error("Supabase membatasi pembaruan sesi sementara.");
+  sessionRetryAfter = Math.max(sessionRetryAfter, now + retryAfterMs);
 }
 
 function refreshSupabaseSession() {
@@ -233,8 +281,7 @@ function refreshSupabaseSession() {
         const { data, error } = await supabase.auth.refreshSession();
         if (error) throw error;
 
-        sessionRetryAfter = 0;
-        sessionRateLimitError = null;
+        clearSessionRateLimit();
         return data.session;
       } catch (error) {
         rememberSessionRateLimit(error);
@@ -289,8 +336,7 @@ export async function getValidSupabaseSession() {
         if (error) throw error;
 
         cachedSession = data.session;
-        sessionRetryAfter = 0;
-        sessionRateLimitError = null;
+        clearSessionRateLimit();
         return data.session;
       } catch (error) {
         rememberSessionRateLimit(error);

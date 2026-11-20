@@ -250,7 +250,7 @@ export default function KesiswaanBK({
   useEffect(() => {
     if (view !== "alerts" || !canSeeAlerts) return;
     const timer = window.setTimeout(() => { void refreshAlerts(); }, 0);
-    const interval = window.setInterval(() => { void refreshAlerts(); }, 60_000);
+    const interval = window.setInterval(() => { void refreshAlerts(); }, 5 * 60_000);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);

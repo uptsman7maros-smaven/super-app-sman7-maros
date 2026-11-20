@@ -622,7 +622,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const refreshVisibleData=()=>{
       if(document.visibilityState==='visible')void loadAll(true)
     }
-    const intervalId=window.setInterval(refreshVisibleData,60_000)
+    const intervalId=window.setInterval(refreshVisibleData,5*60_000)
     document.addEventListener('visibilitychange',refreshVisibleData)
     return ()=>{
       window.clearInterval(intervalId)
