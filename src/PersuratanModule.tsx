@@ -247,25 +247,41 @@ function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlo
   </div>`
 }
 
+function waitForLetterAssetLoad(element:HTMLElement,assetName:string){
+  return new Promise<void>((resolve,reject)=>{
+    const timer=window.setTimeout(()=>reject(new Error(`${assetName} gagal dimuat dalam waktu yang ditentukan.`)),15000)
+    const cleanup=()=>{
+      window.clearTimeout(timer)
+      element.removeEventListener('load',onLoad)
+      element.removeEventListener('error',onError)
+    }
+    const onLoad=()=>{cleanup();resolve()}
+    const onError=()=>{cleanup();reject(new Error(`${assetName} gagal dimuat.`))}
+    element.addEventListener('load',onLoad,{once:true})
+    element.addEventListener('error',onError,{once:true})
+  })
+}
+
 async function waitForLetterAssets(doc:Document,assetsRoot:ParentNode=doc){
   await Promise.all(Array.from(doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).map(link=>{
     if(link.sheet)return Promise.resolve()
-    return new Promise<void>((resolve,reject)=>{
-      link.addEventListener('load',()=>resolve(),{once:true})
-      link.addEventListener('error',()=>reject(new Error('Gaya surat gagal dimuat untuk dicetak.')),{once:true})
-    })
+    return waitForLetterAssetLoad(link,'Gaya surat')
   }))
   await Promise.all(Array.from(assetsRoot.querySelectorAll('img')).map(async image=>{
     if(!image.getAttribute('src')){image.remove();return}
-    if(!image.complete){
-      await new Promise<void>((resolve,reject)=>{
-        image.addEventListener('load',()=>resolve(),{once:true})
-        image.addEventListener('error',()=>reject(new Error('Logo atau gambar surat gagal dimuat.')),{once:true})
-      })
-    }
+    if(!image.complete)await waitForLetterAssetLoad(image,'Logo atau gambar surat')
     if(image.naturalWidth===0)throw new Error('Logo atau gambar surat gagal dimuat.')
+    try{await image.decode()}catch{throw new Error('Logo atau gambar surat gagal didekode untuk dicetak.')}
   }))
-  await doc.fonts?.ready
+  let fontTimer=0
+  try{
+    await Promise.race([
+      doc.fonts?.ready??Promise.resolve(),
+      new Promise<never>((_,reject)=>{fontTimer=window.setTimeout(()=>reject(new Error('Font surat terlalu lama dimuat.')),15000)}),
+    ])
+  }finally{
+    if(fontTimer)window.clearTimeout(fontTimer)
+  }
 }
 
 function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null) {
@@ -875,25 +891,32 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     setPrinting(true)
     const paperWidth=documentMarkup.paperSize==='F4'?215:210
     const paperHeight=documentMarkup.paperSize==='F4'?330:297
-    const stylesheetLinks=Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
-      .filter(link=>new URL(link.href).origin===window.location.origin)
-      .map(link=>`<link rel="stylesheet" href="${escapeHtml(link.href)}">`)
-      .join('')
-    const inlineStylesheets=Array.from(document.querySelectorAll<HTMLStyleElement>('style'))
-      .map(style=>`<style>${style.textContent||''}</style>`)
-      .join('')
-    const watermark=documentMarkup.isDraft?'<span class="letter-watermark">KONSEP / BELUM BERNOMOR</span>':''
-    const documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(documentMarkup.title)}</title>${stylesheetLinks}${inlineStylesheets}<style>
-      html,body{margin:0;padding:0;background:#fff}
-      .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:0;background:#fff;color:#000}
-      .letter-app .letter-paper{width:${paperWidth}mm;height:auto;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:none;transform:none;overflow:visible;color:#000}
-      .letter-document-header img[src=""]{display:none}
-      @page{size:${paperWidth}mm ${paperHeight}mm;margin:0}
-      @media print{
-        html,body{width:${paperWidth}mm;min-height:${paperHeight}mm;height:auto;background:#fff}
-        .letter-app{margin:0;background:#fff;color:#000}
-      }
-      </style></head><body><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
+    let documentHtml:string
+    try{
+      const stylesheetLinks=Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+        .filter(link=>new URL(link.href).origin===window.location.origin)
+        .map(link=>`<link rel="stylesheet" href="${escapeHtml(link.href)}">`)
+        .join('')
+      const inlineStylesheets=Array.from(document.querySelectorAll<HTMLStyleElement>('style'))
+        .map(style=>`<style>${style.textContent||''}</style>`)
+        .join('')
+      const watermark=documentMarkup.isDraft?'<span class="letter-watermark">KONSEP / BELUM BERNOMOR</span>':''
+      documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><base href="${escapeHtml(window.location.origin)}/"><title>${escapeHtml(documentMarkup.title)}</title>${stylesheetLinks}${inlineStylesheets}<style>
+        html,body{margin:0;padding:0;background:#fff;color:#000}
+        .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:0;background:#fff;color:#000}
+        .letter-app .letter-paper{width:${paperWidth}mm;height:auto;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:none;transform:none;overflow:visible;color:#000}
+        .letter-document-header img[src=""]{display:none}
+        @page{size:${paperWidth}mm ${paperHeight}mm;margin:0}
+        @media print{
+          html,body{width:${paperWidth}mm;min-height:${paperHeight}mm;height:auto;background:#fff;color:#000}
+          .letter-app{margin:0;background:#fff;color:#000}
+        }
+        </style></head><body><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
+    }catch(error){
+      setPrinting(false)
+      notify(`Dokumen cetak gagal disiapkan: ${error instanceof Error?error.message:'Terjadi kesalahan yang tidak diketahui.'}`)
+      return
+    }
     const createPaper=()=>{
       const paper=document.createElement('div')
       paper.className=`letter-paper letter-paper-preview${documentMarkup.paperSize==='F4'?' paper-f4':''}`
@@ -912,6 +935,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     let iframe:HTMLIFrameElement|null=null
     let iframeCleanupTimer=0
     let fallbackCleanupTimer=0
+    let printingFinished=false
+    const finishPrinting=()=>{
+      if(printingFinished)return
+      printingFinished=true
+      setPrinting(false)
+    }
     const removeIframe=()=>{
       if(iframeCleanupTimer)window.clearTimeout(iframeCleanupTimer)
       iframe?.remove()
@@ -931,6 +960,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         pageStyle.remove()
         document.body.classList.remove('letter-fallback-print-active')
         if(fallbackCleanupTimer)window.clearTimeout(fallbackCleanupTimer)
+        finishPrinting()
       }
       window.addEventListener('afterprint',cleanup,{once:true})
       fallbackCleanupTimer=window.setTimeout(cleanup,60000)
@@ -953,22 +983,29 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       iframe.setAttribute('title','Cetak surat')
       iframe.setAttribute('aria-hidden','true')
       Object.assign(iframe.style,{
-        position:'fixed',right:'0',bottom:'0',width:'0',height:'0',
-        border:'0',visibility:'hidden',
+        position:'fixed',left:'-10000px',top:'0',width:`${paperWidth}mm`,height:`${paperHeight}mm`,
+        border:'0',opacity:'0',pointerEvents:'none',
       })
+      const iframeLoaded=new Promise<void>((resolve,reject)=>{
+        const timer=window.setTimeout(()=>reject(new Error('Dokumen iframe cetak gagal dimuat dalam waktu yang ditentukan.')),15000)
+        iframe!.onload=()=>{window.clearTimeout(timer);resolve()}
+        iframe!.onerror=()=>{window.clearTimeout(timer);reject(new Error('Dokumen iframe cetak gagal dimuat.'))}
+      })
+      iframe.srcdoc=documentHtml
       document.body.appendChild(iframe)
+      await iframeLoaded
       const iframeDoc=iframe.contentDocument
       const iframeWindow=iframe.contentWindow
       if(!iframeDoc||!iframeWindow)throw new Error('Browser tidak menyediakan dokumen cetak tersembunyi.')
-      iframeDoc.open()
-      iframeDoc.write(documentHtml)
-      iframeDoc.close()
       await waitForLetterAssets(iframeDoc)
+      if(!iframeDoc.body.innerText.trim())throw new Error('Isi surat pada dokumen cetak kosong; proses cetak dibatalkan.')
+      await new Promise<void>(resolve=>iframeWindow.requestAnimationFrame(()=>iframeWindow.requestAnimationFrame(()=>resolve())))
+      await new Promise<void>(resolve=>window.setTimeout(resolve,150))
 
       let beforePrintFired=false
       iframeWindow.addEventListener('beforeprint',()=>{beforePrintFired=true},{once:true})
-      iframeWindow.addEventListener('afterprint',removeIframe,{once:true})
-      iframeCleanupTimer=window.setTimeout(removeIframe,60000)
+      iframeWindow.addEventListener('afterprint',()=>{removeIframe();finishPrinting()},{once:true})
+      iframeCleanupTimer=window.setTimeout(()=>{removeIframe();finishPrinting()},60000)
       iframeWindow.focus()
       iframeWindow.print()
       await new Promise<void>(resolve=>window.setTimeout(resolve,150))
@@ -982,13 +1019,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         try{
           await printFallback()
         }catch(fallbackError){
+          finishPrinting()
           notify(`Gagal membuka dialog cetak: ${fallbackError instanceof Error?fallbackError.message:printError instanceof Error?printError.message:'Browser tidak mengizinkan pencetakan.'}`)
         }
       }else{
+        finishPrinting()
         notify(`Gagal membuka dialog cetak: ${printError instanceof Error?printError.message:'Browser tidak mengizinkan pencetakan.'}`)
       }
-    }finally{
-      setPrinting(false)
     }
   }
   const handlePrintLetter=()=>{
