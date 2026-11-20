@@ -473,6 +473,7 @@ function refreshSupabaseSession() {
 export async function getValidSupabaseSession() {
   if (!sessionPromise) {
     sessionPromise = (async () => {
+      let sessionCandidate: Session | null = null;
       let timeoutId = 0;
       const sessionTimeout = new Promise<never>((_, reject) => {
         timeoutId = window.setTimeout(
@@ -488,6 +489,7 @@ export async function getValidSupabaseSession() {
         ]);
         if (error) throw error;
 
+        sessionCandidate = data.session;
         cachedSession = data.session;
         if (!data.session) return null;
 
@@ -498,14 +500,25 @@ export async function getValidSupabaseSession() {
         }
 
         if (Date.now() < sessionRetryAfter) {
+          if (expiresAt > nowSeconds) return data.session;
           throw sessionRateLimitError instanceof Error
             ? sessionRateLimitError
             : new Error("Supabase membatasi pembaruan sesi sementara. Coba lagi setelah jeda.");
         }
 
-        return await refreshSupabaseSession();
+        try {
+          return await refreshSupabaseSession();
+        } catch (error) {
+          if (expiresAt > Math.floor(Date.now() / 1000)) return data.session;
+          throw error;
+        }
       } catch (error) {
         rememberSessionRateLimit(error);
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const fallbackSession = [sessionCandidate, cachedSession].find(
+          (session) => session && (session.expires_at ?? 0) > nowSeconds,
+        );
+        if (fallbackSession) return fallbackSession;
         throw error;
       } finally {
         window.clearTimeout(timeoutId);
