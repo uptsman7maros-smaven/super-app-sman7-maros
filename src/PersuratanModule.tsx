@@ -40,6 +40,7 @@ type LetterTemplate = {
   source_file_path?: string | null
   page_settings?: { size?: PaperSize; margin_mm?: number; logo_position?: LogoPosition }
   requires_principal_approval?: boolean
+  requires_number?: boolean
   is_active?: boolean
   category?: { name: string; code?: string } | null
   fields_schema: TemplateField[]
@@ -57,15 +58,27 @@ type LetterRequest = {
   status: LetterStatus
   admin_note?: string | null
   created_at: string
+  updated_at?: string | null
+  approved_at?: string | null
+  issued_at?: string | null
+  downloaded_at?: string | null
   letter_templates?: {
     name?: string
     category_id?: string | null
     requires_principal_approval?: boolean
+    requires_number?: boolean
     html_content?: string
     fields_schema?: TemplateField[]
     page_settings?: LetterTemplate['page_settings']
   } | null
-  letter_issued?: {
+  letter_issued?: ({
+    letter_number: string
+    issue_date: string
+    signer_name: string | null
+    signer_position: string | null
+    signer_nip: string | null
+    html_snapshot?: string | null
+  } | null)[] | {
     letter_number: string
     issue_date: string
     signer_name: string | null
@@ -73,6 +86,7 @@ type LetterRequest = {
     signer_nip: string | null
     html_snapshot?: string | null
   } | null
+  letter_approvals?: { approver_role: string; decision: string }[] | null
 }
 type IssueForm = {
   letter_number: string
@@ -92,7 +106,7 @@ type IncomingLetter = {
 }
 type LetterCategory = { id: string; name: string; code: string }
 type LetterSignatory = { full_name: string; nip: string | null; employment_status: string | null }
-type LetterNotification = { id: string; title: string; body: string; created_at: string; is_read: boolean }
+type LetterNotification = { id: string; title: string; body: string; created_at: string; is_read: boolean; letter_request_id?: string | null }
 type CurrentUser = { id?: string; username?: string; role?: string; full_name?: string; nip_or_nisn?: string; jabatan?: string | null; class_name?: string | null }
 type LetterModal = null | { type: 'template' | 'incoming' | 'notifications' | 'review' | 'issue' | 'preview' }
 type NavItem = { label: string; icon: LucideIcon; key: Page }
@@ -110,7 +124,9 @@ const TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}/g
 const USER_TOKEN_NAMES = new Set(['nama', 'nip', 'jabatan'])
 const OFFICE_TOKEN_NAMES = new Set(['nomor_surat', 'tanggal_terbit', 'penandatangan', 'nip_penandatangan'])
 const SCHOOL_PROFILE_TOKEN_NAMES = new Set(['nama_kepala_sekolah', 'nip_kepala_sekolah'])
+const BURSAR_TOKEN_NAMES = new Set(['nama_bendahara', 'nip_bendahara'])
 const TU_COMPLETABLE_TOKEN_NAMES = new Set(['hari_tanggal', 'tanggal_surat', 'tempat'])
+const GLOBAL_REQUEST_ROLES = new Set<LetterRole>(['administrator', 'operator', 'kepala_tu', 'staf_tu', 'kepala_sekolah'])
 const ALLOWED_TEMPLATE_TAGS = new Set([
   'a', 'b', 'blockquote', 'br', 'caption', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'hr', 'i', 'img', 'li', 'ol', 'p', 's', 'span', 'strong', 'sub', 'sup', 'table', 'tbody',
@@ -168,6 +184,57 @@ function schoolProfileTokenValue(name: string, settings: SchoolSettings | null) 
     case 'nip_kepala_sekolah': return settings?.principal_nip?.trim() ?? ''
     default: return ''
   }
+}
+
+function findPrincipal(signatories: LetterSignatory[]) {
+  return signatories.find(item => /kepala\s*sekolah/i.test(item.employment_status || ''))
+}
+
+function findBursar(signatories: LetterSignatory[]) {
+  return signatories
+    .filter(item => /bendahara/i.test(item.employment_status || ''))
+    .sort((first, second) => {
+      const rank = (status: string | null) => /bendahara\s+pengeluaran/i.test(status || '') ? 0 : 1
+      return rank(first.employment_status) - rank(second.employment_status)
+    })[0]
+}
+
+function schoolOfficerTokenValue(name: string, settings: SchoolSettings | null, signatories: LetterSignatory[]) {
+  const principal = findPrincipal(signatories)
+  switch (name.toLocaleLowerCase('id-ID')) {
+    case 'nama_kepala_sekolah': return principal?.full_name?.trim() || schoolProfileTokenValue(name, settings)
+    case 'nip_kepala_sekolah': return principal?.nip?.trim() || schoolProfileTokenValue(name, settings)
+    case 'nama_bendahara': return findBursar(signatories)?.full_name?.trim() || ''
+    case 'nip_bendahara': return findBursar(signatories)?.nip?.trim() || ''
+    default: return ''
+  }
+}
+
+function isFinalNoNumberApproval(request: LetterRequest) {
+  if (request.status !== 'approved' || request.letter_templates?.requires_number !== false) return false
+  return !request.letter_templates.requires_principal_approval
+    || Boolean(request.letter_approvals?.some(approval => approval.approver_role === 'kepala_sekolah' && approval.decision === 'approved'))
+}
+
+function isRequestExpiryEligible(request: LetterRequest) {
+  return request.status === 'issued' || isFinalNoNumberApproval(request)
+}
+
+function requestExpiryAt(request: LetterRequest) {
+  if (!isRequestExpiryEligible(request)) return null
+  const start = request.issued_at || request.approved_at || request.updated_at || request.created_at
+  const timestamp = Date.parse(start)
+  return Number.isFinite(timestamp) ? timestamp + 48 * 60 * 60 * 1000 : null
+}
+
+function formatRemainingTime(milliseconds: number) {
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000))
+  const days = Math.floor(totalMinutes / (24 * 60))
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
+  const minutes = totalMinutes % 60
+  if (days) return `${days} hari ${hours} jam ${minutes} menit`
+  if (hours) return `${hours} jam ${minutes} menit`
+  return `${minutes} menit`
 }
 
 function sanitizeTemplateHtml(value: string): string {
@@ -346,19 +413,25 @@ function applyLetterPrintPageBreaks(root:ParentNode){
   })
 }
 
-function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null) {
+function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null, signatories:LetterSignatory[]) {
   const issued = Array.isArray(request.letter_issued) ? request.letter_issued[0] : request.letter_issued
   const savedPrincipalName = request.form_data?.nama_kepala_sekolah
   const savedPrincipalNip = request.form_data?.nip_kepala_sekolah
+  const savedBursarName = request.form_data?.nama_bendahara
+  const savedBursarNip = request.form_data?.nip_bendahara
   return {
     ...(request.form_data ?? {}),
     nama: request.requester_name,
     NIP: request.requester_nip ?? '',
     jabatan: request.requester_position ?? '',
     nama_kepala_sekolah: typeof savedPrincipalName === 'string' && savedPrincipalName.trim()
-      ? savedPrincipalName : schoolProfileTokenValue('nama_kepala_sekolah', schoolSettings),
+      ? savedPrincipalName : schoolOfficerTokenValue('nama_kepala_sekolah', schoolSettings, signatories),
     nip_kepala_sekolah: typeof savedPrincipalNip === 'string' && savedPrincipalNip.trim()
-      ? savedPrincipalNip : schoolProfileTokenValue('nip_kepala_sekolah', schoolSettings),
+      ? savedPrincipalNip : schoolOfficerTokenValue('nip_kepala_sekolah', schoolSettings, signatories),
+    nama_bendahara: schoolOfficerTokenValue('nama_bendahara', schoolSettings, signatories)
+      || (typeof savedBursarName === 'string' ? savedBursarName : ''),
+    nip_bendahara: schoolOfficerTokenValue('nip_bendahara', schoolSettings, signatories)
+      || (typeof savedBursarNip === 'string' ? savedBursarNip : ''),
     nomor_surat: issued?.letter_number,
     tanggal_terbit: issued?.issue_date,
     penandatangan: issued?.signer_name,
@@ -436,6 +509,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [letterheadSlot,setLetterheadSlot]=useState<LetterheadSlot>('1')
   const [logoPosition,setLogoPosition]=useState<LogoPosition>('top')
   const [loading,setLoading]=useState(true), [sessionReady,setSessionReady]=useState(false), [busy,setBusy]=useState(false), [error,setError]=useState('')
+  const [expiryClock,setExpiryClock]=useState(Date.now())
   const [pdfBusy,setPdfBusy]=useState(false), [printing,setPrinting]=useState(false)
   const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([])
   const [categories,setCategories]=useState<LetterCategory[]>([])
@@ -465,6 +539,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [myPosition,setMyPosition]=useState('')
   const loadRequestRef=useRef<{userId:string|null;generation:number;promise:Promise<void>|null}>({userId:null,generation:0,promise:null})
   const loadedUserIdRef=useRef<string|null>(null)
+  const cleanupAttemptedUserRef=useRef<string|null>(null)
   const isAdmin=role==='administrator'
   const canManageTemplates=isAdmin||role==='operator'
   const activeTemplates=templates.filter(template=>template.is_active!==false)
@@ -548,9 +623,25 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     loadRequestRef.current={userId:uid,generation,promise:null}
     if(!silent){setLoading(true);setError('')}
     const request=(async()=>{
-      const [{data:roleData,error:roleErr},{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr}] = await Promise.all([
-        supabase.rpc('letter_current_role'),
-        supabase.from('letter_requests').select('*, letter_templates(name, category_id, requires_principal_approval, html_content, fields_schema, page_settings), letter_issued(letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot)').order('created_at',{ascending:false}),
+      const cleanupKey=`persuratan:cleanup-expired:${uid}`
+      let cleanupAlreadyAttempted=cleanupAttemptedUserRef.current===uid
+      try{
+        cleanupAlreadyAttempted=cleanupAlreadyAttempted||sessionStorage.getItem(cleanupKey)==='1'
+      }catch{}
+      if(!cleanupAlreadyAttempted){
+        cleanupAttemptedUserRef.current=uid
+        try{sessionStorage.setItem(cleanupKey,'1')}catch{}
+        const {error:cleanupError}=await supabase.rpc('cleanup_expired_letter_requests')
+        if(cleanupError)console.warn('Pembersihan pengajuan surat kadaluarsa tidak tersedia:',cleanupError.message)
+      }
+      const {data:roleData,error:roleErr}=await supabase.rpc('letter_current_role')
+      const requestRole=!roleErr&&isLetterRole(roleData)?roleData:null
+      let requestsQuery=supabase.from('letter_requests')
+        .select('*, letter_templates(name, category_id, requires_principal_approval, requires_number, html_content, fields_schema, page_settings), letter_issued(letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot), letter_approvals(approver_role,decision)')
+        .order('created_at',{ascending:false})
+      if(!requestRole||!GLOBAL_REQUEST_ROLES.has(requestRole))requestsQuery=requestsQuery.eq('requester_id',uid)
+      const [{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr}] = await Promise.all([
+        requestsQuery,
         supabase.from('letter_templates').select('*, letter_categories(name,code)').order('name'),
         supabase.from('letter_incoming').select('*').order('received_date',{ascending:false}),
         supabase.from('letter_notifications').select('*').order('created_at',{ascending:false}).limit(30),
@@ -630,6 +721,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     }
   },[sessionUserId,loadAll])
   useEffect(()=>{
+    const intervalId=window.setInterval(()=>setExpiryClock(Date.now()),60_000)
+    return ()=>window.clearInterval(intervalId)
+  },[])
+  useEffect(()=>{
     if(!sessionUserId)return
     const channel=supabase.channel(`letter-notifications-${sessionUserId}`)
       .on('postgres_changes',{
@@ -640,7 +735,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       },payload=>{
         const row=payload.new as Partial<LetterNotification>
         if(typeof row.id!=='string'||typeof row.title!=='string'||typeof row.body!=='string'||typeof row.created_at!=='string'||typeof row.is_read!=='boolean')return
-        const notification:LetterNotification={id:row.id,title:row.title,body:row.body,created_at:row.created_at,is_read:row.is_read}
+        const notification:LetterNotification={
+          id:row.id,title:row.title,body:row.body,created_at:row.created_at,is_read:row.is_read,
+          letter_request_id:typeof row.letter_request_id==='string'?row.letter_request_id:null,
+        }
         setNotifications(previous=>[notification,...previous.filter(item=>item.id!==notification.id)].slice(0,30))
       })
       .subscribe()
@@ -744,7 +842,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   }
   function openIssue(request:LetterRequest){
     const year=new Date().getFullYear()
-    const defaultSigner=signatories.find(item=>/kepala sekolah/i.test(item.employment_status||''))??signatories[0]
+    const defaultSigner=findPrincipal(signatories)
     const requestTemplate=templates.find(template=>template.id===request.template_id)
     const ktuFields=(requestTemplate?.fields_schema||request.letter_templates?.fields_schema||[])
       .filter(field=>TU_COMPLETABLE_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID')))
@@ -756,9 +854,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     setIssueForm({
       letter_number:`421.03/001/UPT.SMA.07/MRS/DISDIK/${year}`,
       issue_date:new Date().toISOString().slice(0,10),
-      signer_name:defaultSigner?.full_name||'',
+      signer_name:defaultSigner?.full_name||schoolProfileTokenValue('nama_kepala_sekolah',schoolSettings),
       signer_position:defaultSigner?.employment_status||'Kepala Sekolah',
-      signer_nip:defaultSigner?.nip||'',
+      signer_nip:defaultSigner?.nip||schoolProfileTokenValue('nip_kepala_sekolah',schoolSettings),
       ktu_fields:ktuValues,
     })
     setPreviewRequest(request)
@@ -800,6 +898,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       html_content:'<p>Nomor: {nomor_surat}<br>Lampiran: {lampiran}<br>Hal: {perihal}</p><p>Kepada Yth.<br>{tujuan}</p><p>Dengan hormat,</p><p>{isi_surat}</p>',
       paper_size:'A4',
       requires_principal_approval:'false',
+      requires_number:'true',
       is_active:'true',
     })
     setTemplateFields(detectTemplateFields('<p>{nomor_surat} {lampiran} {perihal} {tujuan} {isi_surat}</p>'))
@@ -818,6 +917,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       html_content:template.html_content||'',
       paper_size:normalizePaperSize(template.page_settings?.size),
       requires_principal_approval:String(Boolean(template.requires_principal_approval)),
+      requires_number:String(template.requires_number!==false),
       is_active:String(template.is_active!==false),
     })
     setModal({type:'template'})
@@ -853,6 +953,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       page_settings:{size:normalizePaperSize(form.paper_size),margin_mm:22,logo_position:logoPosition},
       fields_schema:fields,
       requires_principal_approval:form.requires_principal_approval==='true',
+      requires_number:form.requires_number!=='false',
       is_active:form.is_active!=='false',
       source_file_path:templateSourceFilePath||null,
       updated_by:session.user.id,
@@ -933,6 +1034,15 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(error)notify(error.message);else{notify('Surat masuk berhasil dicatat');setModal(null);setForm({});await loadAll(true)}
     setBusy(false)
   }
+  async function markRequestDownloaded(request:LetterRequest):Promise<boolean>{
+    if(!session||request.requester_id!==session.user.id||!isRequestExpiryEligible(request)||request.downloaded_at)return true
+    const {data,error}=await supabase.rpc('letter_mark_request_downloaded',{p_request_id:request.id})
+    if(error){notify(`Status unduhan gagal dicatat: ${error.message}`);return false}
+    const downloadedAt=typeof data==='string'?data:new Date().toISOString()
+    setRequests(previous=>previous.map(item=>item.id===request.id?{...item,downloaded_at:downloadedAt}:item))
+    setPreviewRequest(previous=>previous?.id===request.id?{...previous,downloaded_at:downloadedAt}:previous)
+    return true
+  }
   const getRequestTemplate=(request:LetterRequest):LetterDocumentMarkup|null=>{
     const activeTemplate=templates.find(template=>template.id===request.template_id)
     const issued=Array.isArray(request.letter_issued)?request.letter_issued[0]:request.letter_issued
@@ -940,10 +1050,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const fields=activeTemplate?.fields_schema||request.letter_templates?.fields_schema||[]
     if(!html)return null
     return {
-      html:renderTemplateContent(html,requestDocumentValues(request,schoolSettings),fields),
+      html:renderTemplateContent(html,requestDocumentValues(request,schoolSettings,signatories),fields),
       header:makeLetterheadHtml(schoolSettings,letterheadSlot,activeTemplate?.page_settings?.logo_position||request.letter_templates?.page_settings?.logo_position||'top'),
       paperSize:normalizePaperSize(activeTemplate?.page_settings?.size||request.letter_templates?.page_settings?.size),
-      isDraft:request.status!=='issued',
+      isDraft:!isRequestExpiryEligible(request),
       title:request.subject,
     }
   }
@@ -954,6 +1064,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(!documentMarkup){notify('Konten template surat tidak tersedia untuk pratinjau.');return}
     setPrinting(true)
     setPrintTarget(documentMarkup)
+    void markRequestDownloaded(request).then(downloadTracked=>{
+      if(!downloadTracked)notify('Surat akan dicetak, tetapi status unduhan gagal dicatat.')
+    })
   }
   useEffect(()=>{
     if(!printTarget)return
@@ -1094,7 +1207,8 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         .replace(/_+/g,'_')
         .replace(/^[_.]+|[_.]+$/g,'')||'Surat'
       pdf.save(`${fileBase}.pdf`)
-      notify('PDF surat berhasil diunduh.')
+      const downloadTracked=await markRequestDownloaded(request)
+      notify(downloadTracked?'PDF surat berhasil diunduh.':'PDF berhasil diunduh, tetapi status unduhan gagal dicatat.')
     }catch(pdfError){
       notify(`PDF gagal dibuat: ${pdfError instanceof Error?pdfError.message:'Terjadi kesalahan yang tidak diketahui.'}`)
     }finally{
@@ -1114,8 +1228,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       nama:myName,
       NIP:myNip,
       jabatan:myPosition,
-      nama_kepala_sekolah:schoolProfileTokenValue('nama_kepala_sekolah',schoolSettings),
-      nip_kepala_sekolah:schoolProfileTokenValue('nip_kepala_sekolah',schoolSettings),
+      nama_kepala_sekolah:typeof request.form_data?.nama_kepala_sekolah==='string'&&request.form_data.nama_kepala_sekolah.trim()
+        ?request.form_data.nama_kepala_sekolah:schoolOfficerTokenValue('nama_kepala_sekolah',schoolSettings,signatories),
+      nip_kepala_sekolah:typeof request.form_data?.nip_kepala_sekolah==='string'&&request.form_data.nip_kepala_sekolah.trim()
+        ?request.form_data.nip_kepala_sekolah:schoolOfficerTokenValue('nip_kepala_sekolah',schoolSettings,signatories),
+      nama_bendahara:schoolOfficerTokenValue('nama_bendahara',schoolSettings,signatories)||String(request.form_data?.nama_bendahara||''),
+      nip_bendahara:schoolOfficerTokenValue('nip_bendahara',schoolSettings,signatories)||String(request.form_data?.nip_bendahara||''),
     })
     setPersonFields({})
     setPage('create')
@@ -1124,6 +1242,8 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const q=search.toLowerCase()
     return !q||[r.request_code,r.subject,r.requester_name,r.status].some(v=>String(v||'').toLowerCase().includes(q))
   }),[requests,search])
+  const ownRequests=useMemo(()=>requests.filter(request=>request.requester_id===session?.user.id),[requests,session?.user.id])
+  const ownVisibleRequests=useMemo(()=>visibleRequests.filter(request=>request.requester_id===session?.user.id),[session?.user.id,visibleRequests])
   const selectedTemplateRecord=templates.find(template=>template.id===selectedTemplate)
   const issueTemplate=issueRequest?templates.find(template=>template.id===issueRequest.template_id):undefined
   const issueEditableFields=(issueTemplate?.fields_schema||issueRequest?.letter_templates?.fields_schema||[])
@@ -1133,8 +1253,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     nama:myName,
     NIP:myNip,
     jabatan:myPosition,
-    nama_kepala_sekolah:schoolProfileTokenValue('nama_kepala_sekolah',schoolSettings),
-    nip_kepala_sekolah:schoolProfileTokenValue('nip_kepala_sekolah',schoolSettings),
+    nama_kepala_sekolah:schoolOfficerTokenValue('nama_kepala_sekolah',schoolSettings,signatories)||requestData.nama_kepala_sekolah||'',
+    nip_kepala_sekolah:schoolOfficerTokenValue('nip_kepala_sekolah',schoolSettings,signatories)||requestData.nip_kepala_sekolah||'',
+    nama_bendahara:schoolOfficerTokenValue('nama_bendahara',schoolSettings,signatories)||requestData.nama_bendahara||'',
+    nip_bendahara:schoolOfficerTokenValue('nip_bendahara',schoolSettings,signatories)||requestData.nip_bendahara||'',
   }
   const livePreviewHtml=selectedTemplateRecord
     ?renderTemplateContent(selectedTemplateRecord.html_content||'',liveFormValues,selectedTemplateRecord.fields_schema)
@@ -1159,8 +1281,18 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   }
   const renderTemplateField=(field:TemplateField)=>{
     const normalized=field.name.toLocaleLowerCase('id-ID')
+    if(BURSAR_TOKEN_NAMES.has(normalized)){
+      const bursar=findBursar(signatories)
+      const officerValue=schoolOfficerTokenValue(normalized,schoolSettings,signatories)
+      const value=officerValue||requestData[field.name]||''
+      const helperText=officerValue
+        ?'Diambil otomatis dari jabatan Bendahara pada Data Induk.'
+        :bursar?'Data pegawai Bendahara ditemukan, tetapi nilai ini belum diisi di Data Induk. Lengkapi manual atau perbarui Data Induk.'
+          :'Bendahara belum terdaftar di Data Induk. Masukkan nilainya di sini atau lengkapi Data Induk.'
+      return <label className="request-field-automatic" key={field.name}>{field.label}<input required={!!field.required&&!officerValue} value={value} readOnly={!!officerValue} aria-readonly={!!officerValue} onChange={event=>setRequestData(previous=>({...previous,[field.name]:event.target.value}))} placeholder="Lengkapi nama dan NIP Bendahara"/><small>{helperText}</small></label>
+    }
     if(field.type==='auto_school'||SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)){
-      const value=schoolProfileTokenValue(normalized,schoolSettings)
+      const value=schoolOfficerTokenValue(normalized,schoolSettings,signatories)||requestData[field.name]||''
       return <label className="request-field-automatic" key={field.name}>{field.label}<input value={value} readOnly aria-readonly="true" placeholder="Lengkapi di Data Induk → Sekolah & Sinkron"/><small>Diambil otomatis dari data Kepala Sekolah pada Data Induk.</small></label>
     }
     if(field.type==='auto_user'||USER_TOKEN_NAMES.has(normalized)){
@@ -1203,9 +1335,11 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     /></label>
   }
   const stats=[
-    ['Total Pengajuan',requests.length,Files],['Surat Diproses',requests.filter(r=>isLetterInProgress(r.status)).length,ClipboardCheck],
-    ['Diterbitkan',requests.filter(r=>r.status==='issued').length,Send],['Perlu Revisi',requests.filter(r=>r.status==='revision').length,RefreshCw]
+    ['Total Pengajuan',ownRequests.length,Files],['Surat Diproses',ownRequests.filter(r=>isLetterInProgress(r.status)&&!isFinalNoNumberApproval(r)).length,ClipboardCheck],
+    ['Diterbitkan',ownRequests.filter(r=>r.status==='issued').length,Send],['Perlu Revisi',ownRequests.filter(r=>r.status==='revision').length,RefreshCw]
   ] as const
+  const pendingDownloadCount=ownRequests.filter(request=>isRequestExpiryEligible(request)&&!request.downloaded_at).length
+  const roleScopedRequests=role==='pemohon'||role==='guru_staf'?ownVisibleRequests:visibleRequests
   if(!session) return <div className="letter-app"><div className="sso-state"><div className="sso-card"><div className="brand-mark">7</div><span className="eyebrow">SUPER APP · SMAN 7 MAROS</span><h1>{sessionReady?'Sesi masuk tidak ditemukan':'Memverifikasi sesi masuk'}</h1><p>{sessionReady?error||'Persuratan menggunakan sesi login dari Super App. Kembali ke halaman utama untuk masuk.':'Memeriksa sesi Super App…'}</p>{sessionReady&&onBack&&<button className="primary" onClick={onBack}><ChevronLeft size={17}/> Kembali ke Super App</button>}</div></div></div>
   return <><div className="letter-app"><div className="app-shell">
     <header className="portal-header">
@@ -1231,7 +1365,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           </div>
         </div>:<>
         {error&&<div className="error" role="alert">{error}</div>}
-        {page==='dashboard'&&<><div className="welcome"><div><span className="eyebrow light">SUPER APP · {schoolSettings?.school_name||'SMAN 7 MAROS'}</span><h1>Persuratan Digital</h1><p>Pantau pengajuan, persetujuan, surat terbit, dan arsip administrasi sekolah dalam satu tempat.</p></div><div className="welcome-icon"><span className="welcome-art-icon"><Sparkles size={22}/></span><strong>Administrasi surat</strong><small>Terstruktur & terdokumentasi</small><span className="welcome-bars"><i/><i/><i/><i/><i/></span></div></div><div className="stat-grid">{stats.map(([label,value,Icon],i)=><div className="stat-card" style={{'--delay':`${i*70}ms`} as CSSProperties} key={label}><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={19}/></div></div><strong>{value}</strong><small>Data persuratan saat ini</small></div>)}</div><div className="panel"><div className="panel-head"><div><h3>Pengajuan terbaru</h3><p>Aktivitas surat yang baru masuk ke sistem</p></div><button className="text-btn" onClick={()=>setPage('requests')}>Lihat semua <ChevronRight size={16}/></button></div><RequestTable rows={requests.slice(0,5)} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role}/></div></>}
+        {page==='dashboard'&&<><div className="welcome"><div><span className="eyebrow light">SUPER APP · {schoolSettings?.school_name||'SMAN 7 MAROS'}</span><h1>Persuratan Digital</h1><p>Pantau pengajuan, persetujuan, surat terbit, dan arsip administrasi sekolah dalam satu tempat.</p></div><div className="welcome-icon"><span className="welcome-art-icon"><Sparkles size={22}/></span><strong>Administrasi surat</strong><small>Terstruktur & terdokumentasi</small><span className="welcome-bars"><i/><i/><i/><i/><i/></span></div></div><div className="stat-grid">{stats.map(([label,value,Icon],i)=><div className="stat-card" style={{'--delay':`${i*70}ms`} as CSSProperties} key={label}><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={19}/></div></div><strong>{value}</strong><small>Ajuan milik Anda</small></div>)}</div>{pendingDownloadCount>0&&<div className="letter-expiry-alert" role="status"><Bell size={18}/><span><b>Segera unduh surat Anda</b>{pendingDownloadCount===1?' Ada 1 surat selesai yang belum diunduh.':' Ada '+pendingDownloadCount+' surat selesai yang belum diunduh.'} Surat dihapus otomatis 48 jam setelah diterbitkan/disetujui final.</span></div>}<div className="panel"><div className="panel-head"><div><h3>Pengajuan terbaru</h3><p>Aktivitas surat yang Anda ajukan</p></div><button className="text-btn" onClick={()=>setPage('requests')}>Lihat semua <ChevronRight size={16}/></button></div><RequestTable rows={ownRequests.slice(0,5)} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role} now={expiryClock}/></div></>}
         {page==='create'&&role!=='pemohon'&&<div className="request-create-layout">
           <div className="panel form-panel">
             <div className="panel-head"><div><h3>{requestDraftId?'Perbarui pengajuan surat':'Buat pengajuan surat'}</h3><p>Pilih format dan lengkapi informasi yang dibutuhkan.</p></div><FilePlus2 className="panel-symbol"/></div>
@@ -1241,11 +1375,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
                   const nextTemplate=activeTemplates.find(template=>template.id===event.target.value)
                   setSelectedTemplate(event.target.value)
                   setRequestData(Object.fromEntries((nextTemplate?.fields_schema||[])
-                    .filter(field=>field.type==='auto_user'||USER_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID'))||SCHOOL_PROFILE_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID')))
+                    .filter(field=>{
+                      const normalized=field.name.toLocaleLowerCase('id-ID')
+                      return field.type==='auto_user'||USER_TOKEN_NAMES.has(normalized)||SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)||BURSAR_TOKEN_NAMES.has(normalized)
+                    })
                     .map(field=>{
                       const normalized=field.name.toLocaleLowerCase('id-ID')
-                      const value=SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)
-                        ? schoolProfileTokenValue(normalized,schoolSettings)
+                      const value=SCHOOL_PROFILE_TOKEN_NAMES.has(normalized)||BURSAR_TOKEN_NAMES.has(normalized)
+                        ? schoolOfficerTokenValue(normalized,schoolSettings,signatories)
                         : normalized==='nama'?myName:normalized==='nip'?myNip:myPosition
                       return [field.name,value]
                     })))
@@ -1282,10 +1419,15 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
             />:<div className="letter-preview-empty"><FileText size={28}/><strong>Pilih format surat</strong><span>Pratinjau dokumen akan muncul di sini.</span></div>}
           </aside>
         </div>}
-        {page==='requests'&&<DataPanel title="Daftar pengajuan surat" subtitle="Pantau status dan riwayat pengajuan surat." search={search} setSearch={setSearch} action={role!=='pemohon'?()=>setPage('create'):undefined} actionLabel="Ajukan surat"><RequestTable rows={visibleRequests} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role}/></DataPanel>}
-        {page==='approvals'&&<DataPanel title="Pemeriksaan dan persetujuan" subtitle="Tinjau pengajuan yang menunggu keputusan administratif." search={search} setSearch={setSearch}><RequestTable rows={visibleRequests.filter(r=>['submitted','resubmitted','in_review','approved'].includes(r.status)&&(role!=='kepala_sekolah'||(r.status==='approved'&&r.letter_templates?.requires_principal_approval)))} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPreview={openPreview} onPrint={printLetter} ownerId={session.user.id} role={role}/></DataPanel>}
-        {page==='issued'&&<DataPanel title="Surat terbit" subtitle="Dokumen yang telah memperoleh nomor surat." search={search} setSearch={setSearch}><RequestTable rows={visibleRequests.filter(r=>r.status==='issued')} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role}/></DataPanel>}
-        {page==='archive'&&<DataPanel title="Arsip digital" subtitle="Arsip surat terbit dan dokumen administrasi." search={search} setSearch={setSearch}><RequestTable rows={visibleRequests.filter(r=>['issued','archived'].includes(r.status))} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role}/></DataPanel>}
+        {page==='requests'&&<DataPanel title="Daftar pengajuan surat" subtitle="Pantau status dan riwayat pengajuan surat milik Anda." search={search} setSearch={setSearch} action={role!=='pemohon'?()=>setPage('create'):undefined} actionLabel="Ajukan surat"><RequestTable rows={ownVisibleRequests} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
+        {page==='approvals'&&<DataPanel title="Pemeriksaan dan persetujuan" subtitle="Tinjau pengajuan yang menunggu keputusan administratif." search={search} setSearch={setSearch}><RequestTable rows={visibleRequests.filter(request=>{
+          if(!['submitted','resubmitted','in_review','approved'].includes(request.status)||isFinalNoNumberApproval(request))return false
+          if(role!=='kepala_sekolah'||request.status!=='approved')return true
+          return Boolean(request.letter_templates?.requires_principal_approval)
+            &&!request.letter_approvals?.some(approval=>approval.approver_role==='kepala_sekolah'&&approval.decision==='approved')
+        })} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPreview={openPreview} onPrint={printLetter} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
+        {page==='issued'&&<DataPanel title="Surat terbit" subtitle="Dokumen yang telah memperoleh nomor atau disetujui tanpa nomor." search={search} setSearch={setSearch}><RequestTable rows={roleScopedRequests.filter(r=>r.status==='issued'||isFinalNoNumberApproval(r))} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
+        {page==='archive'&&<DataPanel title="Arsip digital" subtitle="Arsip surat terbit dan dokumen administrasi." search={search} setSearch={setSearch}><RequestTable rows={roleScopedRequests.filter(r=>['issued','archived'].includes(r.status)||isFinalNoNumberApproval(r))} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
         {page==='templates'&&<div className="panel"><div className="panel-head"><div><h3>{canManageTemplates?'Manajemen format surat':'Format surat tersedia'}</h3><p>{canManageTemplates?'Kelola, impor, dan atur template dinamis yang digunakan pada pengajuan.':'Format aktif yang dapat dipilih saat membuat pengajuan.'}</p></div>{canManageTemplates&&<button className="primary" onClick={openNewTemplate}><Upload size={17}/> Upload & Buat Format Surat</button>}</div><div className="template-grid">{(canManageTemplates?templates:activeTemplates).map(template=><div className={`template-card${template.is_active===false?' is-inactive':''}`} key={template.id}><div className="template-icon"><FileText/></div><h4>{template.name}</h4><p>{template.description||'Format surat sekolah'}</p><span className="soft-tag">{template.category?.name||'Umum'}</span>{canManageTemplates&&<div className="template-actions"><button type="button" className="secondary" onClick={()=>editTemplate(template)}><Pencil size={14}/> Edit</button><button type="button" className="secondary" onClick={()=>duplicateTemplate(template)}><Copy size={14}/> Duplikat</button>{template.is_active!==false?<button type="button" className="template-disable" onClick={()=>void deactivateTemplate(template)}><Trash2 size={14}/> Nonaktifkan</button>:<button type="button" className="secondary" onClick={()=>void activateTemplate(template)}><Check size={14}/> Aktifkan</button>}</div>}</div>)}</div>{!templates.length&&<div className="table-empty"><FileText size={25}/><b>Belum ada template di database</b><span>Administrator atau Operator dapat mengunggah format DOCX/PDF.</span></div>}</div>}
         {page==='incoming'&&<DataPanel title="Surat masuk" subtitle="Catat surat yang diterima sekolah." search={search} setSearch={setSearch} action={()=>{setForm({});setModal({type:'incoming'})}} actionLabel="Catat surat masuk"><div className="simple-list">{incoming.filter(x=>!search||`${x.external_number} ${x.sender} ${x.subject}`.toLowerCase().includes(search.toLowerCase())).map(x=><div className="simple-row" key={x.id}><div className="template-icon"><Inbox/></div><div className="grow"><b>{x.subject}</b><small>{x.external_number} · {x.sender} · {x.received_date}</small></div><span className="soft-tag">{x.follow_up_status}</span></div>)}</div></DataPanel>}
         {page==='outgoing'&&<div className="empty-state"><Mail size={36}/><h3>Surat keluar</h3><p>Surat yang diterbitkan melalui alur pengajuan otomatis tercatat pada Surat Terbit dan Arsip. Pencatatan surat keluar eksternal tersedia pada pengembangan berikutnya.</p></div>}
@@ -1301,6 +1443,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           <label>Deskripsi<input value={form.description||''} onChange={event=>setForm(previous=>({...previous,description:event.target.value}))}/></label>
           <label>Kategori<select value={form.category_id||''} onChange={event=>setForm(previous=>({...previous,category_id:event.target.value}))}><option value="">Umum</option>{categories.map(category=><option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
           <label className="template-approval-toggle"><input type="checkbox" checked={form.requires_principal_approval==='true'} onChange={event=>setForm(previous=>({...previous,requires_principal_approval:String(event.target.checked)}))}/> Memerlukan persetujuan Kepala Sekolah</label>
+          <label className="template-approval-toggle"><input type="checkbox" checked={form.requires_number!=='false'} onChange={event=>setForm(previous=>({...previous,requires_number:String(event.target.checked)}))}/> Memerlukan penerbitan nomor surat</label>
           <label className="template-approval-toggle"><input type="checkbox" checked={form.is_active!=='false'} onChange={event=>setForm(previous=>({...previous,is_active:String(event.target.checked)}))}/> Format aktif dan tersedia untuk pengajuan</label>
           <label className="template-file-upload"><Upload size={17}/><span>Unggah format DOCX / PDF</span><input type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" disabled={busy} onChange={event=>{void importTemplateFile(event.target.files?.[0]??null);event.target.value=''}}/></label>
           {templateSourceFilePath&&<small className="template-source-path">File sumber tersimpan: {templateSourceFilePath.split('/').pop()}</small>}
@@ -1332,7 +1475,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
               <label><span>Kop surat</span><select aria-label="Pilih kop surat untuk pratinjau" value={letterheadSlot} onChange={event=>setLetterheadSlot(event.target.value as LetterheadSlot)}><option value="1">Kop Surat 1</option><option value="2">Kop Surat 2</option><option value="3">Kop Surat 3</option></select></label>
               <label><span>Tampilan kop{letterheadSlot==='2'&&logoPosition!=='none'?' · Kop 2 tetap kiri-kanan':''}</span><select aria-label="Pilih tampilan kop surat" value={logoPosition} title={letterheadSlot==='2'?'Kop Surat 2 menggunakan susunan dua logo kiri-kanan.':''} onChange={event=>setLogoPosition(event.target.value as LogoPosition)}><option value="top" disabled={letterheadSlot==='2'}>Kop · logo di atas</option><option value="left" disabled={letterheadSlot==='2'}>Kop · logo di kiri</option><option value="none">Tanpa kop surat</option></select></label>
             </div>
-            <FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,logoPosition)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{},templateFields)}</article>`} className="template-studio-preview"/>
+            <FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,logoPosition)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{
+              nama_kepala_sekolah:schoolOfficerTokenValue('nama_kepala_sekolah',schoolSettings,signatories),
+              nip_kepala_sekolah:schoolOfficerTokenValue('nip_kepala_sekolah',schoolSettings,signatories),
+              nama_bendahara:schoolOfficerTokenValue('nama_bendahara',schoolSettings,signatories),
+              nip_bendahara:schoolOfficerTokenValue('nip_bendahara',schoolSettings,signatories),
+            },templateFields)}</article>`} className="template-studio-preview"/>
           </div>
         </div>
         <div className="form-actions"><button type="button" className="secondary" onClick={()=>setModal(null)}>Batal</button><button type="submit" className="primary" disabled={busy||!canManageTemplates}>{busy?'Menyimpan...':'Simpan Format Surat'}</button></div>
@@ -1375,7 +1523,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     {modal?.type==='preview'&&previewRequest&&<Modal title="Pratinjau Surat" className="letter-preview-modal" close={()=>setModal(null)}>
       {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" disabled={printing||pdfBusy} onClick={handlePrintLetter}><Printer size={16}/>{printing?'Menyiapkan cetak...':'Cetak'}</button><button type="button" className="secondary" disabled={pdfBusy||printing} onClick={()=>void downloadLetterPdf(previewRequest)}><Download size={16}/>{pdfBusy?'Menyiapkan PDF...':'Simpan / Unduh PDF'}</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
     </Modal>}
-    {modal?.type==='notifications'&&<Modal title="Notifikasi" close={()=>setModal(null)}><div className="notification-list">{notifications.length?notifications.map(notification=><button type="button" className={`notification-row${notification.is_read?' is-read':''}`} key={notification.id} onClick={()=>void markNotificationRead(notification)}><Bell size={17}/><span><b>{notification.title}</b><p>{notification.body}</p><small>{new Date(notification.created_at).toLocaleString('id-ID')}</small></span></button>):<p className="muted">Belum ada notifikasi.</p>}</div></Modal>}
+    {modal?.type==='notifications'&&<Modal title="Notifikasi" close={()=>setModal(null)}><div className="notification-list">{notifications.length?notifications.map(notification=>{
+      const relatedRequest=requests.find(request=>request.id===notification.letter_request_id)
+      return <button type="button" className={`notification-row${notification.is_read?' is-read':''}`} key={notification.id} onClick={()=>void markNotificationRead(notification)}><Bell size={17}/><span><b>{notification.title}</b><p>{notification.body}</p>{relatedRequest?.requester_id===session.user.id&&<ExpiryReminder request={relatedRequest} now={expiryClock}/>}<small>{new Date(notification.created_at).toLocaleString('id-ID')}</small></span></button>
+    }):<p className="muted">Belum ada notifikasi.</p>}</div></Modal>}
   </div></div>
   {printTarget&&createPortal(<div id="letter-print-portal" ref={printPortalRef} data-paper-size={printTarget.paperSize}>
     <style>{`@page{size:${printTarget.paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:0}`}</style>
@@ -1391,7 +1542,7 @@ function DataPanel({title,subtitle,search,setSearch,action,actionLabel,children}
   title:string; subtitle:string; search:string; setSearch:(value:string)=>void;
   action?:()=>void; actionLabel?:string; children:ReactNode;
 }){return <div className="panel"><div className="panel-head"><div><h3>{title}</h3><p>{subtitle}</p></div>{action&&<button className="primary" onClick={action}><Plus size={17}/>{actionLabel}</button>}</div><div className="toolbar"><div className="search-box"><Search size={17}/><input placeholder="Cari nomor, perihal, atau pemohon..." value={search} onChange={e=>setSearch(e.target.value)}/></div></div>{children}</div>}
-function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,ownerId,role}: {
+function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,ownerId,role,now}: {
   rows:LetterRequest[];
   onSubmit:(id:string)=>void;
   onReview:(request:LetterRequest)=>void;
@@ -1401,22 +1552,36 @@ function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,o
   onEdit?:(request:LetterRequest)=>void;
   ownerId:string;
   role:LetterRole|null;
+  now:number;
 }){
  if(!rows.length)return <div className="table-empty"><Files size={25}/><b>Belum ada data pengajuan</b><span>Data akan muncul setelah pengguna membuat pengajuan surat.</span></div>
  return <div className="table-wrap"><table><thead><tr><th>Pengajuan</th><th>Pemohon</th><th>Tanggal</th><th>Status</th><th>Aksi</th></tr></thead><tbody>{rows.map(request=>{
    const isOwner=request.requester_id===ownerId
+   const principalApprovalComplete=!request.letter_templates?.requires_principal_approval
+     ||Boolean(request.letter_approvals?.some(approval=>approval.approver_role==='kepala_sekolah'&&approval.decision==='approved'))
    const canReview=(['submitted','resubmitted','in_review'].includes(request.status)&&['kepala_tu','administrator'].includes(role??''))
      ||(role==='kepala_sekolah'&&request.status==='approved'&&request.letter_templates?.requires_principal_approval)
-   const canIssue=request.status==='approved'&&['kepala_tu','administrator'].includes(role??'')
-   return <tr key={request.id}><td><b>{request.subject}</b><small>{request.request_code}</small></td><td>{request.requester_name}<small>{request.requester_position||'—'}</small></td><td>{new Date(request.created_at).toLocaleDateString('id-ID')}</td><td><span className={`status status-${request.status}`}>{statusLabels[request.status]}</span>{request.admin_note&&<small className="request-admin-note">{request.admin_note}</small>}</td><td><div className="row-actions">
+   const canIssue=request.status==='approved'&&request.letter_templates?.requires_number!==false&&principalApprovalComplete&&['kepala_tu','administrator'].includes(role??'')
+   return <tr key={request.id}><td><b>{request.subject}</b><small>{request.request_code}</small></td><td>{request.requester_name}<small>{request.requester_position||'—'}</small></td><td>{new Date(request.created_at).toLocaleDateString('id-ID')}</td><td><span className={`status status-${request.status}`}>{statusLabels[request.status]}</span>{request.admin_note&&<small className="request-admin-note">{request.admin_note}</small>}{isOwner&&<ExpiryReminder request={request} now={now}/>}</td><td><div className="row-actions">
      {onPreview&&<button type="button" title="Lihat surat" aria-label="Lihat surat" onClick={()=>onPreview(request)}><Eye size={16}/></button>}
      {isOwner&&role!=='pemohon'&&['draft','revision'].includes(request.status)&&onEdit&&<button type="button" title="Edit draft" aria-label="Edit draft" onClick={()=>onEdit(request)}><Pencil size={16}/></button>}
      {isOwner&&role!=='pemohon'&&['draft','revision'].includes(request.status)&&<button type="button" title="Kirim pengajuan" aria-label="Kirim pengajuan" onClick={()=>onSubmit(request.id)}><Send size={16}/></button>}
      {canReview&&<button type="button" title="Review pengajuan" aria-label="Review pengajuan" onClick={()=>onReview(request)}><ClipboardCheck size={16}/></button>}
      {canIssue&&<button type="button" className="issue-action" onClick={()=>onIssue(request)}>Terbitkan nomor</button>}
-     {request.status==='issued'&&onPrint&&<button type="button" title="Cetak surat" aria-label="Cetak surat" onClick={()=>onPrint(request)}><Printer size={16}/></button>}
+     {isRequestExpiryEligible(request)&&onPrint&&<button type="button" title="Cetak surat" aria-label="Cetak surat" onClick={()=>onPrint(request)}><Printer size={16}/></button>}
    </div></td></tr>
  })}</tbody></table></div>
+}
+function ExpiryReminder({request,now}:{request:LetterRequest;now:number}){
+  const expiresAt=requestExpiryAt(request)
+  if(expiresAt===null)return null
+  const remaining=Math.max(0,expiresAt-now)
+  const timeLabel=formatRemainingTime(remaining)
+  const isDownloaded=Boolean(request.downloaded_at)
+  const message=isDownloaded
+    ?`Sudah diunduh · Terhapus otomatis dalam ${timeLabel}`
+    :`Belum diunduh · Segera simpan PDF · Sisa waktu unduh: ${timeLabel}`
+  return <small className={`request-expiry-reminder${isDownloaded?' is-downloaded':' is-pending'}`} title={`${message}. Pengajuan dihapus otomatis 48 jam setelah diterbitkan/disetujui final.`}>{message}</small>
 }
 function FitLetterPreview({paperSize,html,watermark,className=''}:{paperSize:PaperSize;html:string;watermark?:string;className?:string}){
   const stageRef=useRef<HTMLDivElement>(null)

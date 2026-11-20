@@ -290,6 +290,8 @@ const teacherPositionOptions = [
   "Wakasek Humas",
   "Kepala Sekolah",
   "Kepala Tata Usaha",
+  "Bendahara Pengeluaran",
+  "Bendahara",
   "Staff Tata Usaha",
   "Tenaga Kependidikan (Tendik)",
 ];
