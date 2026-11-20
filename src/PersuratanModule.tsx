@@ -846,47 +846,47 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     }
   }
   const openPreview=(request:LetterRequest)=>{setPreviewRequest(request);setModal({type:'preview'})}
-  const printSheet=(sheet:HTMLElement,paperSize:PaperSize)=>{
-    const printHost=document.createElement('div')
-    printHost.className=`letter-app letter-print-host${paperSize==='F4'?' letter-print-host-f4':''}`
-    printHost.appendChild(sheet)
-    const pageStyle=document.createElement('style')
-    pageStyle.textContent=`@media print{@page{size:${paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:0}}`
-    document.head.appendChild(pageStyle)
-    document.body.appendChild(printHost)
-    document.body.classList.add('letter-print-active')
-    const cleanup=()=>{
-      printHost.remove()
-      pageStyle.remove()
-      document.body.classList.remove('letter-print-active')
-    }
-    window.addEventListener('afterprint',cleanup,{once:true})
-    window.print()
-  }
   const printLetter=(request:LetterRequest)=>{
     const documentMarkup=getRequestTemplate(request)
     if(!documentMarkup){notify('Konten template surat tidak tersedia untuk pratinjau.');return}
-    const paper=document.createElement('div')
-    paper.className=`letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}`
-    if(documentMarkup.isDraft){
-      const watermark=document.createElement('span')
-      watermark.className='letter-watermark'
-      watermark.textContent='KONSEP / BELUM BERNOMOR'
-      paper.appendChild(watermark)
+    const paperWidth=documentMarkup.paperSize==='F4'?215:210
+    const paperHeight=documentMarkup.paperSize==='F4'?330:297
+    const stylesheetLinks=Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+      .filter(link=>new URL(link.href).origin===window.location.origin)
+      .map(link=>`<link rel="stylesheet" href="${escapeHtml(link.href)}">`)
+      .join('')
+    const inlineStylesheets=Array.from(document.querySelectorAll<HTMLStyleElement>('style'))
+      .map(style=>`<style>${style.textContent||''}</style>`)
+      .join('')
+    const watermark=documentMarkup.isDraft?'<span class="letter-watermark">KONSEP / BELUM BERNOMOR</span>':''
+    const documentHtml=`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(documentMarkup.title)}</title>${stylesheetLinks}${inlineStylesheets}<style>
+      html,body{margin:0;padding:0;background:#f1f3f8}
+      body{display:flex;justify-content:center;min-height:100vh}
+      .letter-app{width:${paperWidth}mm;min-width:0;min-height:${paperHeight}mm;margin:72px 12px 24px;background:#fff}
+      .letter-app .letter-paper{width:${paperWidth}mm;height:${paperHeight}mm;min-height:${paperHeight}mm;max-width:none;margin:0;box-shadow:0 8px 26px #18274418;transform:none}
+      .letter-print-toolbar{position:fixed;inset:0 0 auto;z-index:10;display:flex;justify-content:flex-end;padding:12px 18px;background:#fff;border-bottom:1px solid #e7edf4}
+      .letter-print-toolbar button{border:0;border-radius:9px;padding:10px 15px;background:#2563eb;color:#fff;font:700 12px Arial,sans-serif;cursor:pointer}
+      .letter-print-toolbar button:hover{background:#1d4ed8}
+      @page{size:${paperWidth}mm ${paperHeight}mm;margin:0}
+      @media print{
+        html,body{width:${paperWidth}mm;height:${paperHeight}mm;background:#fff}
+        body{display:block;min-height:0}
+        .letter-app{margin:0;background:#fff}
+        .letter-app .letter-paper{box-shadow:none}
+        .letter-print-toolbar{display:none!important}
+      }
+      </style></head><body><div class="letter-print-toolbar"><button id="letter-print-button" type="button">Cetak / Simpan PDF</button></div><div class="letter-app"><div class="letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}">${watermark}<div class="letter-document-render letter-paper-preview">${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article></div></div></div></body></html>`
+    const printWindow=window.open('','_blank')
+    if(!printWindow){notify('Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.');return}
+    printWindow.opener=null
+    printWindow.onload=()=>{
+      printWindow.document.getElementById('letter-print-button')?.addEventListener('click',()=>printWindow.print())
+      printWindow.focus()
+      printWindow.print()
     }
-    const content=document.createElement('div')
-    content.className='letter-document-render letter-paper-preview'
-    content.innerHTML=`${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article>`
-    paper.appendChild(content)
-    printSheet(paper,documentMarkup.paperSize)
-  }
-  const printPreviewLetter=(paperSize:PaperSize)=>{
-    const previewSheet=document.querySelector<HTMLElement>('.letter-preview-modal .letter-paper')
-    if(!previewSheet){notify('Pratinjau surat belum siap untuk dicetak.');return}
-    const printSheetElement=previewSheet.cloneNode(true) as HTMLElement
-    printSheetElement.classList.remove('letter-fit-sheet')
-    printSheetElement.removeAttribute('style')
-    printSheet(printSheetElement,paperSize)
+    printWindow.document.open()
+    printWindow.document.write(documentHtml)
+    printWindow.document.close()
   }
   function editRequest(request:LetterRequest){
     if(role==='pemohon'||!['draft','revision'].includes(request.status)||request.requester_id!==session?.user.id)return
@@ -1159,7 +1159,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       </form>
     </Modal>}
     {modal?.type==='preview'&&previewRequest&&<Modal title="Pratinjau Surat" className="letter-preview-modal" close={()=>setModal(null)}>
-      {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" onClick={()=>printPreviewLetter(previewDocument.paperSize)}><Printer size={16}/> Cetak / Simpan PDF</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
+      {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" onClick={()=>printLetter(previewRequest)}><Printer size={16}/> Cetak / Simpan PDF</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
     </Modal>}
     {modal?.type==='notifications'&&<Modal title="Notifikasi" close={()=>setModal(null)}><div className="notification-list">{notifications.length?notifications.map(notification=><button type="button" className={`notification-row${notification.is_read?' is-read':''}`} key={notification.id} onClick={()=>void markNotificationRead(notification)}><Bell size={17}/><span><b>{notification.title}</b><p>{notification.body}</p><small>{new Date(notification.created_at).toLocaleString('id-ID')}</small></span></button>):<p className="muted">Belum ada notifikasi.</p>}</div></Modal>}
   </div></div>
