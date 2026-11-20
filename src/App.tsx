@@ -18,7 +18,6 @@ import {
   Clock3,
   Command,
   FileText,
-  FileSpreadsheet,
   GraduationCap,
   HeartHandshake,
   LayoutDashboard,
@@ -41,8 +40,6 @@ import {
   UserRoundCheck,
   UserRoundPlus,
   UserRoundX,
-  Upload,
-  Download,
   Vote,
   Wallet,
   X,
@@ -62,7 +59,6 @@ import {
 } from "./lib/manageUsers";
 import type { ManagedUser } from "./lib/manageUsers";
 import { LETTER_IN_PROGRESS_STATUSES } from "./lib/letterMetrics";
-import * as XLSX from "xlsx";
 import DataInduk from "./DataInduk";
 import AbsensiDigital from "./AbsensiDigital";
 import Perpustakaan from "./Perpustakaan";
@@ -302,14 +298,6 @@ function dashboardMetric(
   return { value: count.toLocaleString("id-ID"), note: "Data Supabase", trend: "Diperbarui otomatis" };
 }
 
-type StudentAccountImportRow = {
-  rowNumber: number;
-  nisn: string;
-  fullName: string;
-  status: "ready" | "duplicate" | "existing" | "invalid" | "creating" | "created" | "failed";
-  message: string;
-};
-
 type StudentAccountGeneratorStatus =
   | "ready"
   | "existing"
@@ -340,6 +328,22 @@ type StudentAccountSourceRow = {
   class: { name: string | null } | { name: string | null }[] | null;
 };
 
+type ManagedUserDirectoryEntry = ManagedUser & {
+  employmentStatus: string | null;
+  className: string | null;
+};
+
+const managedUserRoleOptions = [
+  { value: "kepala_sekolah", label: "Kepala Sekolah" },
+  { value: "operator", label: "Operator Sekolah" },
+  { value: "kepala_tata_usaha", label: "Kepala Tata Usaha" },
+  { value: "staff_tata_usaha", label: "Staff Tata Usaha" },
+  { value: "guru", label: "Guru" },
+  { value: "guru_bk", label: "Guru BK" },
+  { value: "siswa", label: "Siswa" },
+  { value: "tendik", label: "Tendik" },
+];
+
 const roleLabels: Record<string, string> = {
   super_admin: "Super Admin",
   kepala_sekolah: "Kepala Sekolah",
@@ -351,7 +355,19 @@ const roleLabels: Record<string, string> = {
   siswa: "Siswa",
   tendik: "Tendik",
   pending: "Menunggu Aktivasi",
+  bendahara: "Bendahara",
 };
+
+type ManagedUserGroup = "teachers" | "staff" | "students";
+
+function getManagedUserGroup(user: ManagedUserDirectoryEntry): ManagedUserGroup {
+  if (user.role === "siswa") return "students";
+
+  const isTeacherRole = user.role === "guru" || user.role === "guru_bk";
+  const hasNonTeacherPosition = /\b(kepala sekolah|kepala tata usaha|kepala tu|operator|staff? tata usaha|bendahara|tendik|pengelola)\b/i
+    .test(user.employmentStatus ?? "");
+  return isTeacherRole && !hasNonTeacherPosition ? "teachers" : "staff";
+}
 
 const roleAccess: Record<string, string[]> = {
   super_admin: [
@@ -587,19 +603,13 @@ function AppContent() {
   });
   const [dashboardFeedError, setDashboardFeedError] = useState("");
   const [dashboardFeedLoading, setDashboardFeedLoading] = useState(false);
-  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
+  const [managedUsers, setManagedUsers] = useState<ManagedUserDirectoryEntry[]>([]);
   const [showAddUserForm, setShowAddUserForm] = useState(false);
   const [newUserNip, setNewUserNip] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserRole, setNewUserRole] = useState("guru");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [savingUser, setSavingUser] = useState(false);
-  const [studentAccountRows, setStudentAccountRows] = useState<StudentAccountImportRow[]>([]);
-  const [studentAccountFileName, setStudentAccountFileName] = useState("");
-  const [studentAccountImportError, setStudentAccountImportError] = useState("");
-  const [studentAccountImportMessage, setStudentAccountImportMessage] = useState("");
-  const [creatingStudentAccounts, setCreatingStudentAccounts] = useState(false);
-  const [showStudentAccountImport, setShowStudentAccountImport] = useState(false);
   const [showStudentAccountGenerator, setShowStudentAccountGenerator] = useState(false);
   const [studentGeneratorRows, setStudentGeneratorRows] = useState<StudentAccountGeneratorRow[]>([]);
   const [studentGeneratorSelectedIds, setStudentGeneratorSelectedIds] = useState<string[]>([]);
@@ -610,6 +620,7 @@ function AppContent() {
   const [studentGeneratorCreating, setStudentGeneratorCreating] = useState(false);
   const [studentGeneratorError, setStudentGeneratorError] = useState("");
   const [studentGeneratorMessage, setStudentGeneratorMessage] = useState("");
+  const [userDirectoryMetadataWarning, setUserDirectoryMetadataWarning] = useState("");
   const [createUserError, setCreateUserError] = useState("");
   const [createUserMessage, setCreateUserMessage] = useState("");
   const [usersLoading, setUsersLoading] = useState(false);
@@ -618,6 +629,7 @@ function AppContent() {
   const [userSearch, setUserSearch] = useState("");
   const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [userStatusFilter, setUserStatusFilter] = useState("all");
+  const [studentUserClassFilter, setStudentUserClassFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -782,13 +794,69 @@ useEffect(() => {
 
 
 
+  const attachManagedUserDirectoryMetadata = useCallback(async (users: ManagedUser[]) => {
+    const [teachersResult, studentsResult] = await Promise.allSettled([
+      supabase.from("teachers").select("profile_id,nip,employment_status"),
+      supabase
+        .from("students")
+        .select("profile_id,nisn,class:classes!students_class_id_fkey(name)"),
+    ]);
+    const warnings: string[] = [];
+
+    if (teachersResult.status === "rejected") {
+      console.error("Jabatan Data Induk untuk direktori pengguna gagal dimuat:", teachersResult.reason);
+      warnings.push("jabatan guru/tendik");
+    } else if (teachersResult.value.error) {
+      console.error("Jabatan Data Induk untuk direktori pengguna gagal dimuat:", teachersResult.value.error);
+      warnings.push("jabatan guru/tendik");
+    }
+    if (studentsResult.status === "rejected") {
+      console.error("Kelas Data Induk untuk direktori pengguna gagal dimuat:", studentsResult.reason);
+      warnings.push("kelas siswa");
+    } else if (studentsResult.value.error) {
+      console.error("Kelas Data Induk untuk direktori pengguna gagal dimuat:", studentsResult.value.error);
+      warnings.push("kelas siswa");
+    }
+
+    const teacherByProfileId = new Map<string, string>();
+    const teacherByNip = new Map<string, string>();
+    (teachersResult.status === "fulfilled" ? teachersResult.value.data ?? [] : []).forEach((teacher) => {
+      const position = teacher.employment_status?.trim();
+      if (!position) return;
+      if (teacher.profile_id) teacherByProfileId.set(teacher.profile_id, position);
+      if (teacher.nip) teacherByNip.set(teacher.nip.trim().toLocaleLowerCase("id-ID"), position);
+    });
+
+    const studentByProfileId = new Map<string, string>();
+    const studentByNisn = new Map<string, string>();
+    (studentsResult.status === "fulfilled" ? studentsResult.value.data ?? [] : []).forEach((student) => {
+      const classRelation = Array.isArray(student.class) ? student.class[0] : student.class;
+      const className = classRelation?.name?.trim();
+      if (!className) return;
+      if (student.profile_id) studentByProfileId.set(student.profile_id, className);
+      if (student.nisn) studentByNisn.set(student.nisn.trim().toLocaleLowerCase("id-ID"), className);
+    });
+
+    setUserDirectoryMetadataWarning(
+      warnings.length ? `Keterangan ${warnings.join(" dan ")} belum dapat ditampilkan.` : "",
+    );
+    return users.map((user): ManagedUserDirectoryEntry => {
+      const normalizedUsername = user.username.trim().toLocaleLowerCase("id-ID");
+      return {
+        ...user,
+        employmentStatus: teacherByProfileId.get(user.id) ?? teacherByNip.get(normalizedUsername) ?? null,
+        className: studentByProfileId.get(user.id) ?? studentByNisn.get(normalizedUsername) ?? null,
+      };
+    });
+  }, []);
+
 const loadManagedUsers = useCallback(async () => {
   setUsersLoading(true);
   setUsersError("");
 
   try {
     const users = await getManagedUsers();
-    setManagedUsers(users);
+    setManagedUsers(await attachManagedUserDirectoryMetadata(users));
     setUsersLoaded(true);
   } catch (error) {
     setUsersError(
@@ -799,7 +867,7 @@ const loadManagedUsers = useCallback(async () => {
 } finally {
     setUsersLoading(false);
   }
-}, []);
+}, [attachManagedUserDirectoryMetadata]);
 
 const loadStudentAccountGenerator = async () => {
   if (currentUser?.role !== "super_admin") return;
@@ -865,7 +933,7 @@ const loadStudentAccountGenerator = async () => {
       };
     });
 
-    setManagedUsers(users);
+    setManagedUsers(await attachManagedUserDirectoryMetadata(users));
     setUsersLoaded(true);
     setUsersError("");
     setStudentGeneratorRows(rows);
@@ -893,7 +961,7 @@ const createStudentAccountsFromDataInduk = async () => {
   let createdCount = 0;
   try {
     const latestUsers = await getManagedUsers();
-    setManagedUsers(latestUsers);
+    setManagedUsers(await attachManagedUserDirectoryMetadata(latestUsers));
     setUsersLoaded(true);
     const latestUsernames = new Set(
       latestUsers.map((user) => user.username.trim().toLowerCase()),
@@ -1120,201 +1188,6 @@ const createManagedUser = async (
     setSavingUser(false);
   }
 };
-
-const downloadStudentAccountTemplate = () => {
-  const dataSheet = XLSX.utils.aoa_to_sheet([
-    ["NISN", "Nama Lengkap"],
-  ]);
-  dataSheet["!cols"] = [{ wch: 18 }, { wch: 36 }];
-  const instructions = XLSX.utils.aoa_to_sheet([
-    ["TEMPLATE AKUN SISWA SMAN 7 MAROS"],
-    ["Isi satu siswa pada setiap baris di lembar Data Siswa."],
-    ["NISN wajib berupa 10 angka. Atur kolom NISN sebagai teks agar angka nol di depan tidak hilang."],
-    ["Nama Lengkap wajib diisi."],
-    ["Jangan mengubah nama kolom pada baris pertama."],
-    ["Password awal setiap akun akan sama dengan NISN."],
-  ]);
-  instructions["!cols"] = [{ wch: 110 }];
-
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, dataSheet, "Data Siswa");
-  XLSX.utils.book_append_sheet(workbook, instructions, "Petunjuk");
-  XLSX.writeFile(workbook, "Template_Akun_Siswa_SMAN_7_Maros.xlsx");
-};
-
-const handleStudentAccountFile = async (
-  event: React.ChangeEvent<HTMLInputElement>
-) => {
-  const file = event.target.files?.[0];
-  event.target.value = "";
-  if (!file) return;
-
-  setStudentAccountImportError("");
-  setStudentAccountImportMessage("");
-  setStudentAccountRows([]);
-  setStudentAccountFileName(file.name);
-
-  try {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    if (!sheet) throw new Error("File Excel tidak memiliki lembar kerja.");
-
-    const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-      defval: "",
-      raw: false,
-      blankrows: true,
-    });
-    const parsedRows = rawRows.flatMap((raw, index): StudentAccountImportRow[] => {
-        const values = new Map<string, string>();
-        Object.entries(raw).forEach(([key, value]) => {
-          values.set(key.trim().toLowerCase().replace(/[\s_-]+/g, ""), String(value ?? "").trim());
-        });
-        const nisn = values.get("nisn") ?? "";
-        const fullName = values.get("namalengkap") ?? values.get("nama") ?? "";
-        if (!nisn && !fullName) return [];
-
-        const problems: string[] = [];
-        if (!/^\d{10}$/.test(nisn)) problems.push("NISN harus 10 angka");
-        if (fullName.length < 2 || fullName.length > 150) problems.push("Nama wajib 2–150 karakter");
-
-        return [{
-          rowNumber: index + 2,
-          nisn,
-          fullName,
-          status: problems.length ? "invalid" as const : "ready" as const,
-          message: problems.join("; "),
-        }];
-      });
-
-    if (parsedRows.length === 0) {
-      throw new Error("Tidak ada baris data. Periksa lembar pertama dan nama kolom template.");
-    }
-
-    const nisnCounts = new Map<string, number>();
-    parsedRows.forEach((row) => {
-      if (row.nisn) nisnCounts.set(row.nisn, (nisnCounts.get(row.nisn) ?? 0) + 1);
-    });
-    const existingUsernames = new Set(
-      managedUsers
-        .map((user) => user.username.trim().toLowerCase())
-    );
-    const rows = parsedRows.map((row) => {
-      if (row.status === "invalid") return row;
-      if ((nisnCounts.get(row.nisn) ?? 0) > 1) {
-        return { ...row, status: "duplicate" as const, message: "NISN muncul lebih dari sekali di file" };
-      }
-      if (existingUsernames.has(row.nisn.toLowerCase())) {
-        return { ...row, status: "existing" as const, message: "Username sudah digunakan akun lain" };
-      }
-      return row;
-    });
-    setStudentAccountRows(rows);
-  } catch (error) {
-    setStudentAccountImportError(
-      error instanceof Error ? error.message : "File Excel gagal dibaca."
-    );
-  }
-};
-
-const createStudentAccounts = async () => {
-  const readyRows = studentAccountRows.filter((row) => row.status === "ready");
-  if (readyRows.length === 0 || creatingStudentAccounts) return;
-  if (!window.confirm(`Buat ${readyRows.length} akun siswa? Username dan password awal setiap akun adalah NISN.`)) {
-    return;
-  }
-
-  setCreatingStudentAccounts(true);
-  setStudentAccountImportError("");
-  setStudentAccountImportMessage("");
-  try {
-    const currentUsers = await getManagedUsers();
-    setManagedUsers(currentUsers);
-    setUsersLoaded(true);
-    const existingUsernames = new Set(
-      currentUsers
-        .map((user) => user.username.trim().toLowerCase())
-    );
-    const pendingRows = studentAccountRows.map((row) =>
-      row.status === "ready" && existingUsernames.has(row.nisn.toLowerCase())
-        ? { ...row, status: "existing" as const, message: "Username sudah digunakan akun lain" }
-        : row
-    );
-    setStudentAccountRows(pendingRows);
-
-    const rowsToCreate = pendingRows.filter((row) => row.status === "ready");
-    if (rowsToCreate.length === 0) {
-      setStudentAccountImportMessage("Tidak ada akun baru yang perlu dibuat.");
-      return;
-    }
-
-    let createdCount = 0;
-    for (const row of rowsToCreate) {
-      setStudentAccountRows((current) =>
-        current.map((item) => item.rowNumber === row.rowNumber
-          ? { ...item, status: "creating", message: "Sedang dibuat..." }
-          : item)
-      );
-      try {
-        const { data, error } = await supabase.functions.invoke("manage-users", {
-          body: {
-            action: "create",
-            username: row.nisn,
-            full_name: row.fullName,
-            role: "siswa",
-            password: row.nisn,
-          },
-        });
-        if (error) {
-          let serverMessage = "";
-          try {
-            const response = (error as { context?: Response }).context;
-            if (response) {
-              const payload = await response.clone().json();
-              serverMessage = payload?.error || "";
-            }
-          } catch {
-            // Use the function client's message when the response is not JSON.
-          }
-          throw new Error(serverMessage || data?.error || error.message || "Akun gagal dibuat.");
-        }
-        if (!data || data.error) throw new Error(data?.error || "Akun gagal dibuat.");
-
-        createdCount += 1;
-        setStudentAccountRows((current) =>
-          current.map((item) => item.rowNumber === row.rowNumber
-            ? { ...item, status: "created", message: "Akun berhasil dibuat" }
-            : item)
-        );
-      } catch (error) {
-        setStudentAccountRows((current) =>
-          current.map((item) => item.rowNumber === row.rowNumber
-            ? {
-                ...item,
-                status: "failed",
-                message: error instanceof Error ? error.message : "Akun gagal dibuat",
-              }
-            : item)
-        );
-      }
-    }
-
-    const failedCount = rowsToCreate.length - createdCount;
-    const auditWarning = createdCount > 0
-      ? await auditUserChange("Akun siswa dibuat secara massal", `${createdCount} akun siswa berhasil dibuat.`)
-      : "";
-    setStudentAccountImportMessage(
-      `${createdCount} akun berhasil dibuat${failedCount ? `, ${failedCount} gagal` : ""}.${auditWarning ? ` ${auditWarning}` : ""}`
-    );
-    await loadManagedUsers();
-  } catch (error) {
-    setStudentAccountImportError(
-      error instanceof Error ? error.message : "Daftar akun tidak dapat diperiksa."
-    );
-  } finally {
-    setCreatingStudentAccounts(false);
-  }
-};
-
 
 const updateManagedUser = async (
   userId: string,
@@ -2118,13 +1991,41 @@ const filteredManagedUsers = useMemo(() => {
   const searchTerm = userSearch.trim().toLocaleLowerCase("id-ID");
   return managedUsers.filter((user) => {
     const matchesSearch = !searchTerm
-      || `${user.username} ${user.full_name}`.toLocaleLowerCase("id-ID").includes(searchTerm);
+      || `${user.username} ${user.full_name} ${user.employmentStatus ?? ""} ${user.className ?? ""} ${roleLabels[user.role] ?? user.role}`
+        .toLocaleLowerCase("id-ID").includes(searchTerm);
     const matchesRole = userRoleFilter === "all" || user.role === userRoleFilter;
     const matchesStatus = userStatusFilter === "all"
       || (userStatusFilter === "active" ? user.status === "active" : user.status !== "active");
     return matchesSearch && matchesRole && matchesStatus;
   });
 }, [managedUsers, userRoleFilter, userSearch, userStatusFilter]);
+
+const managedUsersByGroup = useMemo(() => ({
+  teachers: managedUsers.filter((user) => getManagedUserGroup(user) === "teachers"),
+  staff: managedUsers.filter((user) => getManagedUserGroup(user) === "staff"),
+  students: managedUsers.filter((user) => getManagedUserGroup(user) === "students"),
+}), [managedUsers]);
+
+const filteredManagedUsersByGroup = useMemo(() => ({
+  teachers: filteredManagedUsers.filter((user) => getManagedUserGroup(user) === "teachers"),
+  staff: filteredManagedUsers.filter((user) => getManagedUserGroup(user) === "staff"),
+  students: filteredManagedUsers.filter((user) => getManagedUserGroup(user) === "students"),
+}), [filteredManagedUsers]);
+
+const studentUserClassOptions = useMemo(() => [...new Set(
+  managedUsersByGroup.students
+    .map((user) => user.className)
+    .filter((className): className is string => Boolean(className)),
+)].sort((left, right) => left.localeCompare(right, "id")), [managedUsersByGroup.students]);
+
+const filteredStudentManagedUsers = useMemo(() => (
+  filteredManagedUsersByGroup.students.filter((user) =>
+    studentUserClassFilter === "all"
+      || (studentUserClassFilter === "unassigned"
+        ? !user.className
+        : user.className === studentUserClassFilter),
+  )
+), [filteredManagedUsersByGroup.students, studentUserClassFilter]);
 
 const studentGeneratorClasses = useMemo(() => {
   const classes = new Map<string, string>();
@@ -2158,6 +2059,115 @@ const filteredStudentGeneratorRows = useMemo(() => {
 const selectedReadyStudentCount = studentGeneratorRows.filter(
   (row) => row.status === "ready" && studentGeneratorSelectedIds.includes(row.id),
 ).length;
+
+const managedUserSubtitle = (user: ManagedUserDirectoryEntry) => {
+  if (user.role === "siswa") {
+    return user.className ? `Siswa · Kelas ${user.className}` : "Siswa · Kelas belum terhubung";
+  }
+  return user.employmentStatus || roleLabels[user.role] || user.role;
+};
+
+const renderManagedUserTable = (
+  users: ManagedUserDirectoryEntry[],
+  emptyMessage: string,
+) => users.length === 0 ? (
+  <div className="user-empty-state user-empty-state-compact">
+    <span><Search size={22} /></span>
+    <div><strong>Tidak ada akun di bagian ini</strong><p>{emptyMessage}</p></div>
+  </div>
+) : (
+  <div className="user-table-scroll user-directory-table-scroll">
+    <table className="user-table">
+      <colgroup>
+        <col className="user-table-username-column" />
+        <col className="user-table-name-column" />
+        <col className="user-table-role-column" />
+        <col className="user-table-status-column" />
+        <col className="user-table-actions-column" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>NIP / Username</th>
+          <th>Nama Pengguna</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {users.map((user, index) => (
+          <tr key={user.id} style={{ animationDelay: `${Math.min(index * 45, 360)}ms` }}>
+            <td><span className="user-username">{user.username}</span></td>
+            <td>
+              <span className="user-person-cell">
+                <span className="user-person-avatar">{user.full_name.trim().charAt(0).toUpperCase() || "?"}</span>
+                <span className="user-person-copy">
+                  <strong className="user-name-cell">{user.full_name}</strong>
+                  <small>{managedUserSubtitle(user)}</small>
+                </span>
+              </span>
+            </td>
+            <td>
+              <div className="user-role-cell">
+                {user.role === "super_admin" ? (
+                  <span className="user-role-label"><ShieldCheck size={14} /> Super Admin</span>
+                ) : (
+                  <select
+                    className="user-role-select"
+                    value={user.role}
+                    onChange={(event) => updateManagedUser(user.id, { role: event.target.value })}
+                    aria-label={`Role ${user.full_name}`}
+                  >
+                    {!managedUserRoleOptions.some((option) => option.value === user.role) && (
+                      <option value={user.role} disabled>
+                        {roleLabels[user.role] ?? user.role}
+                      </option>
+                    )}
+                    {managedUserRoleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                )}
+                {user.employmentStatus && /bendahara/i.test(user.employmentStatus) && (
+                  <span className="user-position-badge">{user.employmentStatus}</span>
+                )}
+              </div>
+            </td>
+            <td>
+              <span className={user.status === "active" ? "user-status-active" : "user-status-disabled"}>
+                <span />{user.status === "active" ? "Aktif" : "Nonaktif"}
+              </span>
+            </td>
+            <td>
+              {user.role === "super_admin" ? (
+                <span className="user-protected-label">Akun terlindungi</span>
+              ) : (
+                <div className="user-action-group">
+                  <button type="button" className="user-action-button" onClick={() => openEditUser(user)}>
+                    <Pencil size={14} /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="user-action-button"
+                    onClick={() => updateManagedUser(user.id, {
+                      status: user.status === "active" ? "disabled" : "active",
+                    })}
+                  >
+                    {user.status === "active" ? <UserRoundX size={14} /> : <UserRoundCheck size={14} />}
+                    {user.status === "active" ? "Nonaktifkan" : "Aktifkan"}
+                  </button>
+                  <button type="button" className="user-action-button user-delete-button" onClick={() => void deleteManagedUser(user)}>
+                    <Trash2 size={14} /> Hapus
+                  </button>
+                </div>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
 
   if (!authReady || !maintenanceStatusLoaded) {
   return (
@@ -2788,7 +2798,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
         disabled={usersLoading}
       >
         <RefreshCw size={17} className={usersLoading ? "user-spin" : ""} />
-        {usersLoading ? "Memuat pengguna..." : usersLoaded ? "Perbarui daftar" : "Muat daftar pengguna"}
+        {usersLoading ? "Memuat pengguna..." : "Perbarui daftar"}
       </button>
 
       <button
@@ -2803,32 +2813,18 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
         {showAddUserForm ? "Batal Tambah" : "Tambah Pengguna"}
       </button>
 
-      <button
-        className="user-button user-button-import"
-        onClick={() => {
-          setShowStudentAccountGenerator(false);
-          setShowStudentAccountImport((show) => !show);
-          setStudentAccountImportError("");
-          setStudentAccountImportMessage("");
-        }}
-        disabled={studentGeneratorCreating}
-      >
-        <FileSpreadsheet size={17} />
-        {showStudentAccountImport ? "Tutup Impor Siswa" : "Tambah Akun Siswa Massal"}
-      </button>
       {currentUser?.role === "super_admin" && (
         <button
           type="button"
-          className="user-button user-button-primary"
+          className="user-button user-button-primary user-button-generator"
           onClick={() => {
             const nextOpen = !showStudentAccountGenerator;
             setShowStudentAccountGenerator(nextOpen);
             if (nextOpen) {
-              setShowStudentAccountImport(false);
               void loadStudentAccountGenerator();
             }
           }}
-          disabled={studentGeneratorCreating || creatingStudentAccounts}
+          disabled={studentGeneratorCreating}
         >
           <Sparkles size={17} />
           {showStudentAccountGenerator ? "Tutup Generator Siswa" : "Generate Akun dari Data Induk"}
@@ -3011,96 +3007,6 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
       </section>
     )}
 
-    {showStudentAccountImport && (
-      <section className="content-card user-list-card student-account-import-card">
-        <div className="card-heading">
-          <div>
-            <h3>Impor Akun Siswa</h3>
-            <p>Gunakan NISN sebagai username dan password awal.</p>
-          </div>
-          <span className="heading-icon"><FileSpreadsheet size={19} /></span>
-        </div>
-
-        <div className="student-import-actions">
-          <button
-            type="button"
-            className="user-action-button"
-            onClick={downloadStudentAccountTemplate}
-            disabled={creatingStudentAccounts}
-          >
-            <Download size={16} /> Unduh Template Excel
-          </button>
-          <label className="user-action-button student-import-upload">
-            <Upload size={16} /> Pilih File Excel
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={(event) => void handleStudentAccountFile(event)}
-              disabled={creatingStudentAccounts}
-            />
-          </label>
-          {studentAccountFileName && (
-            <span className="student-import-filename">{studentAccountFileName}</span>
-          )}
-        </div>
-
-        <p className="student-import-guidance">
-          Kolom yang dibutuhkan: <strong>NISN</strong> (10 angka) dan <strong>Nama Lengkap</strong>.
-          NISN harus diatur sebagai teks pada Excel agar angka nol di depan tidak terhapus.
-          Akun yang sudah terdaftar dan NISN ganda di file tidak akan dibuat.
-        </p>
-
-        {studentAccountImportError && (
-          <div className="module-notice" role="alert">
-            <CircleAlert size={18} /><span>{studentAccountImportError}</span>
-          </div>
-        )}
-        {studentAccountImportMessage && (
-          <p className="student-import-result" role="status">{studentAccountImportMessage}</p>
-        )}
-
-        {studentAccountRows.length > 0 && (
-          <>
-            <p className="student-import-count">
-              {studentAccountRows.filter((row) => row.status === "ready").length} siap dibuat ·{" "}
-              {studentAccountRows.filter((row) => row.status === "existing").length} sudah ada ·{" "}
-              {studentAccountRows.filter((row) => row.status === "duplicate").length} duplikat file ·{" "}
-              {studentAccountRows.filter((row) => row.status === "invalid" || row.status === "failed").length} perlu diperiksa/gagal
-            </p>
-            <div className="user-table-scroll">
-              <table className="student-import-table">
-                <thead>
-                  <tr><th>Baris</th><th>NISN</th><th>Nama Lengkap</th><th>Status</th></tr>
-                </thead>
-                <tbody>
-                  {studentAccountRows.map((row) => (
-                    <tr key={`${row.rowNumber}-${row.nisn}`}>
-                      <td>{row.rowNumber}</td>
-                      <td>{row.nisn || "—"}</td>
-                      <td>{row.fullName || "—"}</td>
-                      <td>
-                        <span className={`student-import-status is-${row.status}`}>
-                          {row.message || (row.status === "ready" ? "Siap dibuat" : row.status)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <button
-              type="button"
-              className="primary-button student-import-create"
-              onClick={() => void createStudentAccounts()}
-              disabled={creatingStudentAccounts || !studentAccountRows.some((row) => row.status === "ready")}
-            >
-              {creatingStudentAccounts ? "Membuat akun..." : "Buat Akun yang Siap"}
-            </button>
-          </>
-        )}
-      </section>
-    )}
-
     {usersError && (
       <div className="module-notice user-error-notice" role="alert">
         <CircleAlert size={18} />
@@ -3192,14 +3098,9 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
             onChange={(e) => setNewUserRole(e.target.value)}
             required
           >
-            <option value="kepala_sekolah">Kepala Sekolah</option>
-            <option value="operator">Operator Sekolah</option>
-            <option value="kepala_tata_usaha">Kepala Tata Usaha</option>
-            <option value="staff_tata_usaha">Staff Tata Usaha</option>
-            <option value="guru">Guru</option>
-            <option value="guru_bk">Guru BK</option>
-            <option value="siswa">Siswa</option>
-            <option value="tendik">Tendik</option>
+            {managedUserRoleOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </label>
 
@@ -3228,153 +3129,131 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
       </form>
     )}
 
-    {usersLoaded && (
-      <div className="content-card user-list-card">
-        <div className="card-heading">
-          <div>
-            <span className="user-card-eyebrow">DIREKTORI AKUN</span>
-            <h3>Daftar Pengguna</h3>
-            <p>Menampilkan {filteredManagedUsers.length} dari {managedUsers.length} akun</p>
-          </div>
-          <span className="heading-icon">
-            <Users size={19} />
-          </span>
-        </div>
+    {userDirectoryMetadataWarning && (
+      <div className="module-notice user-metadata-warning" role="status">
+        <CircleAlert size={18} />
+        <span>{userDirectoryMetadataWarning}</span>
+      </div>
+    )}
 
-        <div className="user-table-toolbar">
-          <label className="user-search-field">
-            <Search size={17} />
-            <input
-              type="search"
-              value={userSearch}
-              onChange={(event) => setUserSearch(event.target.value)}
-              placeholder="Cari nama atau NIP/username..."
-              aria-label="Cari pengguna"
-            />
-            {userSearch && (
-              <button type="button" onClick={() => setUserSearch("")} aria-label="Hapus pencarian">
-                <X size={15} />
+    {usersLoaded && (
+      <>
+        <section className="content-card user-list-card user-directory-controls">
+          <div className="card-heading">
+            <div>
+              <span className="user-card-eyebrow">DIREKTORI AKUN</span>
+              <h3>Daftar Pengguna</h3>
+              <p>Pencarian dan filter berlaku untuk ketiga daftar.</p>
+            </div>
+            <span className="heading-icon"><Users size={19} /></span>
+          </div>
+          <div className="user-table-toolbar">
+            <label className="user-search-field">
+              <Search size={17} />
+              <input
+                type="search"
+                value={userSearch}
+                onChange={(event) => setUserSearch(event.target.value)}
+                placeholder="Cari nama, NIP/username, jabatan, atau kelas..."
+                aria-label="Cari di seluruh daftar pengguna"
+              />
+              {userSearch && (
+                <button type="button" onClick={() => setUserSearch("")} aria-label="Hapus pencarian">
+                  <X size={15} />
+                </button>
+              )}
+            </label>
+            <label className="user-filter-field">
+              <SlidersHorizontal size={16} />
+              <select value={userRoleFilter} onChange={(event) => setUserRoleFilter(event.target.value)} aria-label="Filter berdasarkan role">
+                <option value="all">Semua role</option>
+                {Array.from(new Set(managedUsers.map((user) => user.role))).sort().map((role) => (
+                  <option key={role} value={role}>{roleLabels[role] ?? role}</option>
+                ))}
+              </select>
+            </label>
+            <label className="user-filter-field">
+              <select value={userStatusFilter} onChange={(event) => setUserStatusFilter(event.target.value)} aria-label="Filter berdasarkan status">
+                <option value="all">Semua status</option>
+                <option value="active">Aktif</option>
+                <option value="inactive">Nonaktif</option>
+              </select>
+            </label>
+            {(userSearch || userRoleFilter !== "all" || userStatusFilter !== "all" || studentUserClassFilter !== "all") && (
+              <button
+                type="button"
+                className="user-reset-filters"
+                onClick={() => {
+                  setUserSearch("");
+                  setUserRoleFilter("all");
+                  setUserStatusFilter("all");
+                  setStudentUserClassFilter("all");
+                }}
+              >
+                Atur ulang filter
               </button>
             )}
-          </label>
-          <label className="user-filter-field">
-            <SlidersHorizontal size={16} />
-            <select value={userRoleFilter} onChange={(event) => setUserRoleFilter(event.target.value)} aria-label="Filter berdasarkan role">
-              <option value="all">Semua role</option>
-              {Array.from(new Set(managedUsers.map((user) => user.role))).sort().map((role) => (
-                <option key={role} value={role}>{roleLabels[role] ?? role}</option>
-              ))}
-            </select>
-          </label>
-          <label className="user-filter-field">
-            <select value={userStatusFilter} onChange={(event) => setUserStatusFilter(event.target.value)} aria-label="Filter berdasarkan status">
-              <option value="all">Semua status</option>
-              <option value="active">Aktif</option>
-              <option value="inactive">Nonaktif</option>
-            </select>
-          </label>
-        </div>
-
-        {managedUsers.length === 0 ? (
-          <div className="user-empty-state user-empty-state-compact">
-            <span><Users size={22} /></span>
-            <div><strong>Belum ada pengguna</strong><p>Akun yang terdaftar akan muncul di sini.</p></div>
           </div>
-        ) : filteredManagedUsers.length === 0 ? (
-          <div className="user-empty-state user-empty-state-compact">
-            <span><Search size={22} /></span>
-            <div>
-              <strong>Pengguna tidak ditemukan</strong>
-              <p>Coba ubah kata kunci atau filter yang dipilih.</p>
+          {managedUsers.length === 0 && (
+            <div className="user-empty-state user-empty-state-compact">
+              <span><Users size={22} /></span>
+              <div><strong>Belum ada pengguna</strong><p>Akun yang terdaftar akan muncul di sini.</p></div>
             </div>
-            <button type="button" className="user-reset-filters" onClick={() => {
-              setUserSearch("");
-              setUserRoleFilter("all");
-              setUserStatusFilter("all");
-            }}>Atur ulang filter</button>
+          )}
+        </section>
+
+        <section className="content-card user-list-card user-directory-card">
+          <div className="card-heading">
+            <div>
+              <span className="user-card-eyebrow">AKUN SEKOLAH</span>
+              <h3>Pengguna Guru</h3>
+              <p>Menampilkan {filteredManagedUsersByGroup.teachers.length} dari {managedUsersByGroup.teachers.length} akun guru.</p>
+            </div>
+            <span className="heading-icon"><GraduationCap size={19} /></span>
           </div>
-        ) : (
-          <div className="user-table-scroll">
-            <table className="user-table">
-              <thead>
-                <tr>
-                  <th>NIP / Username</th>
-                  <th>Nama Pengguna</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredManagedUsers.map((user, index) => (
-                  <tr key={user.id} style={{ animationDelay: `${Math.min(index * 45, 360)}ms` }}>
-                    <td><span className="user-username">{user.username}</span></td>
-                    <td>
-                      <span className="user-person-cell">
-                        <span className="user-person-avatar">{user.full_name.trim().charAt(0).toUpperCase() || "?"}</span>
-                        <span className="user-person-copy">
-                          <strong className="user-name-cell">{user.full_name}</strong>
-                          <small>{user.username}</small>
-                        </span>
-                      </span>
-                    </td>
-                    <td>
-                      {user.role === "super_admin" ? (
-                        <span className="user-role-label"><ShieldCheck size={14} /> Super Admin</span>
-                      ) : (
-                        <select
-                          className="user-role-select"
-                          value={user.role}
-                          onChange={(event) => updateManagedUser(user.id, { role: event.target.value })}
-                          aria-label={`Role ${user.full_name}`}
-                        >
-                          <option value="kepala_sekolah">Kepala Sekolah</option>
-                          <option value="operator">Operator</option>
-                          <option value="kepala_tata_usaha">Kepala Tata Usaha</option>
-                          <option value="staff_tata_usaha">Staff Tata Usaha</option>
-                          <option value="guru">Guru</option>
-                          <option value="guru_bk">Guru BK</option>
-                          <option value="siswa">Siswa</option>
-                          <option value="tendik">Tendik</option>
-                        </select>
-                      )}
-                    </td>
-                    <td>
-                      <span className={user.status === "active" ? "user-status-active" : "user-status-disabled"}>
-                        <span />{user.status === "active" ? "Aktif" : "Nonaktif"}
-                      </span>
-                    </td>
-                    <td>
-                      {user.role === "super_admin" ? (
-                        <span className="user-protected-label">Akun terlindungi</span>
-                      ) : (
-                        <div className="user-action-group">
-                          <button type="button" className="user-action-button" onClick={() => openEditUser(user)}>
-                            <Pencil size={14} /> Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="user-action-button"
-                            onClick={() => updateManagedUser(user.id, {
-                              status: user.status === "active" ? "disabled" : "active",
-                            })}
-                          >
-                            {user.status === "active" ? <UserRoundX size={14} /> : <UserRoundCheck size={14} />}
-                            {user.status === "active" ? "Nonaktifkan" : "Aktifkan"}
-                          </button>
-                          <button type="button" className="user-action-button user-delete-button" onClick={() => void deleteManagedUser(user)}>
-                            <Trash2 size={14} /> Hapus
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          {renderManagedUserTable(filteredManagedUsersByGroup.teachers, "Tidak ada akun guru yang cocok dengan filter.")}
+        </section>
+
+        <section className="content-card user-list-card user-directory-card">
+          <div className="card-heading">
+            <div>
+              <span className="user-card-eyebrow">AKUN SEKOLAH</span>
+              <h3>Pengguna Tenaga Kependidikan / Tendik</h3>
+              <p>Menampilkan {filteredManagedUsersByGroup.staff.length} dari {managedUsersByGroup.staff.length} akun, termasuk administrator dan role lain.</p>
+            </div>
+            <span className="heading-icon"><ShieldCheck size={19} /></span>
           </div>
-        )}
-      </div>
+          {renderManagedUserTable(filteredManagedUsersByGroup.staff, "Tidak ada akun tenaga kependidikan yang cocok dengan filter.")}
+        </section>
+
+        <section className="content-card user-list-card user-directory-card">
+          <div className="card-heading">
+            <div>
+              <span className="user-card-eyebrow">AKUN AKADEMIK</span>
+              <h3>Pengguna Siswa</h3>
+              <p>Menampilkan {filteredStudentManagedUsers.length} dari {managedUsersByGroup.students.length} akun siswa.</p>
+            </div>
+            <span className="heading-icon"><BookOpen size={19} /></span>
+          </div>
+          <label className="user-filter-field user-student-class-filter">
+            <SlidersHorizontal size={16} />
+            <select
+              value={studentUserClassFilter}
+              onChange={(event) => setStudentUserClassFilter(event.target.value)}
+              aria-label="Filter akun siswa berdasarkan kelas"
+            >
+              <option value="all">Semua kelas</option>
+              {studentUserClassOptions.map((className) => (
+                <option key={className} value={className}>{className}</option>
+              ))}
+              {managedUsersByGroup.students.some((user) => !user.className) && (
+                <option value="unassigned">Kelas belum terhubung</option>
+              )}
+            </select>
+          </label>
+          {renderManagedUserTable(filteredStudentManagedUsers, "Tidak ada akun siswa yang cocok dengan pencarian atau filter kelas.")}
+        </section>
+      </>
     )}
   
 
