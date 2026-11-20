@@ -48,6 +48,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  getSupabaseSessionRetryDelayMs,
   getValidSupabaseSession,
   isSupabaseRateLimitError,
   supabase,
@@ -251,6 +252,22 @@ function withTimeout<T>(
   });
 
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
+}
+
+function isTemporarySessionFailure(error: unknown) {
+  const status = typeof error === "object" && error !== null && "status" in error
+    ? Number(error.status)
+    : 0;
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === "object" && error !== null && "message" in error
+      ? String(error.message)
+      : String(error);
+  return status === 429 ||
+    status === 503 ||
+    isSupabaseRateLimitError(error) ||
+    getSupabaseSessionRetryDelayMs() > 0 ||
+    /timeout|melewati batas waktu|failed to fetch|network error/i.test(message);
 }
 
 function dashboardMetric(
@@ -554,6 +571,7 @@ function AppContent() {
   }, [activePage]);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState("");
   const [sessionRetry, setSessionRetry] = useState(0);
   const [maintenanceStatus, setMaintenanceStatus] = useState<MaintenanceStatus | null>(null);
   const [maintenanceStatusLoaded, setMaintenanceStatusLoaded] = useState(false);
@@ -1540,9 +1558,37 @@ useEffect(() => {
 useEffect(() => {
   let mounted = true;
   let sessionSyncId = 0;
+  let recoveryTimer = 0;
+  let recoveryAttempt = 0;
+
+  function clearRecoveryTimer() {
+    if (recoveryTimer) window.clearTimeout(recoveryTimer);
+    recoveryTimer = 0;
+  }
+
+  function scheduleSessionRecovery(syncId: number) {
+    if (!mounted || syncId !== sessionSyncId) return;
+    recoveryAttempt += 1;
+    const retryDelay = Math.max(
+      getSupabaseSessionRetryDelayMs(),
+      Math.min(15_000 * 2 ** (recoveryAttempt - 1), 5 * 60_000),
+    );
+    setAuthError("");
+    setSessionRecoveryMessage(
+      "Supabase sedang membatasi permintaan. Sesi tetap tersimpan; aplikasi akan mencoba kembali otomatis.",
+    );
+    setAuthReady(false);
+    clearRecoveryTimer();
+    recoveryTimer = window.setTimeout(() => {
+      recoveryTimer = 0;
+      if (mounted && syncId === sessionSyncId) void syncSession();
+    }, retryDelay);
+  }
 
   async function syncSession() {
+    clearRecoveryTimer();
     const syncId = ++sessionSyncId;
+    let retryScheduled = false;
 
     try {
       const session = await withTimeout(
@@ -1554,6 +1600,8 @@ useEffect(() => {
 
       if (!userId) {
         if (mounted && syncId === sessionSyncId) {
+          recoveryAttempt = 0;
+          setSessionRecoveryMessage("");
           setCurrentUser(null);
           setAuthError("");
           setActivePage("Dashboard");
@@ -1571,6 +1619,11 @@ useEffect(() => {
       if (syncId !== sessionSyncId || !mounted) return;
 
       if (profileError) {
+        if (isTemporarySessionFailure(profileError)) {
+          retryScheduled = true;
+          scheduleSessionRecovery(syncId);
+          return;
+        }
         console.error("Profil pengguna gagal diperiksa:", profileError);
         setAuthError(`Profil akun belum dapat diverifikasi: ${profileError.message}`);
         return;
@@ -1585,6 +1638,8 @@ useEffect(() => {
         return;
       }
 
+      recoveryAttempt = 0;
+      setSessionRecoveryMessage("");
       setAuthError("");
       const nextUser = {
         id: profile.id,
@@ -1600,13 +1655,18 @@ useEffect(() => {
           : nextUser,
       );
     } catch (error) {
-      console.error("Pemeriksaan sesi gagal:", error);
       if (mounted && syncId === sessionSyncId) {
+        if (isTemporarySessionFailure(error)) {
+          retryScheduled = true;
+          scheduleSessionRecovery(syncId);
+          return;
+        }
+        console.error("Pemeriksaan sesi gagal:", error);
         const message = error instanceof Error ? error.message : String(error);
         setAuthError(`Sesi login belum dapat diverifikasi: ${message}`);
       }
     } finally {
-      if (mounted && syncId === sessionSyncId) setAuthReady(true);
+      if (mounted && syncId === sessionSyncId && !retryScheduled) setAuthReady(true);
     }
   }
 
@@ -1616,9 +1676,12 @@ useEffect(() => {
     if (event === "INITIAL_SESSION") return;
 
     if (event === "SIGNED_OUT") {
+      clearRecoveryTimer();
+      recoveryAttempt = 0;
       sessionSyncId += 1;
       setCurrentUser(null);
       setAuthError("");
+      setSessionRecoveryMessage("");
       setActivePage("Dashboard");
       setAuthReady(true);
       return;
@@ -1626,8 +1689,11 @@ useEffect(() => {
 
     if (event !== "SIGNED_IN") return;
 
+    clearRecoveryTimer();
+    recoveryAttempt = 0;
     setAuthReady(false);
     setAuthError("");
+    setSessionRecoveryMessage("");
     sessionSyncId += 1;
     const scheduledSyncId = sessionSyncId;
     window.setTimeout(() => {
@@ -1641,6 +1707,7 @@ useEffect(() => {
 
   return () => {
     mounted = false;
+    clearRecoveryTimer();
     subscription.unsubscribe();
   };
 }, [sessionRetry, setCurrentUser]);
@@ -2096,7 +2163,9 @@ const selectedReadyStudentCount = studentGeneratorRows.filter(
   return (
     <div className="auth-loading">
       <MaintenanceBanner />
-      Memeriksa sesi dan status pemeliharaan...
+      <p role="status" aria-live="polite">
+        {sessionRecoveryMessage || "Memeriksa sesi dan status pemeliharaan..."}
+      </p>
     </div>
   );
 }
@@ -2112,6 +2181,7 @@ const selectedReadyStudentCount = studentGeneratorRows.filter(
             onClick={() => {
               setAuthReady(false);
               setAuthError("");
+              setSessionRecoveryMessage("");
               setSessionRetry((retry) => retry + 1);
             }}
           >

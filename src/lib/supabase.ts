@@ -253,6 +253,10 @@ export function isSupabaseRateLimitError(error: unknown) {
   return /rate limit|membatasi pembaruan sesi/i.test(message);
 }
 
+export function getSupabaseSessionRetryDelayMs() {
+  return Math.max(0, sessionRetryAfter - Date.now());
+}
+
 function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
   if (!isSupabaseRateLimitError(error)) return;
   const now = Date.now();
