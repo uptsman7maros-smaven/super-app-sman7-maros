@@ -166,6 +166,9 @@
 .letter-app .letter-paper{position:relative;width:210mm;max-width:100%;min-height:297mm;margin:0 auto;padding:18mm 17mm;background:#fff;color:#000;box-shadow:0 8px 26px #18274418;overflow:hidden}
 .letter-app .letter-paper.paper-f4{width:215mm;min-height:330mm}
 .letter-app .letter-fit-preview{display:flex;min-width:0;min-height:0;flex:1;align-items:center;justify-content:center;overflow:hidden}
+.letter-app .letter-fit-preview.is-multipage{display:block;overflow:auto;padding:8px}
+.letter-app .letter-fit-page{width:max-content;max-width:100%;margin:0 auto 18px}
+.letter-app .letter-page-label{margin:0 0 6px;color:#75849a;font-size:10px;font-weight:700;text-align:right}
 .letter-app .letter-fit-frame{position:relative;flex:none}
 .letter-app .letter-fit-sheet{position:absolute;top:0;left:0;max-width:none;min-height:0;margin:0;transform-origin:top left}
 .letter-app .letter-document-render{position:relative;z-index:1;font:12pt/1.5 "Times New Roman",serif;color:#000}
@@ -270,11 +273,15 @@
   #letter-print-portal{display:block!important;position:static!important;width:100%!important;height:auto!important;overflow:visible!important;opacity:1!important;visibility:visible!important;background:#fff!important;color:#000!important}
   #letter-print-portal,#letter-print-portal *{visibility:visible!important;animation:none!important;box-shadow:none!important;text-shadow:none!important}
   #letter-print-portal .letter-print-app{width:210mm!important;min-width:0!important;min-height:0!important;margin:0!important;background:#fff!important;color:#000!important;font-family:"Times New Roman",serif!important}
+  #letter-print-portal .letter-print-app,#letter-print-portal .letter-paper,#letter-print-portal .letter-print-content{display:block!important;height:auto!important;overflow:visible!important}
   #letter-print-portal .letter-print-app-f4{width:215mm!important}
   #letter-print-portal .letter-paper{width:210mm!important;height:auto!important;min-height:297mm!important;max-width:none!important;margin:0!important;box-shadow:none!important;transform:none!important;overflow:visible!important;background:#fff!important;color:#000!important}
   #letter-print-portal .letter-print-app-f4 .letter-paper{width:215mm!important;min-height:330mm!important}
   #letter-print-portal .letter-paper-preview{color:#000!important;font-family:"Times New Roman",serif!important}
   #letter-print-portal .letter-template-body{color:#000!important;font-family:"Times New Roman",serif!important}
   #letter-print-portal .letter-paper-preview table{min-width:0!important}
+  #letter-print-portal .letter-page-break-before{page-break-before:always!important;break-before:page!important}
+  #letter-print-portal .letter-page-break-after{page-break-after:always!important;break-after:page!important}
   #letter-print-portal .letter-watermark{color:#8883!important}
+  .letter-page-label{display:none!important}
 }

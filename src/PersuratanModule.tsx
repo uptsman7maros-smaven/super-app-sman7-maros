@@ -118,9 +118,10 @@ const ALLOWED_TEMPLATE_TAGS = new Set([
 ])
 const SAFE_TEMPLATE_STYLE_PROPERTIES = new Set([
   'border', 'border-bottom', 'border-collapse', 'border-left', 'border-right', 'border-top',
+  'break-after', 'break-before',
   'color', 'font-family', 'font-size', 'font-style', 'font-weight', 'line-height', 'margin',
-  'margin-bottom', 'margin-left', 'margin-right', 'margin-top', 'padding', 'text-align',
-  'text-decoration', 'text-indent', 'vertical-align', 'width',
+  'margin-bottom', 'margin-left', 'margin-right', 'margin-top', 'page-break-after', 'page-break-before',
+  'padding', 'text-align', 'text-decoration', 'text-indent', 'vertical-align', 'width',
 ])
 
 function escapeHtml(value: string) {
@@ -196,6 +197,8 @@ function sanitizeTemplateHtml(value: string): string {
         if (safeStyles) attributes.push(`style="${escapeHtml(safeStyles)}"`)
       } else if (['colspan', 'rowspan', 'scope', 'start', 'alt', 'width', 'height'].includes(name)) {
         attributes.push(`${name}="${escapeHtml(content)}"`)
+      } else if (name === 'data-page-break' && ['before', 'after'].includes(content.toLocaleLowerCase('en-US'))) {
+        attributes.push(`${name}="${content.toLocaleLowerCase('en-US')}"`)
       } else if (name === 'href' && /^(https?:|mailto:|\/(?!\/)|#)/i.test(content)) {
         attributes.push(`href="${escapeHtml(content)}"`)
       } else if (name === 'src' && /^(https?:\/\/|\/(?!\/)|data:image\/(?:png|jpeg|gif|webp);base64,)/i.test(content)) {
@@ -269,6 +272,77 @@ async function waitForPrintImages(root:ParentNode){
     if(image.naturalWidth===0)throw new Error('Logo atau gambar surat gagal dimuat.')
     try{await image.decode()}catch{throw new Error('Logo atau gambar surat gagal didekode untuk dicetak.')}
   }))
+}
+
+type PageBreakBoundary={element:HTMLElement;position:'before'|'after'}
+function getPageBreakPositions(element:HTMLElement):('before'|'after')[]{
+  const style=(element.getAttribute('style')||'').toLocaleLowerCase('en-US').replace(/\s+/g,'')
+  const valueFor=(property:string)=>new RegExp(`(?:^|;)${property}:(?:always|page)(?:!important)?(?:;|$)`).test(style)
+  const positions:('before'|'after')[]=[]
+  const dataPosition=element.getAttribute('data-page-break')?.toLocaleLowerCase('en-US')
+  if(dataPosition==='before'||valueFor('page-break-before')||valueFor('break-before'))positions.push('before')
+  if(dataPosition==='after'||valueFor('page-break-after')||valueFor('break-after'))positions.push('after')
+  return positions
+}
+
+function getPageBreakBoundaries(root:HTMLElement):PageBreakBoundary[]{
+  return Array.from(root.querySelectorAll<HTMLElement>('*'))
+    .flatMap(element=>getPageBreakPositions(element).map(position=>({element,position})))
+    .sort((first,second)=>{
+      const firstRange=document.createRange()
+      const secondRange=document.createRange()
+      if(first.position==='before')firstRange.setStartBefore(first.element)
+      else firstRange.setStartAfter(first.element)
+      if(second.position==='before')secondRange.setStartBefore(second.element)
+      else secondRange.setStartAfter(second.element)
+      firstRange.collapse(true)
+      secondRange.collapse(true)
+      return firstRange.compareBoundaryPoints(Range.START_TO_START,secondRange)
+    })
+}
+
+function splitLetterElementAtPageBreaks(root:HTMLElement):HTMLElement[]{
+  const boundaries=getPageBreakBoundaries(root)
+  if(!boundaries.length)return [root.cloneNode(true) as HTMLElement]
+  const documentRef=root.ownerDocument
+  const pages:HTMLElement[]=[]
+  let startBoundary:PageBreakBoundary|null=null
+  const appendSegment=(endBoundary:PageBreakBoundary|null)=>{
+    const range=documentRef.createRange()
+    if(startBoundary){
+      if(startBoundary.position==='before')range.setStartBefore(startBoundary.element)
+      else range.setStartAfter(startBoundary.element)
+    }else range.setStart(root,0)
+    if(endBoundary){
+      if(endBoundary.position==='before')range.setEndBefore(endBoundary.element)
+      else range.setEndAfter(endBoundary.element)
+    }else range.setEnd(root,root.childNodes.length)
+    const fragment=range.cloneContents()
+    if(!fragment.textContent?.trim()&&!fragment.querySelector('img,svg,canvas,hr,table'))return
+    const page=root.cloneNode(false) as HTMLElement
+    page.appendChild(fragment)
+    pages.push(page)
+  }
+  boundaries.forEach(boundary=>{
+    appendSegment(boundary)
+    startBoundary=boundary
+  })
+  appendSegment(null)
+  const watermark=root.querySelector('.letter-watermark')
+  if(watermark)pages.slice(1).forEach(page=>page.prepend(watermark.cloneNode(true)))
+  return pages.length?pages:[root.cloneNode(true) as HTMLElement]
+}
+
+function splitLetterHtmlAtPageBreaks(html:string):string[]{
+  const root=document.createElement('div')
+  root.innerHTML=html
+  return splitLetterElementAtPageBreaks(root).map(page=>page.innerHTML)
+}
+
+function applyLetterPrintPageBreaks(root:ParentNode){
+  root.querySelectorAll<HTMLElement>('*').forEach(element=>{
+    getPageBreakPositions(element).forEach(position=>element.classList.add(`letter-page-break-${position}`))
+  })
 }
 
 function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null) {
@@ -898,6 +972,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         const portal=printPortalRef.current
         const content=portal?.querySelector<HTMLElement>('.letter-print-content')
         if(!portal||!content)throw new Error('Area dokumen cetak tidak tersedia.')
+        applyLetterPrintPageBreaks(content)
         await waitForPrintImages(portal)
         await document.fonts.ready
         if(!content.textContent?.trim())throw new Error('Isi surat untuk dicetak kosong.')
@@ -958,37 +1033,60 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       paper.appendChild(content)
       renderHost.appendChild(paper)
       document.body.appendChild(renderHost)
-
-      const images=Array.from(paper.querySelectorAll('img'))
-      await Promise.all(images.map(async image=>{
-        const source=image.getAttribute('src')
-        if(!source){image.remove();return}
-        const resolvedUrl=new URL(source,window.location.href)
-        if(resolvedUrl.origin!==window.location.origin&&resolvedUrl.protocol!=='data:'&&resolvedUrl.protocol!=='blob:'){
-          image.crossOrigin='anonymous'
-          image.src=resolvedUrl.href
-        }
-        try{
-          await image.decode()
-        }catch{
-          throw new Error('Logo atau gambar surat gagal dimuat. Periksa URL dan izin akses gambar.')
-        }
-      }))
-      await document.fonts.ready
-      await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
-
-      const canvas=await html2canvas(paper,{
-        scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,
-        width:paper.offsetWidth,height:paper.scrollHeight,windowWidth:paper.offsetWidth,
-        windowHeight:paper.scrollHeight,scrollX:0,scrollY:0,
-      })
-      if(!canvas.width||!canvas.height)throw new Error('Lembar surat kosong dan tidak dapat dirender.')
+      const pageElements=splitLetterElementAtPageBreaks(paper)
+      paper.remove()
+      if(!pageElements.length)throw new Error('Tidak ada halaman surat yang dapat dibuat menjadi PDF.')
       const pdf=new JsPDF({orientation:'portrait',unit:'mm',format:[pageWidth,pageHeight],compress:true})
-      const margin=5
-      const fitScale=Math.min((pageWidth-margin*2)/canvas.width,(pageHeight-margin*2)/canvas.height)
-      const imageWidth=canvas.width*fitScale
-      const imageHeight=canvas.height*fitScale
-      pdf.addImage(canvas.toDataURL('image/png'),'PNG',(pageWidth-imageWidth)/2,(pageHeight-imageHeight)/2,imageWidth,imageHeight,undefined,'FAST')
+      let pdfHasPageContent=false
+      for(const page of pageElements){
+        renderHost.appendChild(page)
+        const images=Array.from(page.querySelectorAll('img'))
+        await Promise.all(images.map(async image=>{
+          const source=image.getAttribute('src')
+          if(!source){image.remove();return}
+          const resolvedUrl=new URL(source,window.location.href)
+          if(resolvedUrl.origin!==window.location.origin&&resolvedUrl.protocol!=='data:'&&resolvedUrl.protocol!=='blob:'){
+            image.crossOrigin='anonymous'
+            image.src=resolvedUrl.href
+          }
+          try{
+            await image.decode()
+          }catch{
+            throw new Error('Logo atau gambar surat gagal dimuat. Periksa URL dan izin akses gambar.')
+          }
+        }))
+        await document.fonts.ready
+        await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+        const canvas=await html2canvas(page,{
+          scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,
+          width:page.offsetWidth,height:page.scrollHeight,windowWidth:page.offsetWidth,
+          windowHeight:page.scrollHeight,scrollX:0,scrollY:0,
+        })
+        if(!canvas.width||!canvas.height)throw new Error('Lembar surat kosong dan tidak dapat dirender.')
+        const mmPerPixel=pageWidth/canvas.width
+        const pageImageHeight=canvas.height*mmPerPixel
+        if(pageImageHeight<=pageHeight+0.5){
+          if(pdfHasPageContent)pdf.addPage()
+          const fitScale=Math.min(pageWidth/canvas.width,pageHeight/canvas.height)
+          const imageWidth=canvas.width*fitScale
+          const imageHeight=canvas.height*fitScale
+          pdf.addImage(canvas.toDataURL('image/png'),'PNG',(pageWidth-imageWidth)/2,0,imageWidth,imageHeight,undefined,'FAST')
+          pdfHasPageContent=true
+          continue
+        }
+        const pixelsPerPage=Math.max(1,Math.floor(pageHeight/mmPerPixel))
+        for(let top=0;top<canvas.height;top+=pixelsPerPage){
+          const slice=document.createElement('canvas')
+          slice.width=canvas.width
+          slice.height=Math.min(pixelsPerPage,canvas.height-top)
+          const context=slice.getContext('2d')
+          if(!context)throw new Error('Canvas halaman PDF tidak dapat diproses.')
+          context.drawImage(canvas,0,top,canvas.width,slice.height,0,0,canvas.width,slice.height)
+          if(pdfHasPageContent)pdf.addPage()
+          pdf.addImage(slice.toDataURL('image/png'),'PNG',0,0,pageWidth,slice.height*mmPerPixel,undefined,'FAST')
+          pdfHasPageContent=true
+        }
+      }
       const issued=Array.isArray(request.letter_issued)?request.letter_issued[0]:request.letter_issued
       const fileBase=`${documentMarkup.title}_${issued?.letter_number||request.request_code}`
         .replace(/[^a-zA-Z0-9._-]+/g,'_')
@@ -1322,6 +1420,7 @@ function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,o
 function FitLetterPreview({paperSize,html,watermark,className=''}:{paperSize:PaperSize;html:string;watermark?:string;className?:string}){
   const stageRef=useRef<HTMLDivElement>(null)
   const [stageSize,setStageSize]=useState({width:0,height:0})
+  const pages=useMemo(()=>splitLetterHtmlAtPageBreaks(html),[html])
   useEffect(()=>{
     const stage=stageRef.current
     if(!stage)return
@@ -1335,16 +1434,19 @@ function FitLetterPreview({paperSize,html,watermark,className=''}:{paperSize:Pap
   const heightMm=paperSize==='F4'?330:297
   const widthPx=widthMm*96/25.4
   const heightPx=heightMm*96/25.4
-  const scale=stageSize.width>0&&stageSize.height>0
-    ?Math.min((stageSize.width-16)/widthPx,(stageSize.height-16)/heightPx,1)
+  const scale=stageSize.width>0
+    ?Math.min((stageSize.width-16)/widthPx,pages.length===1&&stageSize.height>0?(stageSize.height-16)/heightPx:1)
     :1
-  return <div ref={stageRef} className={`letter-fit-preview ${className}`}>
-    <div className="letter-fit-frame" style={{width:widthPx*scale,height:heightPx*scale}}>
-      <div className={`letter-paper letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,transform:`scale(${scale})`}}>
-        {watermark&&<span className="letter-watermark">{watermark}</span>}
-        <div className="letter-document-render letter-paper-preview" dangerouslySetInnerHTML={{__html:html}}/>
+  return <div ref={stageRef} className={`letter-fit-preview${pages.length>1?' is-multipage':''} ${className}`}>
+    {pages.map((pageHtml,index)=><div className="letter-fit-page" key={index}>
+      {pages.length>1&&<div className="letter-page-label">Halaman {index+1}</div>}
+      <div className="letter-fit-frame" style={{width:widthPx*scale,height:heightPx*scale}}>
+        <div className={`letter-paper letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,transform:`scale(${scale})`}}>
+          {watermark&&<span className="letter-watermark">{watermark}</span>}
+          <div className="letter-document-render letter-paper-preview" dangerouslySetInnerHTML={{__html:pageHtml}}/>
+        </div>
       </div>
-    </div>
+    </div>)}
   </div>
 }
 
