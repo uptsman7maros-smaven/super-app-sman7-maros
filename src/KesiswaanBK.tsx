@@ -81,17 +81,21 @@ export default function KesiswaanBK({
   currentUser,
   userRole,
   module = "kesiswaan",
+  canAccessKesiswaan = false,
   onOpenParentLetter,
 }: {
   currentUser: SchoolUser;
   userRole: string;
   module?: "kesiswaan" | "bimbingan-konseling";
+  canAccessKesiswaan?: boolean;
   onOpenParentLetter?: (student: StudentOption, context: string) => void;
 }) {
   const isCounselingModule = module === "bimbingan-konseling";
   const [active, setActive] = useState<SectionKey>(() => isCounselingModule ? "Catatan BK" : "Prestasi");
   const [view, setView] = useState<ViewMode>("data");
   const role = (userRole || currentUser.role) as UserRole;
+  const hasModuleAccess = isCounselingModule
+    || (!["guru", "guru_bk"].includes(role) || canAccessKesiswaan);
   const [workflowTab, setWorkflowTab] = useState<CounselingWorkspaceTab>(
     () => role === "siswa" ? "Curhat ke Guru BK" : "Konsultasi BK",
   );
@@ -190,6 +194,7 @@ export default function KesiswaanBK({
 
   const refreshRows = useCallback(async () => {
     const requestId = ++rowsRequestId.current;
+    if (!hasModuleAccess) return;
     if (isSensitive && !canSeePrivateNotes) {
       if (requestId === rowsRequestId.current) {
         setRows([]);
@@ -210,7 +215,7 @@ export default function KesiswaanBK({
     } finally {
       if (requestId === rowsRequestId.current) setLoading(false);
     }
-  }, [canSeePrivateNotes, config, filters, isSensitive, page, students]);
+  }, [canSeePrivateNotes, config, filters, hasModuleAccess, isSensitive, page, students]);
 
   const refreshAlerts = useCallback(async () => {
     setAlertsLoading(true);
@@ -227,6 +232,7 @@ export default function KesiswaanBK({
   }, []);
 
   useEffect(() => {
+    if (!hasModuleAccess) return;
     let activeEffect = true;
     void loadStudentsAndYears(role, currentUser.id).then(result => {
       if (!activeEffect) return;
@@ -248,18 +254,19 @@ export default function KesiswaanBK({
       });
     }
     return () => { activeEffect = false; };
-  }, [currentUser.id, isStudentCounseling, masterDataKey, role]);
+  }, [currentUser.id, hasModuleAccess, isStudentCounseling, masterDataKey, role]);
 
   useEffect(() => {
+    if (!hasModuleAccess) return;
     const timer = window.setTimeout(() => { void refreshRows(); }, filters.search ? 280 : 0);
     return () => {
       window.clearTimeout(timer);
       rowsRequestId.current += 1;
     };
-  }, [filters, refreshRows]);
+  }, [filters, hasModuleAccess, refreshRows]);
 
   useEffect(() => {
-    if (isStudentCounseling) return;
+    if (!hasModuleAccess || isStudentCounseling) return;
     let activeEffect = true;
     void loadSummaryStats(role, statsFilters).then(result => {
       if (activeEffect) setStats(result);
@@ -267,9 +274,10 @@ export default function KesiswaanBK({
       if (activeEffect) setError(messageOf(statsError, "Ringkasan statistik gagal dimuat."));
     });
     return () => { activeEffect = false; };
-  }, [isStudentCounseling, role, statsFilters]);
+  }, [hasModuleAccess, isStudentCounseling, role, statsFilters]);
 
   useEffect(() => {
+    if (!hasModuleAccess) return;
     const student = students.find(item => item.profile_id === currentUser.id) ?? students[0];
     if (!isStudentCounseling || !student) return;
     let activeEffect = true;
@@ -279,20 +287,20 @@ export default function KesiswaanBK({
       if (activeEffect) setError(messageOf(summaryError, "Ringkasan layanan siswa gagal dimuat."));
     });
     return () => { activeEffect = false; };
-  }, [currentUser.id, isStudentCounseling, studentSummaryKey, students]);
+  }, [currentUser.id, hasModuleAccess, isStudentCounseling, studentSummaryKey, students]);
 
   useEffect(() => {
-    if (view !== "alerts" || !canSeeAlerts) return;
+    if (!hasModuleAccess || view !== "alerts" || !canSeeAlerts) return;
     const timer = window.setTimeout(() => { void refreshAlerts(); }, 0);
     const interval = window.setInterval(() => { void refreshAlerts(); }, 5 * 60_000);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);
     };
-  }, [canSeeAlerts, refreshAlerts, view]);
+  }, [canSeeAlerts, hasModuleAccess, refreshAlerts, view]);
 
   useEffect(() => {
-    if (view !== "assignments" || !canManageAssignments) return;
+    if (!hasModuleAccess || view !== "assignments" || !canManageAssignments) return;
     let activeEffect = true;
     const timer = window.setTimeout(() => {
       setAssignmentsLoading(true);
@@ -311,7 +319,7 @@ export default function KesiswaanBK({
       activeEffect = false;
       window.clearTimeout(timer);
     };
-  }, [canManageAssignments, view]);
+  }, [canManageAssignments, hasModuleAccess, view]);
 
   function changeFilters(changes: Partial<QueryFilters>) {
     setFilters(current => ({ ...current, ...changes }));
@@ -549,6 +557,15 @@ export default function KesiswaanBK({
     } catch (exportError) {
       setError(messageOf(exportError, "Ekspor Excel gagal."));
     }
+  }
+
+  if (!hasModuleAccess) {
+    return (
+      <section className="kb-access-denied" role="alert">
+        <h2>Akses tidak tersedia</h2>
+        <p>Menu Kesiswaan hanya dapat dibuka guru yang memiliki jabatan Wakasek Kesiswaan.</p>
+      </section>
+    );
   }
 
   return (

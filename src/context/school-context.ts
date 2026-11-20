@@ -30,6 +30,9 @@ export const EMPTY_IDENTITY: MasterIdentity = {
   full_name: "",
   nip_or_nisn: "",
   jabatan: null,
+  staff_category: null,
+  primary_role: null,
+  additional_roles: [],
 };
 
 export const SchoolContext = createContext<SchoolContextValue | null>(null);

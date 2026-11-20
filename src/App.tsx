@@ -564,7 +564,6 @@ const roleAccess: Record<string, string[]> = {
     "Absensi Digital",
     "Akademik",
     "SMAVEN Learn",
-    "Kesiswaan",
     "Bimbingan dan Konseling",
     "Perpustakaan",
   ],
@@ -592,6 +591,12 @@ const roleAccess: Record<string, string[]> = {
     "Dashboard",
     "Persuratan",
     "Absensi Digital",
+  ],
+  bendahara: [
+    "Dashboard",
+    "Keuangan",
+    "Persuratan",
+    "Laporan & Analitik",
   ],
 };
 
@@ -1628,6 +1633,17 @@ useEffect(() => {
         return;
       }
 
+      if (profile?.role === "siswa" && profile.status !== "active") {
+        await supabase.auth.signOut({ scope: "local" });
+        if (syncId !== sessionSyncId || !mounted) return;
+        clearCachedSessionUser(userId);
+        currentUserRef.current = null;
+        setCurrentUser(null);
+        setActivePage("Dashboard");
+        setAuthError("Akun siswa sedang nonaktif di Data Induk. Hubungi administrator sekolah.");
+        return;
+      }
+
       if (!profile || profile.status !== "active" || profile.role === "pending") {
         await supabase.auth.signOut({ scope: "local" });
         if (syncId !== sessionSyncId || !mounted) return;
@@ -1637,6 +1653,38 @@ useEffect(() => {
         setAuthError("");
         setActivePage("Dashboard");
         return;
+      }
+
+      if (profile.role === "siswa") {
+        const { data: studentStatus, error: studentStatusError } = await withTimeout(
+          Promise.resolve(supabase.rpc("get_my_student_account_status")),
+          12_000,
+          "Pemeriksaan status siswa melewati batas waktu.",
+        );
+        if (syncId !== sessionSyncId || !mounted) return;
+        if (studentStatusError) {
+          if (isTemporarySessionFailure(studentStatusError)) {
+            retryScheduled = true;
+            const staleAccount = currentUserRef.current?.id === userId
+              ? currentUserRef.current
+              : readCachedSessionUser(userId);
+            scheduleSessionRecovery(syncId, staleAccount);
+            return;
+          }
+          console.error("Status siswa gagal diperiksa:", studentStatusError);
+          setAuthError(`Status siswa belum dapat diverifikasi: ${studentStatusError.message}`);
+          return;
+        }
+        if (typeof studentStatus === "string" && studentStatus.toLowerCase() !== "active") {
+          await supabase.auth.signOut({ scope: "local" });
+          if (syncId !== sessionSyncId || !mounted) return;
+          clearCachedSessionUser(userId);
+          currentUserRef.current = null;
+          setCurrentUser(null);
+          setActivePage("Dashboard");
+          setAuthError("Akun siswa sedang nonaktif di Data Induk. Hubungi administrator sekolah.");
+          return;
+        }
       }
 
       recoveryAttempt = 0;
@@ -2089,6 +2137,24 @@ function openPage(name: string) {
 }
 const handleModuleOpen = (name: string) => {
    const isSuperAdmin = currentUser?.role === "super_admin";
+   const additionalRoles = currentUser?.additional_roles ?? [];
+   const isTeacherRole = ["guru", "guru_bk"].includes(currentUser?.role ?? "");
+   if (
+     name === "Kesiswaan" &&
+     isTeacherRole &&
+     !additionalRoles.includes("Wakasek Kesiswaan")
+   ) {
+     setToast("Menu Kesiswaan hanya tersedia untuk guru dengan jabatan Wakasek Kesiswaan.");
+     return;
+   }
+   if (
+     name === "Inventaris" &&
+     ["guru", "guru_bk"].includes(currentUser?.role ?? "") &&
+     !additionalRoles.includes("Wakasek Sarana dan Prasarana")
+   ) {
+     setToast("Modul Inventaris hanya tersedia untuk Wakasek Sarana dan Prasarana.");
+     return;
+   }
    if (name === "Dashboard") {
     openPage("Dashboard");
     return;
@@ -2113,11 +2179,26 @@ const handleModuleOpen = (name: string) => {
 };
 
   
+const teacherAdditionalRoles = currentUser?.additional_roles ?? [];
+const isTeacherRole = ["guru", "guru_bk"].includes(currentUser?.role ?? "");
+const canAccessKesiswaan = !isTeacherRole
+  || teacherAdditionalRoles.includes("Wakasek Kesiswaan");
 const isDashboard = activePage === "Dashboard";
-
-const roleAllowedPages = roleAccess[currentUser?.role ?? ""] ?? [
-  "Dashboard",
+const jobSpecificPages = [
+  ...(isTeacherRole && teacherAdditionalRoles.includes("Wakasek Kesiswaan")
+    ? ["Kesiswaan"]
+    : []),
+  ...( ["guru", "guru_bk"].includes(currentUser?.role ?? "")
+    && teacherAdditionalRoles.includes("Wakasek Sarana dan Prasarana")
+    ? ["Inventaris"]
+    : []),
 ];
+const roleAllowedPages = [...new Set([
+  ...(roleAccess[currentUser?.role ?? ""] ?? [
+  "Dashboard",
+  ]),
+  ...jobSpecificPages,
+])];
 const isSuperAdmin = currentUser?.role === "super_admin";
 const showAttendanceAndLettersDashboard = [
   "guru",
@@ -2127,8 +2208,17 @@ const showAttendanceAndLettersDashboard = [
   "tendik",
 ].includes(currentUser?.role ?? "");
 const allowedPages = roleAllowedPages.filter((name) =>
-  name === "Dashboard" || name === "Pengaturan" || isSuperAdmin || moduleEnabledOverrides[name] !== false
+  (name !== "Kesiswaan" || canAccessKesiswaan)
+  && (name !== "Inventaris"
+    || !["guru", "guru_bk"].includes(currentUser?.role ?? "")
+    || teacherAdditionalRoles.includes("Wakasek Sarana dan Prasarana"))
+  && (name === "Dashboard" || name === "Pengaturan" || isSuperAdmin || moduleEnabledOverrides[name] !== false)
 );
+useEffect(() => {
+  if (activePage !== "Dashboard" && !allowedPages.includes(activePage)) {
+    setActivePage("Dashboard");
+  }
+}, [activePage, allowedPages]);
 const quickActions = (dashboardQuickActions[currentUser?.role ?? ""] ?? [])
   .filter((action) => allowedPages.includes(action.module));
 const activityItems: DashboardActivity[] = dashboardActivities.length
@@ -2492,12 +2582,12 @@ if (activePage === "Absensi Digital") {
 const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "Data Induk": <DataInduk userRole={currentUser.role} />,
   "Perpustakaan": <Perpustakaan userRole={currentUser.role} userId={currentUser.id} username={currentUser.username} />,
-  "Inventaris": <Inventaris userRole={currentUser.role} />,
+  "Inventaris": <Inventaris userRole={currentUser.role} additionalRoles={currentUser.additional_roles} />,
   "Keuangan": <KeuanganDigital userRole={currentUser.role} />,
   "Persuratan": <PersuratanModule currentUser={currentUser} onBack={() => setActivePage(letterReturnPage)} initialStudentPrefill={parentLetterPrefill} onStudentPrefillHandled={handleStudentPrefillHandled} />,
   "Akademik": <Akademik currentUser={currentUser} userRole={currentUser.role} />,
   "SMAVEN Learn": <SmavenLearn currentUser={currentUser} userRole={currentUser.role} userName={currentUser.full_name} />,
-  "Kesiswaan": <KesiswaanBK key="kesiswaan" currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" onOpenParentLetter={openParentLetter} />,
+  "Kesiswaan": <KesiswaanBK key="kesiswaan" currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" canAccessKesiswaan={canAccessKesiswaan} onOpenParentLetter={openParentLetter} />,
   "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" onOpenParentLetter={openParentLetter} />,
   "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} />,
   "Laporan & Analitik": <LaporanAnalitik userRole={currentUser.role} />,
@@ -2969,7 +3059,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
      </motion.div>
 ) : activePage === "Kesiswaan" ? (
      <motion.div key="kesiswaan" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" onOpenParentLetter={openParentLetter} />
+       <KesiswaanBK currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" canAccessKesiswaan={canAccessKesiswaan} onOpenParentLetter={openParentLetter} />
      </motion.div>
 ) : activePage === "Bimbingan dan Konseling" ? (
      <motion.div key="bimbingan-konseling" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>

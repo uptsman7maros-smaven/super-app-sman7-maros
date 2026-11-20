@@ -28,8 +28,10 @@ const date = (v?:string|null) => v ? new Date(v).toLocaleDateString("id-ID") : "
 const money = (v?:number|null) => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(v||0);
 function csv<T extends object>(name:string, rows:T[]) { const keys=rows.length?Object.keys(rows[0]):[]; const body=[keys.join(","),...rows.map(row=>{const values=new Map(Object.entries(row));return keys.map(key=>`"${String(values.get(key)??"").replace(/"/g,'""')}"`).join(",")})].join("\r\n"); const url=URL.createObjectURL(new Blob(["\ufeff"+body],{type:"text/csv;charset=utf-8"})); const a=document.createElement("a");a.href=url;a.download=name;a.click();URL.revokeObjectURL(url); }
 
-export default function InventarisDigital({ userRole = "" }: { userRole?: string }) {
- const canManageInventory=["super_admin","operator","kepala_tata_usaha"].includes(userRole);
+export default function InventarisDigital({ userRole = "", additionalRoles = [] }: { userRole?: string; additionalRoles?: string[] }) {
+ const isTeacherRole=["guru","guru_bk"].includes(userRole);
+ const hasInventoryAccess=!isTeacherRole||additionalRoles.includes("Wakasek Sarana dan Prasarana");
+ const canManageInventory=["super_admin","operator","kepala_tata_usaha"].includes(userRole)||(isTeacherRole&&hasInventoryAccess);
  const canLinkFinance=["super_admin","kepala_tata_usaha"].includes(userRole);
  const [tab,setTab]=useState<Tab>("Ringkasan"),[assets,setAssets]=useState<Asset[]>([]),[places,setPlaces]=useState<Place[]>([]),[issues,setIssues]=useState<Issue[]>([]),[loans,setLoans]=useState<Loan[]>([]),[history,setHistory]=useState<HistoryEntry[]>([]);
  const [financeTransactions,setFinanceTransactions]=useState<FinanceLink[]>([]),[financeBudgets,setFinanceBudgets]=useState<FinanceLink[]>([]);
@@ -57,7 +59,7 @@ export default function InventarisDigital({ userRole = "" }: { userRole?: string
    }
   }
  },[canLinkFinance]);
- useEffect(()=>{const timer=window.setTimeout(()=>{void load()},0);return()=>window.clearTimeout(timer)},[load]);
+ useEffect(()=>{if(!hasInventoryAccess)return;const timer=window.setTimeout(()=>{void load()},0);return()=>window.clearTimeout(timer)},[hasInventoryAccess,load]);
  const audit=async(action:string,details:string)=>{try{await logAppActivity({action,moduleKey:"Inventaris",details})}catch(auditError){setAuditWarning(`Data tersimpan, tetapi audit aktivitas gagal: ${auditError instanceof Error?auditError.message:String(auditError)}`)}};
  const record=async(asset:Asset|null,action:string,details:string)=>{const r=await supabase.from("inv_history").insert({asset_id:asset?.id||null,asset_code:asset?.asset_code||null,asset_name:asset?.name||"Aset/fasilitas",action,details});if(r.error)throw r.error;await audit(action,details)};
  const filtered=useMemo(()=>assets.filter(a=>(!search||[a.asset_code,a.name,a.category,a.building_name,a.room_name].some(v=>(v||"").toLowerCase().includes(search.toLowerCase())))&&(condition==="Semua"||a.condition===condition)),[assets,search,condition]);
@@ -71,6 +73,7 @@ export default function InventarisDigital({ userRole = "" }: { userRole?: string
  const edit=(a:Asset)=>{setSelected(a);setAf({asset_code:a.asset_code,name:a.name,category:a.category||"Lainnya",condition:a.condition,status:a.status,building_name:a.building_name||"",room_name:a.room_name||"",acquisition_date:a.acquisition_date||"",acquisition_value:String(a.acquisition_value||""),serial_number:a.serial_number||"",notes:a.notes||"",finance_transaction_id:a.finance_transaction_id||"",budget_id:a.budget_id||""});setModal("asset")};
  const qr=(a:Asset)=>{setSelected(a);setModal("qr")};
  const stats=[{label:"Total Aset",value:assets.length,icon:Package,color:"violet"},{label:"Kondisi Baik",value:assets.filter(a=>a.condition==="Baik").length,icon:ShieldCheck,color:"green"},{label:"Sedang Dipinjam",value:loans.filter(l=>l.status==="Dipinjam").length,icon:ArrowLeftRight,color:"blue"},{label:"Perlu Penanganan",value:issues.filter(i=>i.status!=="Selesai").length,icon:AlertTriangle,color:"orange"}];
+ if(!hasInventoryAccess)return <section className="module-access-denied" role="alert"><h2>Akses tidak tersedia</h2><p>Modul Inventaris hanya dapat diakses guru yang memiliki jabatan Wakasek Sarana dan Prasarana.</p></section>;
  return <div className={`inv-shell${canManageInventory?"":" inv-read-only"}`}>
   <div className="inv-hero"><div className="inv-hero-copy"><span className="inv-eyebrow">SUPPORT OPERASIONAL SEKOLAH</span><h1>Inventaris <span>Digital</span></h1><p>Kelola aset, ruang, peminjaman, pemeliharaan, dan berita acara SMAN 7 Maros dalam satu tempat.</p><div className="inv-hero-actions"><button className="inv-btn inv-btn-light" onClick={()=>{setSelected(null);setAf({...blankAsset});setModal("asset")}}><Plus size={17}/> Tambah Aset</button><button className="inv-btn inv-btn-glass" onClick={()=>csv("inventaris-sman7-maros.csv",assets)}><Download size={17}/> Ekspor Data</button></div></div><div className="inv-hero-art"><div className="inv-art-ring"/><div className="inv-art-card"><Package size={48}/><strong>ASET SEKOLAH</strong><small>Terdata • Terpantau • Terawat</small></div><span className="inv-art-dot dot-one"/><span className="inv-art-dot dot-two"/></div></div>
   {error&&<div className="inv-alert error"><AlertTriangle size={18}/><span>{error}</span><button onClick={()=>setError("")}><X size={16}/></button></div>}{auditWarning&&<div className="inv-alert error"><AlertTriangle size={18}/><span>{auditWarning}</span><button onClick={()=>setAuditWarning("")}><X size={16}/></button></div>}{notice&&<div className="inv-alert success"><ShieldCheck size={18}/><span>{notice}</span><button onClick={()=>setNotice("")}><X size={16}/></button></div>}

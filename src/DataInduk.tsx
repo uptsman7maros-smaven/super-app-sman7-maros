@@ -1,11 +1,16 @@
 import { getValidSupabaseSession, supabase } from "./lib/supabase";
 import {
   createManagedUser,
+  deleteMasterRecords,
   getManagedUsers,
+  syncStudentManagedAccount,
+  syncStudentManagedAccounts,
+  syncTeacherManagedAccount,
   type ManagedUser,
 } from "./lib/manageUsers";
 import { logAppActivity } from "./services/activityLogService";
 import DataIndukSekolahPanel from "./DataIndukSekolahPanel";
+import "./DataInduk.css";
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { createPortal } from "react-dom";
@@ -62,9 +67,20 @@ type Student = {
   class: { name: string } | null;
 };
 
-type Teacher = { id: string; profile_id: string | null; nip: string | null; full_name: string; employment_status: string | null };
+type Teacher = {
+  id: string;
+  profile_id: string | null;
+  nip: string | null;
+  full_name: string;
+  employment_status: string | null;
+  staff_category: string | null;
+  primary_role: string | null;
+  additional_roles: string[];
+  bk_class_ids: string[];
+};
 type TeacherSubjectAssignment = { id: string; teacher_id: string; class_id: string; subject: string };
 type TeacherAssignmentSummary = Pick<TeacherSubjectAssignment, "teacher_id" | "class_id" | "subject">;
+type TeacherFormAssignment = Pick<TeacherSubjectAssignment, "class_id" | "subject">;
 type TeacherHomeroomSummary = { id: string; name: string; homeroom_teacher_id: string | null };
 type AcademicYear = { id: string; name: string; is_active: boolean; start_date: string | null; end_date: string | null };
 type ClassRow = { id: string; name: string; grade_level: number; academic_year_id: string; homeroom_teacher_id: string | null; academic_year_name: string; homeroom_teacher_name: string; student_count: number };
@@ -262,7 +278,12 @@ type StudentForm = {
 type TeacherForm = {
   nip: string;
   full_name: string;
-  employment_status: string;
+  staff_category: "Guru" | "Tenaga Kependidikan";
+  primary_role: string;
+  additional_roles: string[];
+  homeroom_class_id: string;
+  bk_class_ids: string[];
+  subject_assignments: TeacherFormAssignment[];
 };
 
 const emptyStudentForm: StudentForm = {
@@ -278,23 +299,62 @@ const emptyStudentForm: StudentForm = {
 const emptyTeacherForm: TeacherForm = {
   nip: "",
   full_name: "",
-  employment_status: "",
+  staff_category: "Guru",
+  primary_role: "Guru Mata Pelajaran",
+  additional_roles: [],
+  homeroom_class_id: "",
+  bk_class_ids: [],
+  subject_assignments: [],
 };
 
 const teacherPositionOptions = [
   "Guru Mata Pelajaran",
-  "Guru BK / Konselor",
+  "Guru BK",
+  "Kepala Sekolah",
+  "Kepala Tata Usaha",
+  "Staff Tata Usaha",
+  "Bendahara Pengeluaran",
+  "Operator Sekolah",
+  "Tendik Lainnya",
+];
+
+const teacherAdditionalRoleOptions = [
   "Wakasek Kurikulum",
   "Wakasek Kesiswaan",
   "Wakasek Sarana dan Prasarana",
   "Wakasek Humas",
+];
+
+const staffPositionOptions = [
   "Kepala Sekolah",
   "Kepala Tata Usaha",
-  "Bendahara Pengeluaran",
-  "Bendahara",
   "Staff Tata Usaha",
-  "Tenaga Kependidikan (Tendik)",
+  "Bendahara Pengeluaran",
+  "Operator Sekolah",
+  "Tendik Lainnya",
 ];
+
+function teacherStaffCategory(teacher: Teacher) {
+  return teacher.staff_category
+    ?? (/guru|wakasek/i.test(teacher.employment_status ?? "") ? "Guru" : "Tenaga Kependidikan");
+}
+
+function teacherPrimaryRole(teacher: Teacher) {
+  if (teacher.primary_role) return teacher.primary_role;
+  if (teacher.employment_status === "Guru BK / Konselor") return "Guru BK";
+  if (teacher.employment_status && teacherAdditionalRoleOptions.includes(teacher.employment_status)) {
+    return "Guru Mata Pelajaran";
+  }
+  return teacher.employment_status ?? "Guru Mata Pelajaran";
+}
+
+function teacherAdditionalRoles(teacher: Teacher) {
+  const savedRoles = Array.isArray(teacher.additional_roles) ? teacher.additional_roles : [];
+  if (savedRoles.length) return savedRoles;
+  return teacher.employment_status && teacherAdditionalRoleOptions.includes(teacher.employment_status)
+    ? [teacher.employment_status]
+    : [];
+}
 
 const subjectSuggestions = [
   "Matematika",
@@ -320,6 +380,7 @@ const subjectSuggestions = [
 
 const teacherRoleForPosition = (position: string | null) => {
   switch (position) {
+    case "Guru BK":
     case "Guru BK / Konselor":
       return "guru_bk";
     case "Kepala Sekolah":
@@ -328,6 +389,12 @@ const teacherRoleForPosition = (position: string | null) => {
       return "kepala_tata_usaha";
     case "Staff Tata Usaha":
       return "staff_tata_usaha";
+    case "Bendahara Pengeluaran":
+    case "Bendahara":
+      return "bendahara";
+    case "Operator Sekolah":
+      return "operator";
+    case "Tendik Lainnya":
     case "Tenaga Kependidikan (Tendik)":
       return "tendik";
     default:
@@ -426,6 +493,7 @@ type DataIndukProps = { userRole?: string };
 export default function DataInduk({ userRole = "" }: DataIndukProps) {
   const canManageDataInduk = ["super_admin", "operator"].includes(userRole);
   const canDeleteMasterData = userRole === "super_admin";
+  const canDeletePeopleData = ["super_admin", "operator"].includes(userRole);
   const [activeMenu, setActiveMenu] =
     useState<MenuDataInduk>("siswa");
   const [search, setSearch] = useState("");
@@ -484,6 +552,8 @@ const [creatingStudentAccountId, setCreatingStudentAccountId] = useState<string 
 const [showTeacherForm, setShowTeacherForm] = useState(false);
 const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
 const [teacherForm, setTeacherForm] = useState<TeacherForm>(emptyTeacherForm);
+const [teacherFormAssignmentSubject, setTeacherFormAssignmentSubject] = useState("");
+const [teacherFormAssignmentClassId, setTeacherFormAssignmentClassId] = useState("");
 const [savingTeacher, setSavingTeacher] = useState(false);
 const [teacherFormError, setTeacherFormError] = useState("");
 const [assignmentTeacher, setAssignmentTeacher] = useState<Teacher | null>(null);
@@ -495,7 +565,7 @@ const [newAssignmentSubject, setNewAssignmentSubject] = useState("");
 const [newAssignmentClassId, setNewAssignmentClassId] = useState("");
 
 const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
-const [classTeacherOptions, setClassTeacherOptions] = useState<Array<Pick<Teacher, "id" | "profile_id" | "full_name">>>([]);
+const [classTeacherOptions, setClassTeacherOptions] = useState<Array<Pick<Teacher, "id" | "profile_id" | "full_name" | "staff_category" | "primary_role">>>([]);
 const [classRows, setClassRows] = useState<ClassRow[]>([]);
 const [classLoading, setClassLoading] = useState(false);
 const [classReloadVersion, setClassReloadVersion] = useState(0);
@@ -866,6 +936,14 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
 
       throw result.error;
     }
+    let accountSyncWarning = "";
+    if (editingStudent && editingStudent.status !== studentForm.status) {
+      try {
+        await syncStudentManagedAccount(result.data.id);
+      } catch (error) {
+        accountSyncWarning = ` Status Data Induk tersimpan, tetapi sinkronisasi login gagal: ${formatSupabaseError(error)}`;
+      }
+    }
     const auditWarning = await logMasterChange(
       editingStudent ? "Data siswa diperbarui" : "Data siswa ditambahkan",
       `${full_name} · NISN ${nisn}`,
@@ -894,10 +972,10 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
     setStudents((data ?? []) as unknown as Student[]);
     setStudentNotice(
       auditWarning
-        ? `Data tersimpan, tetapi audit aktivitas gagal: ${auditWarning}`
+        ? `Data tersimpan, tetapi audit aktivitas gagal: ${auditWarning}${accountSyncWarning}`
         : editingStudent
-          ? "Data siswa berhasil diperbarui."
-          : "Data siswa berhasil ditambahkan."
+          ? `Data siswa berhasil diperbarui.${accountSyncWarning}`
+          : `Data siswa berhasil ditambahkan.${accountSyncWarning}`
     );
     setShowStudentForm(false);
     setEditingStudent(null);
@@ -960,7 +1038,9 @@ useEffect(() => {
       setTeacherSummaryError("");
       try {
         const [teacherResult, assignmentResult, classResult] = await Promise.all([
-          supabase.from("teachers").select("id, profile_id, nip, full_name, employment_status").order("full_name"),
+          supabase.from("teachers")
+            .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
+            .order("full_name"),
           supabase.from("attendance_teacher_subject_assignments").select("teacher_id, class_id, subject"),
           supabase.from("classes").select("id, name, homeroom_teacher_id"),
         ]);
@@ -1007,33 +1087,22 @@ useEffect(() => {
     );
   };
 
-  const getTeacherAccountStatus = (teacher: Teacher) => {
-    if (teacher.profile_id) return "Akun Terhubung";
-    if (userRole !== "super_admin") return "Status akun khusus Super Admin";
-    if (!teacherAccounts) {
-      return teacherAccountError
-        ? "Status akun belum dapat diverifikasi"
-        : "Memeriksa akun...";
-    }
-
-    const existing = getTeacherManagedAccount(teacher);
-    if (existing?.role === "siswa") return "NIP digunakan akun siswa";
-    return existing ? "Akun tersedia, belum ditautkan" : "Belum terhubung ke akun";
-  };
-
   const filteredTeachers = teachers.filter((teacher) => {
     const keyword = search.trim().toLowerCase();
-    const matchesSearch = `${teacher.nip ?? ""} ${teacher.full_name} ${teacher.employment_status ?? ""}`
+    const primaryRole = teacherPrimaryRole(teacher);
+    const extraRoles = teacherAdditionalRoles(teacher).filter((role) => role !== "Wali Kelas");
+    const matchesSearch = `${teacher.nip ?? ""} ${teacher.full_name} ${primaryRole} ${extraRoles.join(" ")}`
       .toLowerCase()
       .includes(keyword);
     const matchesPosition = teacherFilterPosition === "all"
-      || teacher.employment_status === teacherFilterPosition;
+      || primaryRole === teacherFilterPosition
+      || extraRoles.includes(teacherFilterPosition);
     const hasSubjectAssignment = teacherAssignmentSummary.some((assignment) => assignment.teacher_id === teacher.id);
     const account = getTeacherManagedAccount(teacher);
     const hasAccount = Boolean(teacher.profile_id || account);
     const matchesStatus = teacherFilterStatus === "all"
       || (teacherFilterStatus === "no-subject"
-          ? !teacherSummaryError && teacher.employment_status === "Guru Mata Pelajaran" && !hasSubjectAssignment
+          ? !teacherSummaryError && primaryRole === "Guru Mata Pelajaran" && !hasSubjectAssignment
         : userRole === "super_admin" && !hasAccount);
     return matchesSearch && matchesPosition && matchesStatus;
   });
@@ -1050,6 +1119,9 @@ useEffect(() => {
         ? filteredClasses.map((row) => row.id)
         : [];
   const selectedMasterIdSet = new Set(selectedMasterIds);
+  const canDeleteCurrentMenu = activeMenu === "kelas"
+    ? canDeleteMasterData
+    : canDeletePeopleData;
   const allVisibleMasterRowsSelected = selectableMasterIds.length > 0
     && selectableMasterIds.every((id) => selectedMasterIdSet.has(id));
   const someVisibleMasterRowsSelected = selectableMasterIds.some((id) => selectedMasterIdSet.has(id));
@@ -1096,6 +1168,9 @@ useEffect(() => {
       if (existing?.role === "siswa") {
         throw new Error("NIP ini sudah digunakan oleh akun siswa. Tautan dibatalkan agar data guru tidak terhubung ke akun yang salah.");
       }
+      if (existing?.role === "super_admin") {
+        throw new Error("Akun Super Admin dilindungi dan tidak dapat ditautkan sebagai guru/tendik.");
+      }
       if (teacher.profile_id && existing && teacher.profile_id !== existing.id) {
         throw new Error("Data guru sudah tertaut ke akun lain.");
       }
@@ -1103,14 +1178,14 @@ useEffect(() => {
       const managedUser = existing ?? await createManagedUser({
         username: nip,
         full_name: teacher.full_name,
-        role: teacherRoleForPosition(teacher.employment_status),
+        role: teacherRoleForPosition(teacherPrimaryRole(teacher)),
         password: nip,
       });
       const { data, error } = await supabase
         .from("teachers")
         .update({ profile_id: managedUser.id })
         .eq("id", teacher.id)
-        .select("id, profile_id, nip, full_name, employment_status")
+        .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
         .single();
       if (error) {
         if (!existing) {
@@ -1127,18 +1202,26 @@ useEffect(() => {
       }
 
       const savedTeacher = data as Teacher;
+      let roleSyncWarning = "";
+      try {
+        await syncTeacherManagedAccount(savedTeacher.id);
+      } catch (error) {
+        roleSyncWarning = ` Akun tertaut, tetapi sinkronisasi jabatan gagal: ${formatSupabaseError(error)}`;
+      }
       setTeachers((current) => current.map((item) =>
         item.id === savedTeacher.id ? savedTeacher : item
       ));
       setTeacherAccounts(existing
-        ? currentUsers
-        : [...currentUsers, { ...managedUser, created_at: new Date().toISOString() }]);
+        ? currentUsers.map((user) => user.id === managedUser.id
+          ? { ...user, full_name: savedTeacher.full_name, role: teacherRoleForPosition(teacherPrimaryRole(savedTeacher)) }
+          : user)
+        : [...currentUsers, { ...managedUser, role: teacherRoleForPosition(teacherPrimaryRole(savedTeacher)), created_at: new Date().toISOString() }]);
       const auditWarning = await logMasterChange(
         existing ? "Akun guru/tendik ditautkan" : "Akun guru/tendik dibuat",
         `${teacher.full_name} · NIP ${nip} · peran ${managedUser.role}`,
       );
       setMasterNotice(
-        `${existing ? "Akun yang sudah ada berhasil ditautkan" : "Akun berhasil dibuat dan ditautkan"}.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+        `${existing ? "Akun yang sudah ada berhasil ditautkan" : "Akun berhasil dibuat dan ditautkan"}.${roleSyncWarning}${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
       );
     } catch (error) {
       setTeacherAccountError(`Akun guru/tendik gagal dibuat atau ditautkan: ${formatSupabaseError(error)}`);
@@ -1264,7 +1347,9 @@ useEffect(() => {
         const [c, y, t, st] = await Promise.all([
           supabase.from("classes").select("id, name, grade_level, academic_year_id, homeroom_teacher_id").order("grade_level").order("name"),
         supabase.from("academic_years").select("id, name, is_active, start_date, end_date").order("start_date", { ascending: false }),
-        supabase.from("teachers").select("id, profile_id, full_name").not("profile_id", "is", null),
+        supabase.from("teachers")
+          .select("id, profile_id, full_name, staff_category, primary_role")
+          .not("profile_id", "is", null),
           supabase.from("students").select("class_id")
         ]);
         if (cancelled) return;
@@ -1272,7 +1357,11 @@ useEffect(() => {
         if (error) throw error;
         const years = y.data ?? [];
         setAcademicYears(years as AcademicYear[]);
-        setClassTeacherOptions((t.data ?? []) as Array<Pick<Teacher, "id" | "profile_id" | "full_name">>);
+        setClassTeacherOptions(
+          (t.data ?? []).filter((teacher) =>
+            teacher.staff_category === "Guru" && teacher.primary_role === "Guru Mata Pelajaran"
+          ) as Array<Pick<Teacher, "id" | "profile_id" | "full_name" | "staff_category" | "primary_role">>,
+        );
         const teacherNames = new Map((t.data ?? []).filter(x => x.profile_id).map(x => [x.profile_id as string, x.full_name]));
         const yearNames = new Map(years.map(x => [x.id, x.name]));
         const counts = new Map<string, number>();
@@ -1321,24 +1410,54 @@ useEffect(() => {
 
     const nip = teacherForm.nip.trim();
     const full_name = teacherForm.full_name.trim();
-    const employment_status = teacherForm.employment_status.trim();
+    const primary_role = teacherForm.primary_role.trim();
     if (!full_name) {
       setTeacherFormError("Nama lengkap wajib diisi.");
       return;
     }
-    if (!employment_status) {
+    if (!primary_role) {
       setTeacherFormError("Jabatan wajib dipilih.");
+      return;
+    }
+    if (
+      teacherForm.staff_category === "Tenaga Kependidikan" &&
+      !staffPositionOptions.includes(primary_role)
+    ) {
+      setTeacherFormError("Pilih jabatan Tenaga Kependidikan yang tersedia.");
+      return;
+    }
+    if (
+      teacherForm.staff_category === "Guru" &&
+      !["Guru Mata Pelajaran", "Guru BK"].includes(primary_role)
+    ) {
+      setTeacherFormError("Pilih jabatan Guru Mata Pelajaran atau Guru BK.");
       return;
     }
 
     setSavingTeacher(true);
     setMasterNotice("");
+    let masterRecordSaved = false;
 
     try {
+      const additional_roles = teacherForm.staff_category === "Guru"
+        ? [
+            ...teacherForm.additional_roles.filter((role) => teacherAdditionalRoleOptions.includes(role)),
+            ...(primary_role === "Guru Mata Pelajaran" && teacherForm.homeroom_class_id
+              ? ["Wali Kelas"]
+              : []),
+          ]
+        : [];
+      const bk_class_ids = primary_role === "Guru BK"
+        ? teacherForm.bk_class_ids
+        : [];
       const payload = {
         nip: nip || null,
         full_name,
-        employment_status: employment_status || null,
+        staff_category: teacherForm.staff_category,
+        primary_role,
+        additional_roles: [...new Set(additional_roles)],
+        bk_class_ids: [...new Set(bk_class_ids)],
+        employment_status: primary_role,
         updated_at: new Date().toISOString(),
       };
       const result = editingTeacher
@@ -1346,25 +1465,57 @@ useEffect(() => {
             .from("teachers")
             .update(payload)
             .eq("id", editingTeacher.id)
-            .select("id, profile_id, nip, full_name, employment_status")
+            .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
             .single()
         : await supabase
             .from("teachers")
             .insert(payload)
-            .select("id, profile_id, nip, full_name, employment_status")
+            .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
             .single();
 
       if (result.error) throw result.error;
       const savedTeacher = result.data as Teacher;
-      const auditWarning = await logMasterChange(
-        editingTeacher ? "Data guru/tendik diperbarui" : "Data guru/tendik ditambahkan",
-        `${savedTeacher.full_name}${savedTeacher.nip ? ` · NIP ${savedTeacher.nip}` : ""}`,
-      );
+      masterRecordSaved = true;
       setTeachers((previous) =>
         [
           ...previous.filter((teacher) => teacher.id !== savedTeacher.id),
           savedTeacher,
         ].sort((a, b) => a.full_name.localeCompare(b.full_name)),
+      );
+
+      if (savedTeacher.profile_id || nip) {
+        await syncTeacherManagedAccount(savedTeacher.id);
+      }
+
+      const { error: homeroomError } = await supabase.rpc("set_teacher_homeroom_class", {
+        p_teacher_id: savedTeacher.id,
+        p_class_id: primary_role === "Guru Mata Pelajaran" && teacherForm.homeroom_class_id
+          ? teacherForm.homeroom_class_id
+          : null,
+      });
+      if (homeroomError) throw homeroomError;
+
+      const { error: subjectAssignmentError } = await supabase.rpc("replace_teacher_subject_assignments", {
+        p_teacher_id: savedTeacher.id,
+        p_assignments: primary_role === "Guru Mata Pelajaran"
+          ? teacherForm.subject_assignments
+          : [],
+      });
+      if (subjectAssignmentError) throw subjectAssignmentError;
+
+      setTeacherAssignmentSummary((current) => [
+        ...current.filter((assignment) => assignment.teacher_id !== savedTeacher.id),
+        ...(primary_role === "Guru Mata Pelajaran"
+          ? teacherForm.subject_assignments.map((assignment) => ({
+              ...assignment,
+              teacher_id: savedTeacher.id,
+            }))
+          : []),
+      ]);
+      setClassReloadVersion((version) => version + 1);
+      const auditWarning = await logMasterChange(
+        editingTeacher ? "Data guru/tendik diperbarui" : "Data guru/tendik ditambahkan",
+        `${savedTeacher.full_name}${savedTeacher.nip ? ` · NIP ${savedTeacher.nip}` : ""}`,
       );
       setMasterNotice(
         auditWarning
@@ -1376,9 +1527,13 @@ useEffect(() => {
       setShowTeacherForm(false);
       setEditingTeacher(null);
       setTeacherForm(emptyTeacherForm);
+      setTeacherFormAssignmentSubject("");
+      setTeacherFormAssignmentClassId("");
     } catch (error) {
       setTeacherFormError(
-        `Gagal ${editingTeacher ? "memperbarui" : "menambahkan"} data: ${formatSupabaseError(error)}`,
+        masterRecordSaved
+          ? `Data tersimpan, tetapi sinkronisasi jabatan/penugasan gagal: ${formatSupabaseError(error)}. Simpan ulang setelah memperbaiki masalah ini.`
+          : `Gagal ${editingTeacher ? "memperbarui" : "menambahkan"} data: ${formatSupabaseError(error)}`,
       );
     } finally {
       setSavingTeacher(false);
@@ -1387,26 +1542,65 @@ useEffect(() => {
 
   const handleEditTeacher = (teacher: Teacher) => {
     setEditingTeacher(teacher);
+    const staffCategory = teacherStaffCategory(teacher);
+    const primaryRole = teacherPrimaryRole(teacher);
+    const homeroomClasses = teacherHomeroomSummary.filter(
+      (item) => item.homeroom_teacher_id === teacher.profile_id,
+    );
     setTeacherForm({
       nip: teacher.nip ?? "",
       full_name: teacher.full_name,
-      employment_status: teacher.employment_status ?? "",
+      staff_category: staffCategory === "Tenaga Kependidikan" ? "Tenaga Kependidikan" : "Guru",
+      primary_role: primaryRole,
+      additional_roles: teacherAdditionalRoles(teacher).filter((role) => teacherAdditionalRoleOptions.includes(role)),
+      homeroom_class_id: homeroomClasses.length === 1 ? homeroomClasses[0].id : "",
+      bk_class_ids: Array.isArray(teacher.bk_class_ids) ? teacher.bk_class_ids : [],
+      subject_assignments: teacherAssignmentSummary
+        .filter((assignment) => assignment.teacher_id === teacher.id)
+        .map(({ class_id, subject }) => ({ class_id, subject })),
     });
+    setTeacherFormAssignmentSubject("");
+    setTeacherFormAssignmentClassId("");
     setTeacherFormError("");
     setMasterNotice("");
     setShowTeacherForm(true);
   };
 
   const handleDeleteTeacher = async (teacher: Teacher) => {
+    if (!canDeletePeopleData) return;
     if (!window.confirm(`Hapus data ${teacher.full_name}?`)) return;
-    const { error } = await supabase.from("teachers").delete().eq("id", teacher.id);
-    if (error) { alert(`Gagal menghapus. Pastikan akun Anda memiliki izin super_admin. Detail: ${error.message}`); return; }
+    let accountDeleted = false;
+    let accountFound = false;
+    try {
+      const [result] = await deleteMasterRecords("teachers", [teacher.id]);
+      accountDeleted = result.accountDeleted;
+      accountFound = Boolean(result.accountFound);
+      if (result.masterRecordDeleted) {
+        setTeachers((current) => current.filter((item) => item.id !== teacher.id));
+        setTeacherAssignmentSummary((current) => current.filter((item) => item.teacher_id !== teacher.id));
+        setClassReloadVersion((version) => version + 1);
+      }
+      if (!result.deleted) {
+        setMasterNotice(result.error ?? "Penghapusan data guru/tendik belum selesai.");
+        return;
+      }
+    } catch (error) {
+      alert(`Gagal menghapus data guru/tendik: ${formatSupabaseError(error)}`);
+      return;
+    }
     const auditWarning = await logMasterChange(
       "Data guru/tendik dihapus",
       `${teacher.full_name}${teacher.nip ? ` · NIP ${teacher.nip}` : ""}`,
     );
-    if (auditWarning) setMasterNotice(`Data terhapus, tetapi audit gagal: ${auditWarning}`);
-    setTeachers(prev => prev.filter(x => x.id !== teacher.id));
+    setMasterNotice(auditWarning
+      ? `Data guru/tendik berhasil dihapus, tetapi audit gagal: ${auditWarning}`
+      : `Data guru/tendik berhasil dihapus. ${
+          accountDeleted
+            ? "Akun yang tertaut ikut dihapus."
+            : accountFound
+              ? "Akun terkait tidak dihapus karena bukan akun guru/tendik."
+              : "Tidak ada akun pengguna tertaut."
+        }`);
   };
 
   const handleAddClass = () => {
@@ -1464,12 +1658,39 @@ useEffect(() => {
         name,
         grade_level,
         academic_year_id: year.id,
-        homeroom_teacher_id: classForm.homeroom_teacher_id || null,
+        homeroom_teacher_id: null,
       };
       const result = editingClass
         ? await supabase.from("classes").update(payload).eq("id", editingClass.id).select("id").single()
         : await supabase.from("classes").insert(payload).select("id").single();
       if (result.error) throw result.error;
+
+      const selectedTeacher = classTeacherOptions.find(
+        (teacher) => teacher.profile_id === classForm.homeroom_teacher_id,
+      );
+      const previousTeacher = classTeacherOptions.find(
+        (teacher) => teacher.profile_id === editingClass?.homeroom_teacher_id,
+      );
+      if (previousTeacher && previousTeacher.id !== selectedTeacher?.id) {
+        const { error } = await supabase.rpc("set_teacher_homeroom_class", {
+          p_teacher_id: previousTeacher.id,
+          p_class_id: null,
+        });
+        if (error) throw error;
+      } else if (editingClass?.homeroom_teacher_id && !previousTeacher) {
+        const { error } = await supabase
+          .from("classes")
+          .update({ homeroom_teacher_id: null })
+          .eq("id", result.data.id);
+        if (error) throw error;
+      }
+      if (selectedTeacher) {
+        const { error } = await supabase.rpc("set_teacher_homeroom_class", {
+          p_teacher_id: selectedTeacher.id,
+          p_class_id: result.data.id,
+        });
+        if (error) throw error;
+      }
 
       const auditWarning = await logMasterChange(
         editingClass ? "Data kelas diperbarui" : "Kelas ditambahkan",
@@ -1569,7 +1790,10 @@ useEffect(() => {
   };
 
   const handleDeleteSelectedMasterData = async () => {
-    if (!canDeleteMasterData || deletingSelectedMasterData) return;
+    if (
+      deletingSelectedMasterData ||
+      (activeMenu === "kelas" ? !canDeleteMasterData : !canDeletePeopleData)
+    ) return;
     setSelectedMasterDeleteError("");
 
     const tableName = activeMenu === "siswa"
@@ -1608,9 +1832,9 @@ useEffect(() => {
     const names = selectedRows.map(rowName);
     const itemLabel = activeMenu === "siswa" ? "siswa" : activeMenu === "guru" ? "data guru/tendik" : "kelas";
     const relatedDataWarning = activeMenu === "siswa"
-      ? "\nAkun login/profil siswa tidak ikut dihapus. Data yang masih dirujuk layanan lain dapat menyebabkan penghapusan ditolak."
+      ? "\nAkun siswa yang terhubung melalui profile_id atau NISN juga akan dihapus. Akun Super Admin selalu dilindungi."
       : activeMenu === "guru"
-        ? "\nAkun login/profil guru tidak ikut dihapus. Data yang masih dirujuk layanan lain dapat menyebabkan penghapusan ditolak."
+        ? "\nAkun guru/tendik yang terhubung melalui profile_id atau NIP juga akan dihapus. Akun Super Admin selalu dilindungi."
         : "\nKelas dengan siswa tidak bisa dihapus. Data akademik atau layanan lain yang masih merujuk kelas juga dapat menolak penghapusan.";
     const namePreview = names.slice(0, 5).join(", ");
     const moreNames = names.length > 5 ? ` dan ${names.length - 5} lainnya` : "";
@@ -1621,26 +1845,31 @@ useEffect(() => {
     setDeletingSelectedMasterData(true);
     setMasterNotice("");
     try {
-      let deletedRows: Array<{ id: string }> | null = null;
-      let deleteError: { message: string } | null = null;
+      let deletedIds: string[] = [];
+      let partialErrors: string[] = [];
+      let deletedAccountCount = 0;
       if (tableName === "students") {
-        const result = await supabase.from("students").delete().in("id", selectedIds).select("id");
-        deletedRows = result.data;
-        deleteError = result.error;
+        const results = await deleteMasterRecords("students", selectedIds);
+        deletedIds = results.filter((result) => result.masterRecordDeleted).map((result) => result.id);
+        deletedAccountCount = results.filter((result) => result.accountDeleted).length;
+        partialErrors = results
+          .filter((result) => result.error)
+          .map((result) => `${names[selectedIds.indexOf(result.id)] ?? result.id}: ${result.error}`);
       } else if (tableName === "teachers") {
-        const result = await supabase.from("teachers").delete().in("id", selectedIds).select("id");
-        deletedRows = result.data;
-        deleteError = result.error;
+        const results = await deleteMasterRecords("teachers", selectedIds);
+        deletedIds = results.filter((result) => result.masterRecordDeleted).map((result) => result.id);
+        deletedAccountCount = results.filter((result) => result.accountDeleted).length;
+        partialErrors = results
+          .filter((result) => result.error)
+          .map((result) => `${names[selectedIds.indexOf(result.id)] ?? result.id}: ${result.error}`);
       } else {
         const result = await supabase.from("classes").delete().in("id", selectedIds).select("id");
-        deletedRows = result.data;
-        deleteError = result.error;
+        if (result.error) throw result.error;
+        deletedIds = (result.data ?? []).map((row) => row.id);
       }
-      if (deleteError) throw deleteError;
 
-      const deletedIds = (deletedRows ?? []).map((row) => row.id);
       if (!deletedIds.length) {
-        throw new Error("Tidak ada baris yang terhapus. Periksa hak akses Super Admin dan data yang masih terkait.");
+        throw new Error(partialErrors[0] ?? "Tidak ada data yang terhapus. Periksa hak akses dan data yang masih terkait.");
       }
       const deletedIdSet = new Set(deletedIds);
       if (tableName === "students") {
@@ -1662,11 +1891,13 @@ useEffect(() => {
         `${deletedIds.length} data: ${deletedNames.slice(0, 5).join(", ")}${deletedNames.length > 5 ? ` dan ${deletedNames.length - 5} lainnya` : ""}`,
       );
       setMasterNotice(
-        `${deletedIds.length} ${itemLabel} berhasil dihapus.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+        `${deletedIds.length} ${itemLabel} berhasil dihapus.${
+          deletedAccountCount ? ` ${deletedAccountCount} akun tertaut ikut dihapus.` : ""
+        }${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
       );
-      if (deletedIds.length !== selectedIds.length) {
+      if (deletedIds.length !== selectedIds.length || partialErrors.length) {
         setSelectedMasterDeleteError(
-          `Terhapus ${deletedIds.length} dari ${selectedIds.length} data. Data lain tidak dapat dihapus karena izin atau keterkaitan; periksa Riwayat Perubahan.`,
+          `Terhapus ${deletedIds.length} dari ${selectedIds.length} data.${partialErrors.length ? ` ${partialErrors.slice(0, 3).join(" ")}` : " Data lain tidak dapat dihapus karena izin atau keterkaitan; periksa Riwayat Perubahan."}`,
         );
       }
     } catch (error) {
@@ -1787,6 +2018,15 @@ useEffect(() => {
         if ((data ?? []).length !== selectedStudents.length) {
           throw new Error(`Server memperbarui ${(data ?? []).length} dari ${selectedStudents.length} siswa yang dipilih.`);
         }
+        let accountSyncWarning = "";
+        try {
+          const studentIds = selectedStudents.map((student) => student.id);
+          for (let index = 0; index < studentIds.length; index += 100) {
+            await syncStudentManagedAccounts(studentIds.slice(index, index + 100));
+          }
+        } catch (error) {
+          accountSyncWarning = ` Profil telah dinonaktifkan, tetapi sebagian sinkronisasi Auth gagal: ${formatSupabaseError(error)}`;
+        }
         const auditWarning = await logMasterChange(
           "Siswa diluluskan secara massal",
           `${selectedStudents.length} siswa dari ${sourceClass.name} · tingkat ${sourceClass.grade_level} · ${sourceYear.name}`,
@@ -1796,7 +2036,7 @@ useEffect(() => {
           graduatedIds.has(student.id) ? { ...student, status: "Graduated" } : student
         ));
         setMasterNotice(
-          `${selectedStudents.length} siswa berhasil ditandai Graduated.${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
+          `${selectedStudents.length} siswa berhasil ditandai Graduated.${accountSyncWarning}${auditWarning ? ` Audit aktivitas gagal: ${auditWarning}` : ""}`,
         );
         setClassReloadVersion((version) => version + 1);
         closeBulkMove();
@@ -1832,7 +2072,7 @@ useEffect(() => {
 
   const handleExportMaster = async () => {
     if (activeMenu === "siswa") return handleExportStudents();
-    const rows = activeMenu === "guru" ? teachers.filter(t => `${t.nip ?? ""} ${t.full_name} ${t.employment_status ?? ""}`.toLowerCase().includes(search.toLowerCase())).map(t => ({ NIP: t.nip ?? "", Nama: t.full_name, "Status Akun": getTeacherAccountStatus(t), Jabatan: t.employment_status ?? "" })) : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).map(c => ({ "Nama Kelas": c.name, Tingkat: c.grade_level, "Tahun Ajaran": c.academic_year_name, "Wali Kelas": c.homeroom_teacher_name, "Jumlah Siswa": c.student_count }));
+    const rows = activeMenu === "guru" ? teachers.filter(t => `${t.nip ?? ""} ${t.full_name} ${teacherPrimaryRole(t)} ${teacherAdditionalRoles(t).join(" ")}`.toLowerCase().includes(search.toLowerCase())).map(t => ({ NIP: t.nip ?? "", Nama: t.full_name, "Status Kepegawaian": teacherStaffCategory(t), "Jabatan Utama": teacherPrimaryRole(t), "Jabatan Tambahan": teacherAdditionalRoles(t).join(", ") })) : classRows.filter(c => `${c.name} ${c.academic_year_name} ${c.homeroom_teacher_name}`.toLowerCase().includes(search.toLowerCase())).map(c => ({ "Nama Kelas": c.name, Tingkat: c.grade_level, "Tahun Ajaran": c.academic_year_name, "Wali Kelas": c.homeroom_teacher_name, "Jumlah Siswa": c.student_count }));
     if (!rows.length) { alert("Tidak ada data untuk diekspor."); return; }
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), activeMenu === "guru" ? "Guru dan Tendik" : "Data Kelas");
     XLSX.writeFile(wb, activeMenu === "guru" ? "Data_Guru_Tendik_SMAN_7_Maros.xlsx" : "Data_Kelas_SMAN_7_Maros.xlsx");
@@ -3355,7 +3595,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
             onSubmit={handleSaveStudent}
             style={{
               width: "100%",
-              maxWidth: 560,
+              maxWidth: 700,
               maxHeight: "90vh",
               overflowY: "auto",
               background: "white",
@@ -3555,34 +3795,202 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
               required
             />
 
-            <label className="di-form-label" htmlFor="teacher-employment-status">
-              Jabatan
+            <label className="di-form-label" htmlFor="teacher-staff-category">
+              Status Kepegawaian
             </label>
             <select
-              id="teacher-employment-status"
+              id="teacher-staff-category"
               className="di-search"
-              value={teacherForm.employment_status}
-              onChange={(event) =>
+              value={teacherForm.staff_category}
+              onChange={(event) => {
+                const staffCategory = event.target.value as TeacherForm["staff_category"];
                 setTeacherForm({
-                  ...teacherForm,
-                  employment_status: event.target.value,
-                })
-              }
+                  ...emptyTeacherForm,
+                  nip: teacherForm.nip,
+                  full_name: teacherForm.full_name,
+                  staff_category: staffCategory,
+                  primary_role: staffCategory === "Guru" ? "Guru Mata Pelajaran" : "Tendik Lainnya",
+                });
+              }}
               required
             >
-              <option value="">Pilih jabatan</option>
-              {teacherForm.employment_status &&
-                !teacherPositionOptions.includes(teacherForm.employment_status) && (
-                  <option value={teacherForm.employment_status}>
-                    Jabatan saat ini: {teacherForm.employment_status}
-                  </option>
-                )}
-              {teacherPositionOptions.map((position) => (
+              <option value="Guru">Guru</option>
+              <option value="Tenaga Kependidikan">Tenaga Kependidikan</option>
+            </select>
+
+            <label className="di-form-label" htmlFor="teacher-primary-role">
+              Jabatan Utama
+            </label>
+            <select
+              id="teacher-primary-role"
+              className="di-search"
+              value={teacherForm.primary_role}
+              onChange={(event) => {
+                const primaryRole = event.target.value;
+                setTeacherForm((current) => ({
+                  ...current,
+                  primary_role: primaryRole,
+                  additional_roles: [],
+                  homeroom_class_id: "",
+                  bk_class_ids: primaryRole === "Guru BK" ? current.bk_class_ids : [],
+                  subject_assignments: primaryRole === "Guru Mata Pelajaran" ? current.subject_assignments : [],
+                }));
+              }}
+              required
+            >
+              {(teacherForm.staff_category === "Guru"
+                ? ["Guru Mata Pelajaran", "Guru BK"]
+                : staffPositionOptions).map((position) => (
                 <option key={position} value={position}>
                   {position}
                 </option>
               ))}
             </select>
+
+            {teacherForm.staff_category === "Guru" && teacherForm.primary_role === "Guru Mata Pelajaran" && (
+              <>
+                <fieldset className="di-form-fieldset">
+                  <legend>Tugas Tambahan</legend>
+                  {teacherAdditionalRoleOptions.map((role) => (
+                    <label className="di-form-check" key={role}>
+                      <input
+                        type="checkbox"
+                        checked={teacherForm.additional_roles.includes(role)}
+                        onChange={(event) => setTeacherForm((current) => ({
+                          ...current,
+                          additional_roles: event.target.checked
+                            ? [...new Set([...current.additional_roles, role])]
+                            : current.additional_roles.filter((item) => item !== role),
+                        }))}
+                      />
+                      {role}
+                    </label>
+                  ))}
+                </fieldset>
+
+                <label className="di-form-label" htmlFor="teacher-homeroom-class">
+                  Wali Kelas (maksimal 1 kelas)
+                </label>
+                <select
+                  id="teacher-homeroom-class"
+                  className="di-search"
+                  value={teacherForm.homeroom_class_id}
+                  onChange={(event) => setTeacherForm((current) => ({
+                    ...current,
+                    homeroom_class_id: event.target.value,
+                  }))}
+                >
+                  <option value="">Tidak ditugaskan sebagai wali kelas</option>
+                  {classes.map((classOption) => (
+                    <option key={classOption.id} value={classOption.id}>{classOption.name}</option>
+                  ))}
+                </select>
+
+                <fieldset className="di-form-fieldset">
+                  <legend>Mata Pelajaran &amp; Kelas yang Diajar</legend>
+                  <div className="di-actions" style={{ alignItems: "stretch" }}>
+                    <input
+                      className="di-search"
+                      list="teacher-subject-suggestions"
+                      value={teacherFormAssignmentSubject}
+                      onChange={(event) => setTeacherFormAssignmentSubject(event.target.value)}
+                      placeholder="Pilih atau ketik mata pelajaran"
+                      aria-label="Mata pelajaran"
+                    />
+                    <datalist id="teacher-subject-suggestions">
+                      {subjectSuggestions.map((subject) => <option key={subject} value={subject} />)}
+                    </datalist>
+                    <select
+                      className="di-search"
+                      value={teacherFormAssignmentClassId}
+                      onChange={(event) => setTeacherFormAssignmentClassId(event.target.value)}
+                      aria-label="Kelas mata pelajaran"
+                    >
+                      <option value="">Pilih kelas</option>
+                      {classes.map((classOption) => (
+                        <option key={classOption.id} value={classOption.id}>{classOption.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="di-button"
+                      onClick={() => {
+                        const subject = teacherFormAssignmentSubject.trim();
+                        const classId = teacherFormAssignmentClassId;
+                        if (!subject || !classId) {
+                          setTeacherFormError("Mata pelajaran dan kelas wajib dipilih.");
+                          return;
+                        }
+                        if (teacherForm.subject_assignments.some((item) =>
+                          item.class_id === classId && item.subject.toLowerCase() === subject.toLowerCase()
+                        )) {
+                          setTeacherFormError("Penugasan mata pelajaran dan kelas tersebut sudah ditambahkan.");
+                          return;
+                        }
+                        setTeacherForm((current) => ({
+                          ...current,
+                          subject_assignments: [...current.subject_assignments, { class_id: classId, subject }],
+                        }));
+                        setTeacherFormAssignmentSubject("");
+                        setTeacherFormAssignmentClassId("");
+                        setTeacherFormError("");
+                      }}
+                    >
+                      <Plus size={14} /> Tambah
+                    </button>
+                  </div>
+                  <ul className="di-assignment-list">
+                    {teacherForm.subject_assignments.map((assignment) => {
+                      const className = classes.find((item) => item.id === assignment.class_id)?.name ?? "Kelas";
+                      return (
+                        <li key={`${assignment.class_id}-${assignment.subject}`}>
+                          <span>{assignment.subject} · {className}</span>
+                          <button
+                            type="button"
+                            className="di-button di-button-icon"
+                            aria-label={`Hapus ${assignment.subject} dari ${className}`}
+                            onClick={() => setTeacherForm((current) => ({
+                              ...current,
+                              subject_assignments: current.subject_assignments.filter((item) =>
+                                !(item.class_id === assignment.class_id && item.subject === assignment.subject)
+                              ),
+                            }))}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </li>
+                      );
+                    })}
+                    {!teacherForm.subject_assignments.length && <li className="di-assignment-empty">Belum ada mapel/kelas.</li>}
+                  </ul>
+                </fieldset>
+              </>
+            )}
+
+            {teacherForm.staff_category === "Guru" && teacherForm.primary_role === "Guru BK" && (
+              <fieldset className="di-form-fieldset">
+                <legend>Rombel Kelas Anak Asuh</legend>
+                <div className="di-class-checklist">
+                  {classes.map((classOption) => (
+                    <label className="di-form-check" key={classOption.id}>
+                      <input
+                        type="checkbox"
+                        checked={teacherForm.bk_class_ids.includes(classOption.id)}
+                        onChange={(event) => setTeacherForm((current) => ({
+                          ...current,
+                          bk_class_ids: event.target.checked
+                            ? [...new Set([...current.bk_class_ids, classOption.id])]
+                            : current.bk_class_ids.filter((id) => id !== classOption.id),
+                        }))}
+                      />
+                      {classOption.name}
+                    </label>
+                  ))}
+                  {!classes.length && <span className="di-assignment-empty">Belum ada kelas.</span>}
+                </div>
+                <small>Siswa pada rombel terpilih disinkronkan otomatis ke daftar asuh Guru BK.</small>
+              </fieldset>
+            )}
 
             {teacherFormError && (
               <p role="alert" style={{ color: "#b91c1c", fontSize: 13 }}>
@@ -3597,6 +4005,9 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                 onClick={() => {
                   setShowTeacherForm(false);
                   setEditingTeacher(null);
+                  setTeacherForm(emptyTeacherForm);
+                  setTeacherFormAssignmentSubject("");
+                  setTeacherFormAssignmentClassId("");
                   setTeacherFormError("");
                 }}
                 disabled={savingTeacher}
@@ -4198,6 +4609,8 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   if (activeMenu === "guru") {
                     setEditingTeacher(null);
                     setTeacherForm(emptyTeacherForm);
+                    setTeacherFormAssignmentSubject("");
+                    setTeacherFormAssignmentClassId("");
                     setTeacherFormError("");
                     setMasterNotice("");
                     setShowTeacherForm(true);
@@ -4671,7 +5084,11 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       <option value="all">Semua Jabatan</option>
                       {[...new Set([
                         ...teacherPositionOptions,
-                        ...teachers.map((teacher) => teacher.employment_status ?? "").filter(Boolean),
+                        ...teacherAdditionalRoleOptions,
+                        ...teachers.flatMap((teacher) => [
+                          teacherPrimaryRole(teacher),
+                          ...teacherAdditionalRoles(teacher),
+                        ]),
                       ])].map((position) => <option key={position} value={position}>{position}</option>)}
                     </select>
                     <select
@@ -4696,7 +5113,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   {bulkAccountProgress.failed.length ? ` · ${bulkAccountProgress.failed.length} gagal` : ""}
                 </div>
               )}
-              {canDeleteMasterData && ["siswa", "guru", "kelas"].includes(activeMenu) && (
+              {canDeleteCurrentMenu && ["siswa", "guru", "kelas"].includes(activeMenu) && (
                 <div
                   className="di-actions"
                   style={{
@@ -4753,20 +5170,36 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
               {selectedMasterDeleteError && (
                 <div className="di-notice di-audit-error" role="alert">{selectedMasterDeleteError}</div>
               )}
-              {canManageDataInduk && !canDeleteMasterData && ["siswa", "guru", "kelas"].includes(activeMenu) && (
+              {canManageDataInduk && activeMenu === "kelas" && !canDeleteMasterData && (
                 <div className="di-notice" role="status">
-                  Penghapusan data hanya tersedia untuk Super Admin sesuai izin database.
+                  Penghapusan kelas hanya tersedia untuk Super Admin sesuai izin database.
                 </div>
               )}
             </div>
 
             <div className="di-table-wrap">
-              <table className="di-table">
+              <table
+                className="di-table"
+                style={activeMenu === "guru" ? {
+                  tableLayout: "fixed",
+                  minWidth: canDeletePeopleData ? 960 : 900,
+                } : undefined}
+              >
+                {activeMenu === "guru" && (
+                  <colgroup>
+                    {canDeletePeopleData && <col style={{ width: 52 }} />}
+                    <col style={{ width: 150 }} />
+                    <col style={{ width: 220 }} />
+                    <col style={{ width: 180 }} />
+                    <col />
+                    <col style={{ width: 230 }} />
+                  </colgroup>
+                )}
                 <thead>
                   <tr>
                     {activeMenu === "siswa" ? (
                       <>
-                        {canDeleteMasterData && <th scope="col">Pilih</th>}
+                        {canDeletePeopleData && <th scope="col">Pilih</th>}
                         <th>NISN</th>
                         <th>Nama Siswa</th>
                         <th>Kelas</th>
@@ -4778,12 +5211,11 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </>
                     ) : activeMenu === "guru" ? (
                       <>
-                        {canDeleteMasterData && <th scope="col">Pilih</th>}
+                        {canDeletePeopleData && <th scope="col">Pilih</th>}
                         <th>NIP / Identitas</th>
                         <th>Nama</th>
-                        <th>Status Akun</th>
-                        <th>Jabatan</th>
-                        <th>Penugasan &amp; Wali Kelas</th>
+                        <th>Status Kepegawaian</th>
+                        <th>Jabatan &amp; Penugasan</th>
                         <th>Aksi</th>
                       </>
                     ) : (
@@ -4803,7 +5235,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   {activeMenu === "siswa" ? (
                     loadingStudents ? (
                       <tr>
-                        <td colSpan={userRole === "super_admin" ? 9 : 7}>
+                        <td colSpan={userRole === "super_admin" ? 9 : canDeletePeopleData ? 8 : 7}>
                           <div className="di-empty">
                             Memuat data siswa dari Supabase...
                           </div>
@@ -4811,7 +5243,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </tr>
                     ) : studentError ? (
                       <tr>
-                        <td colSpan={userRole === "super_admin" ? 9 : 7}>
+                        <td colSpan={userRole === "super_admin" ? 9 : canDeletePeopleData ? 8 : 7}>
                           <div className="di-empty">
                             <strong>Data siswa gagal dimuat</strong>
                             <p>{studentError}</p>
@@ -4820,7 +5252,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       </tr>
                     ) : filteredStudents.length === 0 ? (
                       <tr>
-                        <td colSpan={userRole === "super_admin" ? 9 : 7}>
+                        <td colSpan={userRole === "super_admin" ? 9 : canDeletePeopleData ? 8 : 7}>
                           <div className="di-empty">
                             <div className="di-empty-icon">
                               <GraduationCap size={24} />
@@ -4837,7 +5269,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                     ) : (
                       filteredStudents.map((student) => (
                         <tr key={student.id}>
-                          {canDeleteMasterData && (
+                          {canDeletePeopleData && (
                             <td>
                               <input
                                 type="checkbox"
@@ -4909,16 +5341,21 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       ))
                     )
                   ) : activeMenu === "guru" ? (
-                    teacherLoading ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty">Memuat data guru &amp; tendik...</div></td></tr>
-                    : masterError ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
-                    : filteredTeachers.length === 0 ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Data guru/tendik tidak ditemukan</strong><p>Ubah kata kunci atau filter, atau tambahkan data menggunakan tombol Tambah Data.</p></div></td></tr>
+                    teacherLoading ? <tr><td colSpan={canDeletePeopleData ? 6 : 5}><div className="di-empty">Memuat data guru &amp; tendik...</div></td></tr>
+                    : masterError ? <tr><td colSpan={canDeletePeopleData ? 6 : 5}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
+                    : filteredTeachers.length === 0 ? <tr><td colSpan={canDeletePeopleData ? 6 : 5}><div className="di-empty"><strong>Data guru/tendik tidak ditemukan</strong><p>Ubah kata kunci atau filter, atau tambahkan data menggunakan tombol Tambah Data.</p></div></td></tr>
                     : filteredTeachers.map((teacher) => {
+                      const primaryRole = teacherPrimaryRole(teacher);
+                      const extraRoles = teacherAdditionalRoles(teacher).filter((role) => role !== "Wali Kelas");
                       const assignments = teacherAssignmentSummary.filter((item) => item.teacher_id === teacher.id);
                       const subjects = [...new Set(assignments.map((item) => item.subject))];
                       const assignedClassCount = new Set(assignments.map((item) => item.class_id)).size;
                       const homeroomClasses = teacherHomeroomSummary
                         .filter((item) => item.homeroom_teacher_id === teacher.profile_id)
                         .map((item) => item.name);
+                      const bkClassNames = (teacher.bk_class_ids ?? [])
+                        .map((id) => classes.find((classItem) => classItem.id === id)?.name)
+                        .filter((name): name is string => Boolean(name));
                       const account = getTeacherManagedAccount(teacher);
                       const canGenerateAccount = userRole === "super_admin"
                         && !teacher.profile_id
@@ -4926,7 +5363,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                         && account?.role !== "siswa";
                       return (
                         <tr key={teacher.id}>
-                          {canDeleteMasterData && (
+                          {canDeletePeopleData && (
                             <td>
                               <input
                                 type="checkbox"
@@ -4937,29 +5374,38 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                               />
                             </td>
                           )}
-                          <td>{teacher.nip || "—"}</td>
-                          <td>{teacher.full_name}</td>
-                          <td>{getTeacherAccountStatus(teacher)}</td>
-                          <td>{teacher.employment_status || "—"}</td>
                           <td>
-                            {teacherSummaryError
-                              ? "Ringkasan penugasan tidak tersedia"
-                              : teacher.employment_status === "Guru Mata Pelajaran"
-                              ? subjects.length
-                                ? `${subjects.slice(0, 3).join(", ")}${subjects.length > 3 ? ` +${subjects.length - 3}` : ""} · ${assignedClassCount} kelas`
-                                : "Belum ditugaskan"
-                              : subjects.length
-                                ? `${subjects.join(", ")} · ${assignedClassCount} kelas`
-                                : "—"}
-                            {homeroomClasses.map((className) => (
-                              <div key={className}>Wali Kelas {className}</div>
-                            ))}
+                            <span className="di-nip">{teacher.nip || "—"}</span>
+                          </td>
+                          <td className="di-teacher-name">{teacher.full_name}</td>
+                          <td>{teacherStaffCategory(teacher)}</td>
+                          <td>
+                            <div className="di-role-tags">
+                              <span className="di-role-tag di-role-tag-primary">{primaryRole}</span>
+                              {extraRoles.map((role) => <span className="di-role-tag" key={role}>{role}</span>)}
+                              {homeroomClasses.map((className) => (
+                                <span className="di-role-tag" key={`wali-${className}`}>Wali Kelas {className}</span>
+                              ))}
+                            </div>
+                            {teacherSummaryError ? (
+                              <small className="di-assignment-note">Ringkasan penugasan tidak tersedia</small>
+                            ) : primaryRole === "Guru Mata Pelajaran" ? (
+                              <small className="di-assignment-note">
+                                {subjects.length
+                                  ? `${subjects.slice(0, 3).join(", ")}${subjects.length > 3 ? ` +${subjects.length - 3}` : ""} · ${assignedClassCount} kelas`
+                                  : "Belum ditugaskan"}
+                              </small>
+                            ) : primaryRole === "Guru BK" ? (
+                              <small className="di-assignment-note">
+                                {bkClassNames.length ? `Rombel asuh: ${bkClassNames.join(", ")}` : "Belum ada rombel asuh"}
+                              </small>
+                            ) : null}
                           </td>
                           <td>
                             <div className="di-actions">
-                              {canManageDataInduk && (
+                              {canManageDataInduk && primaryRole === "Guru Mata Pelajaran" && (
                                 <button type="button" className="di-button" onClick={() => openTeacherAssignments(teacher)}>
-                                  <GraduationCap size={14} />Mapel &amp; Kelas
+                                  <GraduationCap size={14} />Atur Tugas / Mapel
                                 </button>
                               )}
                               {canGenerateAccount && (
@@ -4978,7 +5424,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                               <button type="button" className="di-button di-button-icon" aria-label={`Edit data ${teacher.full_name}`} title={`Edit ${teacher.full_name}`} onClick={() => void handleEditTeacher(teacher)}>
                                 <Pencil size={15} />
                               </button>
-                              {canDeleteMasterData && (
+                              {canDeletePeopleData && (
                                 <button type="button" className="di-button di-button-danger" onClick={() => void handleDeleteTeacher(teacher)}>
                                   <Trash2 size={14} />Hapus
                                 </button>

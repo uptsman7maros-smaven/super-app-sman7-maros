@@ -14,6 +14,7 @@ const allowedRoles = [
   "guru_bk",
   "siswa",
   "tendik",
+  "bendahara",
 ] as const;
 
 const validUsername = (value: unknown): value is string =>
@@ -49,20 +50,342 @@ export default {
           .eq("id", callerId)
           .maybeSingle();
 
-        if (
-          callerError ||
-          !caller ||
-          caller.role !== "super_admin" ||
-          caller.status !== "active"
-        ) {
+        if (callerError || !caller || caller.status !== "active") {
           return json(
-            { error: "Hanya Super Admin aktif yang boleh mengelola pengguna." },
+            { error: "Akun aktif dengan izin pengelolaan diperlukan." },
             403,
           );
         }
 
         const body = await req.json();
         const action = body?.action;
+        const operatorActions = [
+          "delete-master-records",
+          "sync-student-status",
+          "sync-teacher-account",
+        ];
+        if (
+          caller.role !== "super_admin" &&
+          !(caller.role === "operator" && operatorActions.includes(action))
+        ) {
+          return json(
+            { error: "Hanya Super Admin yang boleh mengelola pengguna." },
+            403,
+          );
+        }
+
+        if (action === "delete-master-records") {
+          const masterType = body.master_type;
+          const ids = body.ids;
+          if (
+            (masterType !== "students" && masterType !== "teachers") ||
+            !Array.isArray(ids) ||
+            ids.length < 1 ||
+            ids.length > 100 ||
+            ids.some((id: unknown) => typeof id !== "string" || !id)
+          ) {
+            return json({ error: "Pilihan data induk tidak valid." }, 400);
+          }
+
+          const uniqueIds = [...new Set(ids as string[])];
+          const { data: records, error: recordsError } = await admin
+            .from(masterType)
+            .select(masterType === "students"
+              ? "id, profile_id, nisn, full_name"
+              : "id, profile_id, nip, full_name")
+            .in("id", uniqueIds);
+
+          if (recordsError) {
+            console.error("Data induk gagal dimuat untuk penghapusan:", recordsError);
+            return json({ error: "Data induk gagal diperiksa sebelum dihapus." }, 500);
+          }
+
+          const recordsById = new Map((records ?? []).map((record) => [record.id, record]));
+          const results = [];
+          for (const id of uniqueIds) {
+            const record = recordsById.get(id);
+            if (!record) {
+              results.push({
+                id,
+                deleted: false,
+                masterRecordDeleted: false,
+                accountDeleted: false,
+                accountFound: false,
+                error: "Data induk tidak ditemukan.",
+              });
+              continue;
+            }
+
+            const identifier = masterType === "students" ? record.nisn : record.nip;
+            let linkedProfile = null;
+            let profileLookupError = null;
+            if (record.profile_id) {
+              const profileResult = await admin
+                .from("profiles")
+                .select("id, username, role")
+                .eq("id", record.profile_id)
+                .maybeSingle();
+              linkedProfile = profileResult.data;
+              profileLookupError = profileResult.error;
+            }
+            if (!linkedProfile && !profileLookupError && identifier) {
+              const profileResult = await admin
+                .from("profiles")
+                .select("id, username, role")
+                .eq("username", identifier)
+                .maybeSingle();
+              linkedProfile = profileResult.data;
+              profileLookupError = profileResult.error;
+            }
+            if (profileLookupError) {
+              results.push({
+                id,
+                deleted: false,
+                masterRecordDeleted: false,
+                accountDeleted: false,
+                error: "Akun terkait gagal diverifikasi; data tidak dihapus.",
+              });
+              continue;
+            }
+
+            const expectedRole = masterType === "students" ? "siswa" : null;
+            const hasMatchingAccount = linkedProfile &&
+              (expectedRole ? linkedProfile.role === expectedRole : linkedProfile.role !== "siswa");
+            if (linkedProfile?.role === "super_admin") {
+              results.push({
+                id,
+                deleted: false,
+                masterRecordDeleted: false,
+                accountDeleted: false,
+                accountFound: Boolean(linkedProfile),
+                error: "Akun Super Admin dilindungi; data tidak dihapus.",
+              });
+              continue;
+            }
+
+            const { error: deleteRecordError } = await admin
+              .from(masterType)
+              .delete()
+              .eq("id", id);
+            if (deleteRecordError) {
+              console.error("Data induk gagal dihapus:", deleteRecordError);
+              results.push({
+                id,
+                deleted: false,
+                masterRecordDeleted: false,
+                accountDeleted: false,
+                error: "Data induk gagal dihapus karena izin atau relasi data.",
+              });
+              continue;
+            }
+
+            if (!hasMatchingAccount || !linkedProfile) {
+              results.push({
+                id,
+                deleted: true,
+                masterRecordDeleted: true,
+                accountDeleted: false,
+                accountFound: Boolean(linkedProfile),
+              });
+              continue;
+            }
+
+            const { error: authDeleteError } =
+              await admin.auth.admin.deleteUser(linkedProfile.id);
+            if (authDeleteError && authDeleteError.status !== 404) {
+              console.error("Akun terkait gagal dihapus:", authDeleteError);
+              results.push({
+                id,
+                deleted: false,
+                masterRecordDeleted: true,
+                accountDeleted: false,
+                accountFound: true,
+                error: "Data induk terhapus, tetapi akun Auth gagal dihapus.",
+              });
+              continue;
+            }
+            const { error: profileDeleteError } = await admin
+              .from("profiles")
+              .delete()
+              .eq("id", linkedProfile.id);
+            if (profileDeleteError) {
+              console.error("Profil akun gagal dibersihkan:", profileDeleteError);
+              results.push({
+                id,
+                deleted: false,
+                masterRecordDeleted: true,
+                accountDeleted: false,
+                accountFound: true,
+                error: "Data induk dan Auth terhapus, tetapi profil belum bersih.",
+              });
+              continue;
+            }
+            results.push({
+              id,
+              deleted: true,
+              masterRecordDeleted: true,
+              accountDeleted: true,
+              accountFound: true,
+            });
+          }
+
+          return json({ results });
+        }
+
+        if (action === "sync-student-status") {
+          const studentIds = Array.isArray(body.student_ids)
+            ? body.student_ids
+            : [body.student_id];
+          if (
+            studentIds.length < 1 ||
+            studentIds.length > 100 ||
+            studentIds.some((id: unknown) => typeof id !== "string" || !id)
+          ) {
+            return json({ error: "Pilihan siswa tidak valid." }, 400);
+          }
+          const results = [];
+          for (const studentId of [...new Set(studentIds as string[])]) {
+            const { data: student, error: studentError } = await admin
+              .from("students")
+              .select("id, profile_id, nisn, status")
+              .eq("id", studentId)
+              .maybeSingle();
+            if (studentError || !student) {
+              results.push({ id: studentId, synced: false, error: "Data siswa tidak ditemukan." });
+              continue;
+            }
+            let profile = null;
+            if (student.profile_id) {
+              const result = await admin
+                .from("profiles")
+                .select("id, role, status")
+                .eq("id", student.profile_id)
+                .maybeSingle();
+              if (result.error) {
+                results.push({ id: studentId, synced: false, error: "Akun siswa gagal diperiksa." });
+                continue;
+              }
+              profile = result.data;
+            }
+            if (!profile && student.nisn) {
+              const result = await admin
+                .from("profiles")
+                .select("id, role, status")
+                .eq("username", student.nisn)
+                .eq("role", "siswa")
+                .maybeSingle();
+              if (result.error) {
+                results.push({ id: studentId, synced: false, error: "Akun siswa gagal diperiksa." });
+                continue;
+              }
+              profile = result.data;
+            }
+            if (!profile || profile.role !== "siswa") {
+              results.push({ id: studentId, synced: false, message: "Akun siswa belum terhubung." });
+              continue;
+            }
+            const accountStatus = String(student.status).toLowerCase() === "active"
+              ? "active"
+              : "disabled";
+            const { error: profileUpdateError } = await admin
+              .from("profiles")
+              .update({ status: accountStatus, updated_at: new Date().toISOString() })
+              .eq("id", profile.id);
+            if (profileUpdateError) {
+              console.error("Status profil siswa gagal diperbarui:", profileUpdateError);
+              results.push({ id: studentId, synced: false, error: "Status profil siswa gagal diperbarui." });
+              continue;
+            }
+            const { error: authStatusError } = await admin.auth.admin.updateUserById(
+              profile.id,
+              { ban_duration: accountStatus === "disabled" ? "876000h" : "none" },
+            );
+            if (authStatusError) {
+              console.error("Status login siswa gagal diperbarui:", authStatusError);
+              results.push({
+                id: studentId,
+                synced: false,
+                error: "Profil diperbarui, tetapi status login gagal disinkronkan.",
+              });
+              continue;
+            }
+            results.push({ id: studentId, synced: true, status: accountStatus });
+          }
+          return json({ results });
+        }
+
+        if (action === "sync-teacher-account") {
+          const teacherId = body.teacher_id;
+          if (typeof teacherId !== "string" || !teacherId) {
+            return json({ error: "ID guru tidak valid." }, 400);
+          }
+          const { data: teacher, error: teacherError } = await admin
+            .from("teachers")
+            .select("id, profile_id, nip, full_name, primary_role, employment_status")
+            .eq("id", teacherId)
+            .maybeSingle();
+          if (teacherError || !teacher) {
+            return json({ error: "Data guru/tendik tidak ditemukan." }, 404);
+          }
+          let profile = null;
+          if (teacher.profile_id) {
+            const result = await admin
+              .from("profiles")
+              .select("id, username, role")
+              .eq("id", teacher.profile_id)
+              .maybeSingle();
+            if (result.error) return json({ error: "Akun guru gagal diperiksa." }, 500);
+            profile = result.data;
+          }
+          if (!profile && teacher.nip) {
+            const result = await admin
+              .from("profiles")
+              .select("id, username, role")
+              .eq("username", teacher.nip)
+              .maybeSingle();
+            if (result.error) return json({ error: "Akun guru gagal diperiksa." }, 500);
+            profile = result.data;
+          }
+          if (!profile) {
+            return json({ synced: false, message: "Akun guru/tendik belum terhubung." });
+          }
+          if (profile.role === "super_admin" || profile.role === "siswa") {
+            return json({ error: "Akun ini tidak dapat ditautkan sebagai guru/tendik." }, 409);
+          }
+          const normalizedPosition = teacher.primary_role || teacher.employment_status || "";
+          const roleByPosition: Record<string, string> = {
+            "Kepala Sekolah": "kepala_sekolah",
+            "Kepala Tata Usaha": "kepala_tata_usaha",
+            "Staff Tata Usaha": "staff_tata_usaha",
+            "Bendahara Pengeluaran": "bendahara",
+            Bendahara: "bendahara",
+            "Operator Sekolah": "operator",
+            "Tendik Lainnya": "tendik",
+            "Guru BK": "guru_bk",
+            "Guru BK / Konselor": "guru_bk",
+          };
+          const role = roleByPosition[normalizedPosition] || "guru";
+          if (!teacher.profile_id) {
+            const { error: linkError } = await admin
+              .from("teachers")
+              .update({ profile_id: profile.id })
+              .eq("id", teacher.id);
+            if (linkError) return json({ error: "Akun ditemukan tetapi gagal ditautkan ke Data Induk." }, 500);
+          }
+          const { error: profileUpdateError } = await admin
+            .from("profiles")
+            .update({
+              role,
+              full_name: teacher.full_name,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", profile.id);
+          if (profileUpdateError) {
+            console.error("Peran akun guru gagal diperbarui:", profileUpdateError);
+            return json({ error: "Peran akun guru/tendik gagal disinkronkan." }, 500);
+          }
+          return json({ synced: true, role });
+        }
 
         if (action === "list") {
           const { data, error } = await admin

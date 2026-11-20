@@ -14,6 +14,9 @@ export type MasterIdentity = {
   full_name: string;
   nip_or_nisn: string;
   jabatan: string | null;
+  staff_category: string | null;
+  primary_role: string | null;
+  additional_roles: string[];
 };
 
 type MasterIdentityRow = MasterIdentity;
@@ -140,18 +143,31 @@ function identityFor(
     full_name: person?.full_name || profileName || account.username,
     nip_or_nisn: person?.identifier || account.username,
     jabatan: person?.type === "teacher" ? person.jabatan ?? null : null,
+    staff_category: null,
+    primary_role: person?.type === "teacher" ? person.jabatan ?? null : null,
+    additional_roles: [],
   };
 }
 
 async function loadIdentity(account: SchoolAccount): Promise<MasterIdentity> {
-  const [identityResult, profileResult] = await Promise.all([
+  const [identityResult, profileResult, teacherAccessResult] = await Promise.all([
     supabase.rpc("get_my_master_identity").maybeSingle(),
     supabase.from("profiles").select("full_name").eq("id", account.id).maybeSingle(),
+    ["guru", "guru_bk"].includes(account.role)
+      ? supabase.rpc("get_my_teacher_access_profile").maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
   throwOnError(identityResult.error, "Identitas Data Induk gagal dimuat");
   throwOnError(profileResult.error, "Profil pengguna gagal dimuat");
+  throwOnError(teacherAccessResult.error, "Jabatan guru gagal dimuat");
 
   const row = identityResult.data as MasterIdentityRow | null;
+  const teacherAccess = teacherAccessResult.data as {
+    teacher_id: string;
+    staff_category: string | null;
+    primary_role: string | null;
+    additional_roles: string[] | null;
+  } | null;
   if (row) {
     return {
       student_id: row.student_id ?? null,
@@ -161,10 +177,18 @@ async function loadIdentity(account: SchoolAccount): Promise<MasterIdentity> {
       full_name: row.full_name || profileResult.data?.full_name || account.username,
       nip_or_nisn: row.nip_or_nisn || account.username,
       jabatan: row.jabatan ?? null,
+      staff_category: teacherAccess?.staff_category ?? null,
+      primary_role: teacherAccess?.primary_role ?? row.jabatan ?? null,
+      additional_roles: teacherAccess?.additional_roles ?? [],
     };
   }
 
-  return identityFor(account, profileResult.data?.full_name ?? null);
+  return {
+    ...identityFor(account, profileResult.data?.full_name ?? null),
+    staff_category: teacherAccess?.staff_category ?? null,
+    primary_role: teacherAccess?.primary_role ?? null,
+    additional_roles: teacherAccess?.additional_roles ?? [],
+  };
 }
 
 export async function loadSchoolContextData(
