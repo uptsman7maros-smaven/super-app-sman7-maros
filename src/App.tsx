@@ -921,9 +921,16 @@ useEffect(() => {
     });
   const intervalId = window.setInterval(() => {
     if (document.visibilityState === "visible") void refreshFeed();
-  }, 5 * 60_000);
+  }, 10 * 60_000);
+  let lastVisibilityRefreshAt = 0;
   const onVisibilityChange = () => {
-    if (document.visibilityState === "visible") void refreshFeed();
+    if (
+      document.visibilityState === "visible" &&
+      Date.now() - lastVisibilityRefreshAt >= 60_000
+    ) {
+      lastVisibilityRefreshAt = Date.now();
+      void refreshFeed();
+    }
   };
   document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -2092,9 +2099,16 @@ useEffect(() => {
   void loadDashboardStats();
   const intervalId = window.setInterval(() => {
     if (document.visibilityState === "visible") void loadDashboardStats();
-  }, 5 * 60_000);
+  }, 10 * 60_000);
+  let lastVisibilityRefreshAt = 0;
   const handleVisibilityChange = () => {
-    if (document.visibilityState === "visible") void loadDashboardStats();
+    if (
+      document.visibilityState === "visible" &&
+      Date.now() - lastVisibilityRefreshAt >= 120_000
+    ) {
+      lastVisibilityRefreshAt = Date.now();
+      void loadDashboardStats();
+    }
   };
   document.addEventListener("visibilitychange", handleVisibilityChange);
 

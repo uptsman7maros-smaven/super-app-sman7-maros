@@ -10,6 +10,7 @@ import {
 import type {
   SchoolHoliday,
   SchoolHolidayInput,
+  DataIndukSchoolPanelData,
   SchoolPanelSettings,
   SchoolProfileUpdate,
   SchoolSyncSummary,
@@ -70,15 +71,32 @@ function dateLabel(value: string) {
   });
 }
 
+let cachedSchoolPanelData: DataIndukSchoolPanelData | null = null;
+let schoolPanelDataPromise: Promise<DataIndukSchoolPanelData> | null = null;
+
+function loadSchoolPanelData() {
+  if (!schoolPanelDataPromise) {
+    schoolPanelDataPromise = loadDataIndukSchoolPanelData()
+      .then((data) => {
+        cachedSchoolPanelData = data;
+        return data;
+      })
+      .finally(() => {
+        schoolPanelDataPromise = null;
+      });
+  }
+  return schoolPanelDataPromise;
+}
+
 export default function DataIndukSekolahPanel({ userRole }: Props) {
   const canManage = userRole === "super_admin" || userRole === "operator";
-  const [settings, setSettings] = useState<SchoolPanelSettings | null>(null);
-  const [summary, setSummary] = useState<SchoolSyncSummary | null>(null);
-  const [holidays, setHolidays] = useState<SchoolHoliday[]>([]);
-  const [profileForm, setProfileForm] = useState<ProfileForm>(() => profileFormFrom(null));
+  const [settings, setSettings] = useState<SchoolPanelSettings | null>(() => cachedSchoolPanelData?.settings ?? null);
+  const [summary, setSummary] = useState<SchoolSyncSummary | null>(() => cachedSchoolPanelData?.summary ?? null);
+  const [holidays, setHolidays] = useState<SchoolHoliday[]>(() => cachedSchoolPanelData?.holidays ?? []);
+  const [profileForm, setProfileForm] = useState<ProfileForm>(() => profileFormFrom(cachedSchoolPanelData?.settings ?? null));
   const [holidayForm, setHolidayForm] = useState<HolidayForm>(emptyHoliday);
   const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => cachedSchoolPanelData === null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingHoliday, setSavingHoliday] = useState(false);
   const [error, setError] = useState("");
@@ -88,7 +106,7 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
     setLoading(true);
     setError("");
     try {
-      const data = await loadDataIndukSchoolPanelData();
+      const data = await loadSchoolPanelData();
       setSettings(data.settings);
       setSummary(data.summary);
       setHolidays(data.holidays);
@@ -101,7 +119,9 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    if (cachedSchoolPanelData) return;
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
   }, [refresh]);
 
   const saveProfile = async (event: FormEvent<HTMLFormElement>) => {

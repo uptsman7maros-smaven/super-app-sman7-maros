@@ -361,8 +361,6 @@ const SESSION_RATE_LIMIT_BASE_MS = 30_000;
 const SESSION_RATE_LIMIT_MAX_MS = 15 * 60_000;
 const SESSION_RATE_LIMIT_DEDUP_MS = 30_000;
 const ACCESS_TOKEN_SAFETY_WINDOW_SECONDS = 120;
-const ACCESS_TOKEN_REFRESH_WINDOW_SECONDS =
-  1 + Math.floor(Math.random() * ACCESS_TOKEN_SAFETY_WINDOW_SECONDS);
 
 export function getCachedSupabaseSession() {
   return cachedSession;
@@ -436,6 +434,8 @@ function rememberApiRateLimit(serverRetryAfter: string | null) {
 }
 
 function refreshSupabaseSession() {
+  if (refreshPromise) return refreshPromise;
+
   if (Date.now() < sessionRetryAfter) {
     return Promise.reject(
       sessionRateLimitError instanceof Error
@@ -444,29 +444,27 @@ function refreshSupabaseSession() {
     );
   }
 
-  if (!refreshPromise) {
-    refreshPromise = (async () => {
-      try {
-        const { data, error } = await supabase.auth.refreshSession();
-        if (error) throw error;
+  refreshPromise = (async () => {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error) throw error;
 
-        clearSessionRateLimit();
-        return data.session;
-      } catch (error) {
-        rememberSessionRateLimit(error);
-        const status = getErrorStatus(error);
-        if (status === 400 || status === 401) {
-          const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
-          if (signOutError) throw signOutError;
-          cachedSession = null;
-          return null;
-        }
-        throw error;
+      clearSessionRateLimit();
+      return data.session;
+    } catch (error) {
+      rememberSessionRateLimit(error);
+      const status = getErrorStatus(error);
+      if (status === 400 || status === 401) {
+        const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+        if (signOutError) throw signOutError;
+        cachedSession = null;
+        return null;
       }
-    })().finally(() => {
-      refreshPromise = null;
-    });
-  }
+      throw error;
+    }
+  })().finally(() => {
+    refreshPromise = null;
+  });
 
   return refreshPromise;
 }
@@ -494,14 +492,13 @@ export async function getValidSupabaseSession() {
         cachedSession = data.session;
         if (!data.session) return null;
 
-        const expiresAt = data.session.expires_at ?? 0;
-        const nowSeconds = Math.floor(Date.now() / 1000);
-        if (expiresAt > nowSeconds + ACCESS_TOKEN_REFRESH_WINDOW_SECONDS) {
+        const expiresAt = (data.session.expires_at ?? 0) * 1000;
+        if (data.session.access_token && expiresAt > Date.now() + 60_000) {
           return data.session;
         }
 
         if (Date.now() < sessionRetryAfter) {
-          if (expiresAt > nowSeconds) return data.session;
+          if (data.session.access_token && expiresAt > Date.now()) return data.session;
           throw sessionRateLimitError instanceof Error
             ? sessionRateLimitError
             : new Error("Supabase membatasi pembaruan sesi sementara. Coba lagi setelah jeda.");
@@ -510,14 +507,14 @@ export async function getValidSupabaseSession() {
         try {
           return await refreshSupabaseSession();
         } catch (error) {
-          if (expiresAt > Math.floor(Date.now() / 1000)) return data.session;
+          if (data.session.access_token && expiresAt > Date.now()) return data.session;
           throw error;
         }
       } catch (error) {
         rememberSessionRateLimit(error);
-        const nowSeconds = Math.floor(Date.now() / 1000);
         const fallbackSession = [sessionCandidate, cachedSession].find(
-          (session) => session && (session.expires_at ?? 0) > nowSeconds,
+          (session) => session?.access_token &&
+            (session.expires_at ?? 0) * 1000 > Date.now(),
         );
         if (fallbackSession) return fallbackSession;
         throw error;

@@ -1,4 +1,4 @@
-import { getValidSupabaseSession, supabase } from "./lib/supabase";
+import { supabase } from "./lib/supabase";
 import {
   createManagedUser,
   deleteMasterRecords,
@@ -11,7 +11,7 @@ import {
 import { logAppActivity } from "./services/activityLogService";
 import DataIndukSekolahPanel from "./DataIndukSekolahPanel";
 import "./DataInduk.css";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
@@ -501,16 +501,18 @@ export default function DataInduk({ userRole = "" }: DataIndukProps) {
   const [deletingSelectedMasterData, setDeletingSelectedMasterData] = useState(false);
   const [selectedMasterDeleteError, setSelectedMasterDeleteError] = useState("");
 
-  useEffect(() => {
+  const switchDataIndukMenu = (menu: MenuDataInduk) => {
+    setActiveMenu(menu);
     setSelectedMasterIds([]);
     setSelectedMasterDeleteError("");
-  }, [activeMenu]);
+  };
 
   const [students, setStudents] = useState<Student[]>([]);
 const [loadingStudents, setLoadingStudents] = useState(false);
 const [studentError, setStudentError] = useState("");
 const [studentNotice, setStudentNotice] = useState("");
-  const [studentSessionVersion, setStudentSessionVersion] = useState(0);
+  const studentsLoadedRef = useRef(false);
+  const studentLoadRequestRef = useRef(0);
 
 const [showStudentForm, setShowStudentForm] = useState(false);
 const [editingStudent, setEditingStudent] =
@@ -539,6 +541,8 @@ const [teacherImportNotice, setTeacherImportNotice] = useState("");
 const [teacherImportValidationComplete, setTeacherImportValidationComplete] = useState(false);
 const [teachers, setTeachers] = useState<Teacher[]>([]);
 const [teacherLoading, setTeacherLoading] = useState(false);
+const teachersLoadedRef = useRef(false);
+const teacherLoadRequestRef = useRef(0);
 const [teacherFilterPosition, setTeacherFilterPosition] = useState("all");
 const [teacherFilterStatus, setTeacherFilterStatus] = useState("all");
 const [teacherAssignmentSummary, setTeacherAssignmentSummary] = useState<TeacherAssignmentSummary[]>([]);
@@ -570,6 +574,7 @@ const [classTeacherOptions, setClassTeacherOptions] = useState<Array<Pick<Teache
 const [classRows, setClassRows] = useState<ClassRow[]>([]);
 const [classLoading, setClassLoading] = useState(false);
 const [classReloadVersion, setClassReloadVersion] = useState(0);
+const classLoadedVersionRef = useRef(-1);
 const [showClassForm, setShowClassForm] = useState(false);
 const [editingClass, setEditingClass] = useState<ClassRow | null>(null);
 const [classForm, setClassForm] = useState<ClassForm>(emptyClassForm);
@@ -595,6 +600,7 @@ const [auditEntries, setAuditEntries] = useState<DataIndukAuditEntry[]>([]);
 const [auditLoading, setAuditLoading] = useState(false);
 const [auditError, setAuditError] = useState("");
 const [auditReloadVersion, setAuditReloadVersion] = useState(0);
+const auditLoadedVersionRef = useRef(-1);
 
 const [masterError, setMasterError] = useState("");
 const [masterNotice, setMasterNotice] = useState("");
@@ -608,68 +614,57 @@ const logMasterChange = async (action: string, details: string) => {
   }
 };
 
-useEffect(() => {
-  if (activeMenu !== "siswa") return;
-  let active = true;
-  let refreshTimer = 0;
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-    if ((event !== "TOKEN_REFRESHED" && event !== "SIGNED_IN") || !session) return;
-    refreshTimer = window.setTimeout(() => {
-      if (active) setStudentSessionVersion((version) => version + 1);
-    }, 0);
-  });
+const fetchStudentRows = useCallback(async (): Promise<Student[]> => {
+  const rows: Student[] = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("students")
+      .select(`
+        id,
+        profile_id,
+        nisn,
+        full_name,
+        class_id,
+        birth_date,
+        gender,
+        status,
+        parent_phone,
+        class:classes!students_class_id_fkey (name)
+      `)
+      .order("full_name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    const page = (data ?? []) as unknown as Student[];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}, []);
 
-  return () => {
-    active = false;
-    window.clearTimeout(refreshTimer);
-    subscription.unsubscribe();
-  };
-}, [activeMenu]);
-
 useEffect(() => {
-  if (activeMenu !== "siswa") return;
+  if (activeMenu !== "siswa" || studentsLoadedRef.current) return;
 
   let cancelled = false;
+  const requestId = ++studentLoadRequestRef.current;
 
   async function loadStudents() {
     setLoadingStudents(true);
     setStudentError("");
 
     try {
-      const session = await getValidSupabaseSession();
-      if (!session?.user) {
-        throw new Error("Sesi login Supabase tidak aktif. Keluar lalu masuk kembali.");
-      }
-
-      const { data, error } = await supabase
-        .from("students")
-        .select(`
-          id,
-          profile_id,
-          nisn,
-          full_name,
-          class_id,
-          birth_date,
-          gender,
-          status,
-          parent_phone,
-          class:classes!students_class_id_fkey (
-            name
-          )
-        `)
-        .order("full_name", { ascending: true });
-
-      if (error) throw error;
+      const loadedStudents = await fetchStudentRows();
 
       if (!cancelled) {
-        setStudents((data ?? []) as unknown as Student[]);
+        setStudents(loadedStudents);
+        studentsLoadedRef.current = true;
       }
     } catch (error) {
       if (!cancelled) {
         setStudentError(`Gagal memuat data siswa dari Supabase: ${formatSupabaseError(error)}`);
       }
     } finally {
-      if (!cancelled) {
+      if (requestId === studentLoadRequestRef.current) {
         setLoadingStudents(false);
       }
     }
@@ -679,33 +674,19 @@ useEffect(() => {
 
   return () => {
     cancelled = true;
+    if (requestId === studentLoadRequestRef.current) {
+      studentLoadRequestRef.current += 1;
+      setLoadingStudents(false);
+    }
   };
-}, [activeMenu, studentSessionVersion]);
-
-useEffect(() => {
-  if (activeMenu !== "siswa" || userRole !== "super_admin") return;
-  let cancelled = false;
-  void getManagedUsers()
-    .then((users) => {
-      if (!cancelled) {
-        setStudentAccounts(users);
-        setStudentAccountError("");
-      }
-    })
-    .catch((error) => {
-      if (!cancelled) {
-        setStudentAccountError(formatSupabaseError(error));
-      }
-    });
-  return () => { cancelled = true; };
-}, [activeMenu, studentSessionVersion, userRole]);
+}, [activeMenu, fetchStudentRows]);
 
 const getStudentAccountStatus = (student: Student) => {
   if (student.profile_id) return "Sudah Ada Akun";
   if (!studentAccounts) {
     return studentAccountError
       ? "Status akun belum dapat diverifikasi"
-      : "Memeriksa akun...";
+      : "Belum diverifikasi (diperiksa saat aksi)";
   }
   const username = normalizeAccountUsername(student.nisn ?? "");
   const hasAccount = username !== "" && studentAccounts.some((user) =>
@@ -809,7 +790,7 @@ const generateStudentAccountsBulk = async () => {
   const eligibleStudents = filteredStudents.filter((student) =>
     student.status === "Active"
     && /^\d{10}$/.test(student.nisn.trim())
-    && getStudentAccountStatus(student) === "Belum Ada Akun"
+    && !student.profile_id
   );
   if (!eligibleStudents.length) {
     setMasterNotice("Tidak ada siswa Active yang memenuhi filter, NISN 10 digit, dan belum memiliki akun.");
@@ -968,27 +949,10 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
       `${full_name} · NISN ${nisn}`,
     );
 
-    const { data, error } = await supabase
-      .from("students")
-      .select(`
-        id,
-        profile_id,
-        nisn,
-        full_name,
-        class_id,
-        birth_date,
-        gender,
-        status,
-        parent_phone,
-        class:classes!students_class_id_fkey (
-          name
-        )
-      `)
-      .order("full_name", { ascending: true });
+    const refreshedStudents = await fetchStudentRows();
 
-    if (error) throw error;
-
-    setStudents((data ?? []) as unknown as Student[]);
+    setStudents(refreshedStudents);
+    studentsLoadedRef.current = true;
     setStudentNotice(
       auditWarning
         ? `Data tersimpan, tetapi audit aktivitas gagal: ${auditWarning}${accountSyncWarning}`
@@ -1049,23 +1013,34 @@ useEffect(() => {
 }, []);
 
   useEffect(() => {
-    if (activeMenu !== "guru") return;
+    if (activeMenu !== "guru" || teachersLoadedRef.current) return;
     let cancelled = false;
+    const requestId = ++teacherLoadRequestRef.current;
     (async () => {
       setTeacherLoading(true);
       setMasterError("");
       setTeacherSummaryError("");
       try {
-        const [teacherResult, assignmentResult, classResult] = await Promise.all([
-          supabase.from("teachers")
-            .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
-            .order("full_name"),
+        const [assignmentResult, classResult] = await Promise.all([
           supabase.from("attendance_teacher_subject_assignments").select("teacher_id, class_id, subject"),
           supabase.from("classes").select("id, name, homeroom_teacher_id"),
         ]);
         if (cancelled) return;
-        if (teacherResult.error) throw teacherResult.error;
-        setTeachers((teacherResult.data ?? []) as Teacher[]);
+        const loadedTeachers: Teacher[] = [];
+        const pageSize = 1000;
+        for (let offset = 0; ; offset += pageSize) {
+          const { data, error } = await supabase.from("teachers")
+            .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
+            .order("full_name")
+            .order("id")
+            .range(offset, offset + pageSize - 1);
+          if (error) throw error;
+          const page = (data ?? []) as Teacher[];
+          loadedTeachers.push(...page);
+          if (page.length < pageSize) break;
+        }
+        if (cancelled) return;
+        setTeachers(loadedTeachers);
         if (assignmentResult.error) {
           setTeacherAssignmentSummary([]);
           setTeacherSummaryError(`Ringkasan penugasan mapel gagal dimuat: ${formatSupabaseError(assignmentResult.error)}`);
@@ -1080,24 +1055,21 @@ useEffect(() => {
         } else {
           setTeacherHomeroomSummary((classResult.data ?? []) as TeacherHomeroomSummary[]);
         }
-        if (userRole === "super_admin") {
-          setTeacherAccounts(null);
-          void getManagedUsers()
-            .then((users) => {
-              if (!cancelled) setTeacherAccounts(users);
-            })
-            .catch((error) => {
-              if (!cancelled) setTeacherAccountError(formatSupabaseError(error));
-            });
-        }
+        teachersLoadedRef.current = true;
       } catch (error) {
         if (!cancelled) setMasterError(`Data guru gagal dimuat: ${formatSupabaseError(error)}`);
       } finally {
-        if (!cancelled) setTeacherLoading(false);
+        if (requestId === teacherLoadRequestRef.current) setTeacherLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [activeMenu, userRole]);
+    return () => {
+      cancelled = true;
+      if (requestId === teacherLoadRequestRef.current) {
+        teacherLoadRequestRef.current += 1;
+        setTeacherLoading(false);
+      }
+    };
+  }, [activeMenu]);
 
   const getTeacherManagedAccount = (teacher: Teacher) => {
     if (!teacher.nip || !teacherAccounts) return undefined;
@@ -1117,12 +1089,10 @@ useEffect(() => {
       || primaryRole === teacherFilterPosition
       || extraRoles.includes(teacherFilterPosition);
     const hasSubjectAssignment = teacherAssignmentSummary.some((assignment) => assignment.teacher_id === teacher.id);
-    const account = getTeacherManagedAccount(teacher);
-    const hasAccount = Boolean(teacher.profile_id || account);
     const matchesStatus = teacherFilterStatus === "all"
       || (teacherFilterStatus === "no-subject"
           ? !teacherSummaryError && primaryRole === "Guru Mata Pelajaran" && !hasSubjectAssignment
-        : userRole === "super_admin" && !hasAccount);
+        : userRole === "super_admin" && !teacher.profile_id);
     return matchesSearch && matchesPosition && matchesStatus;
   });
   const filteredClasses = classRows.filter((row) =>
@@ -1158,7 +1128,7 @@ useEffect(() => {
   const eligibleStudentAccountCount = filteredStudents.filter((student) =>
     student.status === "Active"
     && /^\d{10}$/.test(student.nisn.trim())
-    && getStudentAccountStatus(student) === "Belum Ada Akun"
+    && !student.profile_id
   ).length;
   const visibleBulkStudents = bulkMoveMode === "graduate"
     ? bulkStudents.filter((student) => student.status === "Active")
@@ -1357,46 +1327,77 @@ useEffect(() => {
   };
 
   useEffect(() => {
-    if (activeMenu !== "kelas") return;
+    if (activeMenu !== "kelas" || classLoadedVersionRef.current === classReloadVersion) return;
     let cancelled = false;
     (async () => {
       setClassLoading(true);
       setMasterError("");
       try {
-        const [c, y, t, st] = await Promise.all([
+        const [c, y] = await Promise.all([
           supabase.from("classes").select("id, name, grade_level, academic_year_id, homeroom_teacher_id").order("grade_level").order("name"),
-        supabase.from("academic_years").select("id, name, is_active, start_date, end_date").order("start_date", { ascending: false }),
-        supabase.from("teachers")
-          .select("id, profile_id, full_name, staff_category, primary_role")
-          .not("profile_id", "is", null),
-          supabase.from("students").select("class_id")
+          supabase.from("academic_years").select("id, name, is_active, start_date, end_date").order("start_date", { ascending: false }),
         ]);
         if (cancelled) return;
-        const error = c.error || y.error || t.error || st.error;
+        const error = c.error || y.error;
         if (error) throw error;
+
+        const linkedTeachers: Array<Pick<Teacher, "id" | "profile_id" | "full_name" | "staff_category" | "primary_role">> = [];
+        const teacherPageSize = 1000;
+        for (let offset = 0; ; offset += teacherPageSize) {
+          const { data, error: teacherError } = await supabase.from("teachers")
+            .select("id, profile_id, full_name, staff_category, primary_role")
+            .not("profile_id", "is", null)
+            .range(offset, offset + teacherPageSize - 1);
+          if (teacherError) throw teacherError;
+          const page = (data ?? []) as typeof linkedTeachers;
+          linkedTeachers.push(...page);
+          if (page.length < teacherPageSize) break;
+        }
+
+        const studentClassIds: Array<{ class_id: string | null }> = [];
+        const studentPageSize = 1000;
+        for (let offset = 0; ; offset += studentPageSize) {
+          const { data, error: studentError } = await supabase.from("students")
+            .select("class_id")
+            .range(offset, offset + studentPageSize - 1);
+          if (studentError) throw studentError;
+          const page = data ?? [];
+          studentClassIds.push(...page);
+          if (page.length < studentPageSize) break;
+        }
+        if (cancelled) return;
+
         const years = y.data ?? [];
         setAcademicYears(years as AcademicYear[]);
         setClassTeacherOptions(
-          (t.data ?? []).filter((teacher) =>
+          linkedTeachers.filter((teacher) =>
             teacher.staff_category === "Guru" && teacher.primary_role === "Guru Mata Pelajaran"
-          ) as Array<Pick<Teacher, "id" | "profile_id" | "full_name" | "staff_category" | "primary_role">>,
+          ),
         );
-        const teacherNames = new Map((t.data ?? []).filter(x => x.profile_id).map(x => [x.profile_id as string, x.full_name]));
+        const teacherNames = new Map(linkedTeachers.filter(x => x.profile_id).map(x => [x.profile_id as string, x.full_name]));
         const yearNames = new Map(years.map(x => [x.id, x.name]));
         const counts = new Map<string, number>();
-        (st.data ?? []).forEach(x => { if (x.class_id) counts.set(x.class_id, (counts.get(x.class_id) ?? 0) + 1); });
+        studentClassIds.forEach(x => { if (x.class_id) counts.set(x.class_id, (counts.get(x.class_id) ?? 0) + 1); });
         setClassRows((c.data ?? []).map(x => ({ ...x, academic_year_name: yearNames.get(x.academic_year_id) ?? "—", homeroom_teacher_name: x.homeroom_teacher_id ? teacherNames.get(x.homeroom_teacher_id) ?? "Profil guru tidak ditemukan" : "Belum ditentukan", student_count: counts.get(x.id) ?? 0 })) as ClassRow[]);
+        classLoadedVersionRef.current = classReloadVersion;
       } catch (error) {
         if (!cancelled) setMasterError(`Data kelas gagal dimuat: ${formatSupabaseError(error)}`);
       } finally {
         if (!cancelled) setClassLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      setClassLoading(false);
+    };
   }, [activeMenu, classReloadVersion]);
 
   useEffect(() => {
-    if (activeMenu !== "riwayat" || !canManageDataInduk) return;
+    if (
+      activeMenu !== "riwayat" ||
+      !canManageDataInduk ||
+      auditLoadedVersionRef.current === auditReloadVersion
+    ) return;
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       setAuditLoading(true);
@@ -1408,7 +1409,10 @@ useEffect(() => {
           .order("changed_at", { ascending: false })
           .limit(200);
         if (error) throw error;
-        if (!cancelled) setAuditEntries((data ?? []) as DataIndukAuditEntry[]);
+        if (!cancelled) {
+          setAuditEntries((data ?? []) as DataIndukAuditEntry[]);
+          auditLoadedVersionRef.current = auditReloadVersion;
+        }
       } catch (error) {
         if (!cancelled) {
           setAuditError(`Riwayat perubahan gagal dimuat: ${formatSupabaseError(error)}`);
@@ -1420,6 +1424,7 @@ useEffect(() => {
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      setAuditLoading(false);
     };
   }, [activeMenu, auditReloadVersion, canManageDataInduk]);
 
@@ -1502,7 +1507,7 @@ useEffect(() => {
         ].sort((a, b) => a.full_name.localeCompare(b.full_name)),
       );
 
-      if (savedTeacher.profile_id || nip) {
+      if (editingTeacher && savedTeacher.profile_id) {
         await syncTeacherManagedAccount(savedTeacher.id);
       }
 
@@ -1588,8 +1593,8 @@ useEffect(() => {
   const handleDeleteTeacher = async (teacher: Teacher) => {
     if (!canDeletePeopleData) return;
     if (!window.confirm(`Hapus data ${teacher.full_name}?`)) return;
-    let accountDeleted = false;
-    let accountFound = false;
+    let accountDeleted: boolean;
+    let accountFound: boolean;
     try {
       const [result] = await deleteMasterRecords("teachers", [teacher.id]);
       accountDeleted = result.accountDeleted;
@@ -2529,6 +2534,7 @@ const handleImportTeachers = async () => {
       employment_status: row.employment_status,
     })));
     if (insertError) throw insertError;
+    teachersLoadedRef.current = false;
 
     const auditWarning = await logMasterChange(
       "Data guru/tendik diimpor",
@@ -2658,6 +2664,7 @@ const handleImportStudents = async () => {
       .insert(records);
 
     if (insertError) throw insertError;
+    studentsLoadedRef.current = false;
     const auditWarning = await logMasterChange(
       "Data siswa diimpor",
       `${rowsToInsert.length} siswa berhasil diimpor.`,
@@ -2687,7 +2694,7 @@ const handleImportStudents = async () => {
     setImportValidationComplete(true);
     if (rowsWithErrors.length === 0) {
       setImportFileName("");
-      setActiveMenu("siswa");
+      switchDataIndukMenu("siswa");
     }
   } catch (error) {
     setImportError(
@@ -2716,14 +2723,26 @@ const handleExportStudents = async () => {
   };
 
   try {
-    const { data, error } = await supabase
-      .from("students")
-      .select(
-        "nisn, full_name, class:classes!students_class_id_fkey(name), birth_date, gender, status"
-      )
-      .order("full_name");
-
-    if (error) throw error;
+    const data: Array<{
+      nisn: string;
+      full_name: string;
+      class: unknown;
+      birth_date: string | null;
+      gender: string | null;
+      status: string;
+    }> = [];
+    const pageSize = 1000;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data: page, error } = await supabase
+        .from("students")
+        .select("id, nisn, full_name, class:classes!students_class_id_fkey(name), birth_date, gender, status")
+        .order("full_name")
+        .order("id")
+        .range(offset, offset + pageSize - 1);
+      if (error) throw error;
+      data.push(...(page ?? []));
+      if ((page ?? []).length < pageSize) break;
+    }
 
     if (!data || data.length === 0) {
       alert("Belum ada data siswa di database untuk diekspor.");
@@ -4531,10 +4550,9 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
               type="button"
               className={`di-menu-card ${activeMenu === item.id ? "di-selected" : ""}`}
               onClick={() => {
-                setActiveMenu(item.id);
+                switchDataIndukMenu(item.id);
                 setSearch("");
                 if (item.id === "guru") {
-                  setTeacherAccounts(null);
                   setTeacherAccountError("");
                 }
               }}
@@ -4608,8 +4626,6 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                   onClick={() => void generateStudentAccountsBulk()}
                   disabled={
                     loadingStudents ||
-                    studentAccounts === null ||
-                    Boolean(studentAccountError) ||
                     eligibleStudentAccountCount === 0 ||
                     bulkAccountProgress !== null
                   }
@@ -5116,11 +5132,10 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                       onChange={(event) => setTeacherFilterStatus(event.target.value)}
                       aria-label="Filter penugasan atau akun guru"
                       style={{ width: "auto", minWidth: 170 }}
-                      disabled={userRole === "super_admin" && teacherAccounts === null}
                     >
                       <option value="all">Semua Status</option>
                       <option value="no-subject">Belum punya mapel</option>
-                      {userRole === "super_admin" && <option value="no-account">Belum punya akun</option>}
+                      {userRole === "super_admin" && <option value="no-account">Belum tertaut</option>}
                     </select>
                   </>
                 )}
@@ -5310,7 +5325,8 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                           {userRole === "super_admin" && (
                             <td>
                               <span>{getStudentAccountStatus(student)}</span>
-                              {getStudentAccountStatus(student) === "Belum Ada Akun"
+                              {!student.profile_id &&
+                                (!studentAccounts || getStudentAccountStatus(student) === "Belum Ada Akun")
                                 && student.status === "Active"
                                 && /^\d{10}$/.test(student.nisn.trim())
                                 && student.full_name.trim().length >= 2
