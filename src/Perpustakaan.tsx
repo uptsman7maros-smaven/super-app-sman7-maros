@@ -127,6 +127,7 @@ type Props = {
   userRole?: string;
   userId?: string;
   username?: string;
+  additionalRoles?: string[];
 };
 
 const today = () => {
@@ -165,12 +166,17 @@ export default function Perpustakaan({
   userRole = "",
   userId = "",
   username = "",
+  additionalRoles = [],
 }: Props) {
   const { currentUser } = useSchoolContext();
   const isStudent = userRole === "siswa";
   const isSuperAdmin = userRole === "super_admin";
-  const [canManage, setCanManage] = useState(isSuperAdmin);
-  const [tab, setTab] = useState(isStudent || !isSuperAdmin ? "katalog" : "ringkasan");
+  const isHeadLibrarian = additionalRoles.includes("Kepala Perpustakaan")
+    || Boolean(currentUser?.additional_roles.includes("Kepala Perpustakaan"));
+  const [canManage, setCanManage] = useState(isSuperAdmin || isHeadLibrarian);
+  const [tab, setTab] = useState(
+    isStudent || (!isSuperAdmin && !isHeadLibrarian) ? "katalog" : "ringkasan",
+  );
   const [books, setBooks] = useState<Book[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -231,8 +237,8 @@ export default function Perpustakaan({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      let manager = isSuperAdmin;
-      if (!isStudent && !isSuperAdmin) {
+      let manager = isSuperAdmin || isHeadLibrarian;
+      if (!isStudent && !isSuperAdmin && !isHeadLibrarian) {
         const { data, error } = await supabase.rpc("library_can_manage");
         if (error) throw new Error(`Perbarui database Perpustakaan terlebih dahulu: ${error.message}`);
         manager = Boolean(data);
@@ -329,7 +335,7 @@ export default function Perpustakaan({
     } finally {
       setLoading(false);
     }
-  }, [isStudent, isSuperAdmin, userId]);
+  }, [isHeadLibrarian, isStudent, isSuperAdmin, userId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);

@@ -2202,6 +2202,9 @@ const jobSpecificPages = [
     && teacherAdditionalRoles.includes("Wakasek Sarana dan Prasarana")
     ? ["Inventaris"]
     : []),
+  ...(isTeacherRole && teacherAdditionalRoles.includes("Kepala Perpustakaan")
+    ? ["Perpustakaan"]
+    : []),
 ];
 const roleAllowedPages = [...new Set([
   ...(roleAccess[currentUser?.role ?? ""] ?? [
@@ -2591,7 +2594,7 @@ if (activePage === "Absensi Digital") {
 
 const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "Data Induk": <DataInduk userRole={currentUser.role} />,
-  "Perpustakaan": <Perpustakaan userRole={currentUser.role} userId={currentUser.id} username={currentUser.username} />,
+  "Perpustakaan": <Perpustakaan userRole={currentUser.role} userId={currentUser.id} username={currentUser.username} additionalRoles={currentUser.additional_roles} />,
   "Inventaris": <Inventaris userRole={currentUser.role} additionalRoles={currentUser.additional_roles} />,
   "Keuangan": <KeuanganDigital userRole={currentUser.role} />,
   "Persuratan": <PersuratanModule currentUser={currentUser} onBack={() => setActivePage(letterReturnPage)} initialStudentPrefill={parentLetterPrefill} onStudentPrefillHandled={handleStudentPrefillHandled} />,
@@ -3061,7 +3064,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
         </motion.div>
 ) : activePage === "Perpustakaan" ? (
      <motion.div key="perpustakaan" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-       <Perpustakaan userRole={currentUser.role} userId={currentUser.id} username={currentUser.username} />
+       <Perpustakaan userRole={currentUser.role} userId={currentUser.id} username={currentUser.username} additionalRoles={currentUser.additional_roles} />
      </motion.div>
 ) : activePage === "Akademik" ? (
      <motion.div key="akademik" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>

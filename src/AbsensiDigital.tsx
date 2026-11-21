@@ -12,6 +12,7 @@ import type { SchoolUser } from "./context/school-context";
 import { useSchoolContext } from "./context/useSchoolContext";
 import { SchoolLetterheadPicker, SchoolLetterheadPreview } from "./components/shared/SchoolLetterheadPicker";
 import { getSchoolLetterhead, type LetterheadSlot } from "./services/masterDataService";
+import { normalizeSubjectName } from "./services/subjectCatalog";
 
 type AttendanceStatus = "hadir" | "sakit" | "izin" | "terlambat" | "alpa" | "pulang";
 type PersonType = "siswa" | "guru_tendik";
@@ -302,19 +303,31 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         if (!Array.isArray(data) || !data.every(isTeacherAttendanceAssignment)) {
           throw new Error("Daftar penugasan mata pelajaran tidak valid.");
         }
+        const normalizedAssignments = [
+          ...new Map(data.map((assignment) => {
+            const normalizedAssignment = {
+              ...assignment,
+              subject: normalizeSubjectName(assignment.subject),
+            };
+            return [
+              JSON.stringify([normalizedAssignment.subject, normalizedAssignment.class_id]),
+              normalizedAssignment,
+            ] as const;
+          })).values(),
+        ];
         if (active) {
-          setTeacherSubjectAssignments(data);
-          if (data.length === 0) {
+          setTeacherSubjectAssignments(normalizedAssignments);
+          if (normalizedAssignments.length === 0) {
             setQrError(
               "Belum ada penugasan mata pelajaran dan kelas untuk akun ini. Hubungi admin/operator di Data Induk.",
             );
             setQrSubject("");
             setQrClassId("");
           } else {
-            const initialSubject = data[0].subject;
+            const initialSubject = normalizedAssignments[0].subject;
             setQrSubject(initialSubject);
             setQrClassId(
-              data.find((assignment) => assignment.subject === initialSubject)?.class_id ?? "",
+              normalizedAssignments.find((assignment) => assignment.subject === initialSubject)?.class_id ?? "",
             );
           }
         }

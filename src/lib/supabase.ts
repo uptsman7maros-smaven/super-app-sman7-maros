@@ -433,7 +433,7 @@ function rememberApiRateLimit(serverRetryAfter: string | null) {
   apiRetryAfter = Math.max(apiRetryAfter, now + retryAfterMs);
 }
 
-function refreshSupabaseSession() {
+function refreshSupabaseSession(fallbackSession: Session | null = null) {
   if (refreshPromise) return refreshPromise;
 
   if (Date.now() < sessionRetryAfter) {
@@ -455,6 +455,13 @@ function refreshSupabaseSession() {
       rememberSessionRateLimit(error);
       const status = getErrorStatus(error);
       if (status === 400 || status === 401) {
+        if (
+          fallbackSession?.access_token &&
+          (fallbackSession.expires_at ?? 0) * 1000 > Date.now()
+        ) {
+          cachedSession = fallbackSession;
+          return fallbackSession;
+        }
         const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
         if (signOutError) throw signOutError;
         cachedSession = null;
@@ -486,16 +493,18 @@ export async function getValidSupabaseSession() {
           supabase.auth.getSession(),
           sessionTimeout,
         ]);
-        if (error) throw error;
-
         sessionCandidate = data.session;
         cachedSession = data.session;
-        if (!data.session) return null;
-
-        const expiresAt = (data.session.expires_at ?? 0) * 1000;
-        if (data.session.access_token && expiresAt > Date.now() + 60_000) {
+        const expiresAt = (data.session?.expires_at ?? 0) * 1000;
+        const tokenStillValid = Boolean(data.session?.access_token && expiresAt > Date.now());
+        if (data.session?.access_token && expiresAt > Date.now() + 60_000) {
           return data.session;
         }
+        if (error) {
+          if (tokenStillValid && data.session) return data.session;
+          throw error;
+        }
+        if (!data.session) return null;
 
         if (Date.now() < sessionRetryAfter) {
           if (data.session.access_token && expiresAt > Date.now()) return data.session;
@@ -505,7 +514,10 @@ export async function getValidSupabaseSession() {
         }
 
         try {
-          return await refreshSupabaseSession();
+          const refreshedSession = await refreshSupabaseSession(data.session);
+          if (refreshedSession) return refreshedSession;
+          if (data.session.access_token && expiresAt > Date.now()) return data.session;
+          return null;
         } catch (error) {
           if (data.session.access_token && expiresAt > Date.now()) return data.session;
           throw error;
