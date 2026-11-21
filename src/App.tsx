@@ -701,7 +701,7 @@ function AppContent() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
-  const dashboardFeedRefreshState = useRef(new Map<string, { lastRequestedAt: number; inFlight: boolean }>());
+  const dashboardFeedRefreshState = useRef(new Map<string, { lastRequestedAt: number; promise: Promise<DashboardFeed> | null }>());
   const dashboardStatsRefreshState = useRef(new Map<string, { lastRequestedAt: number; inFlight: boolean }>());
   const [activePage, setActivePage] = useState("Dashboard");
   const [parentLetterPrefill, setParentLetterPrefill] = useState<{
@@ -852,17 +852,21 @@ useEffect(() => {
   let realtimeRefreshTimer = 0;
   const requestState = dashboardFeedRefreshState.current.get(account.id) ?? {
     lastRequestedAt: 0,
-    inFlight: false,
+    promise: null,
   };
   dashboardFeedRefreshState.current.set(account.id, requestState);
   const refreshFeed = async () => {
-    if (!active || requestState.inFlight) return;
-    if (Date.now() - requestState.lastRequestedAt < 90_000) return;
-    requestState.inFlight = true;
-    requestState.lastRequestedAt = Date.now();
+    if (!active) return;
+    let feedPromise = requestState.promise;
+    if (!feedPromise) {
+      if (Date.now() - requestState.lastRequestedAt < 90_000) return;
+      requestState.lastRequestedAt = Date.now();
+      feedPromise = loadDashboardFeed(account);
+      requestState.promise = feedPromise;
+    }
     setDashboardFeedLoading(true);
     try {
-      const feed = await loadDashboardFeed(account);
+      const feed = await feedPromise;
       if (!active) return;
       setDashboardNotifications(feed.notifications);
       setDashboardActivities(feed.activities);
@@ -877,7 +881,7 @@ useEffect(() => {
       setDashboardFeedError(message);
       console.error("Notifikasi dashboard gagal dimuat:", error);
     } finally {
-      requestState.inFlight = false;
+      if (requestState.promise === feedPromise) requestState.promise = null;
       if (active) setDashboardFeedLoading(false);
     }
   };
@@ -3026,7 +3030,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
                               : "#3976F6";
                         return <div className="activity-item" key={activity.id}><span className="activity-icon" style={{ color }}><Icon size={19}/></span><div className="activity-copy"><strong>{activity.title}</strong><span>{activity.detail}</span></div><span className="activity-time">{dashboardTime(activity.createdAt)}</span></div>;
                       })}
-                      {activityItems.length === 0 && <div className="activity-item"><span className="activity-copy"><span>{dashboardFeedLoading ? "Memuat aktivitas…" : "Belum ada aktivitas yang dapat ditampilkan."}</span></span></div>}
+                      {activityItems.length === 0 && <div className="activity-item"><span className="activity-copy"><span>{dashboardFeedLoading ? "Memuat aktivitas…" : dashboardFeedError ? "Aktivitas dashboard gagal dimuat. Lihat detail pada panel notifikasi." : "Belum ada aktivitas yang dapat ditampilkan."}</span></span></div>}
                     </div>
                     {(allowedPages.includes("Pengaturan") || allowedPages.includes("Laporan & Analitik")) && (
                       <button className="card-link" onClick={() => handleModuleOpen(allowedPages.includes("Pengaturan") ? "Pengaturan" : "Laporan & Analitik")}>Lihat riwayat <ArrowRight size={15}/></button>

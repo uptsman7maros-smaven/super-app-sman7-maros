@@ -91,14 +91,33 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
     openBkCases: null,
   };
   const errors: string[] = [];
+  const requestController = new AbortController();
+  let deadlineExpired = false;
+  let rejectDeadline: (error: Error) => void = () => {};
+  const deadline = new Promise<never>((_, reject) => {
+    rejectDeadline = reject;
+  });
+  const timeoutId = window.setTimeout(() => {
+    deadlineExpired = true;
+    requestController.abort();
+    rejectDeadline(new Error("Pemuatan dashboard melewati batas waktu 20 detik."));
+  }, 20_000);
+
+  const isSchoolManager = [
+    "super_admin",
+    "kepala_sekolah",
+    "operator",
+    "kepala_tata_usaha",
+  ].includes(account.role);
 
   async function collectRows(
     label: string,
     query: PromiseLike<QueryResult>,
     consume: (rows: DashboardRow[]) => void,
   ) {
+    if (requestController.signal.aborted) return;
     try {
-      const result = await query;
+      const result = await Promise.race([query, deadline]);
       if (result.error) {
         errors.push(`${label}: ${result.error.message}`);
         return;
@@ -106,7 +125,12 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
       const rows = Array.isArray(result.data) ? result.data.filter(isRecord) : [];
       consume(rows);
     } catch (error) {
-      errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+      const message = deadlineExpired
+        ? "permintaan melewati batas waktu 20 detik"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      errors.push(`${label}: ${message}`);
       return;
     }
   }
@@ -123,12 +147,31 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
     notifications.push({ id, title, body, module, page, createdAt, unread });
   }
 
+  const activityTask = isSchoolManager || account.role === "staff_tata_usaha"
+    ? collectRows(
+        "Log aktivitas",
+        supabase.from("app_activity_logs")
+          .select("id,actor_label,action,module_key,details,created_at")
+          .order("created_at", { ascending: false })
+          .limit(6)
+          .abortSignal(requestController.signal),
+        (rows) => rows.forEach((row, index) => activities.push({
+          id: fieldText(row, "id", `activity-${index}`),
+          title: `${fieldText(row, "action", "Aktivitas")} · ${fieldText(row, "module_key", "Modul")}`,
+          detail: `${fieldText(row, "actor_label", "Pengguna")}${fieldText(row, "details") ? ` — ${fieldText(row, "details")}` : ""}`,
+          module: fieldText(row, "module_key", "Sistem"),
+          createdAt: fieldDate(row, "created_at"),
+        })),
+      )
+    : Promise.resolve();
+
   await collectRows(
     "Notifikasi sekolah",
     supabase.from("school_notifications")
       .select("id,title,body,category,created_at")
       .order("created_at", { ascending: false })
-      .limit(10),
+      .limit(10)
+      .abortSignal(requestController.signal),
     (rows) => {
       rows.forEach((row, index) => {
         addNotification(
@@ -150,7 +193,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
       .select("id,title,audience,published_at,is_published")
       .eq("is_published", true)
       .order("published_at", { ascending: false })
-      .limit(5),
+      .limit(5)
+      .abortSignal(requestController.signal),
     (rows) => rows.forEach((row, index) => addNotification(
       `announcement-${fieldText(row, "id", String(index))}`,
       fieldText(row, "title", "Pengumuman sekolah"),
@@ -178,7 +222,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
           .gte("due_date", today)
           .lte("due_date", soon)
           .order("due_date", { ascending: true })
-          .limit(5),
+          .limit(5)
+          .abortSignal(requestController.signal),
         (rows) => rows.forEach((row, index) => addNotification(
           `student-task-${fieldText(row, "id", String(index))}`,
           fieldText(row, "title", "Tugas kelas"),
@@ -201,7 +246,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .gte("due_date", today)
         .lte("due_date", soon)
         .order("due_date", { ascending: true })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `teacher-task-${fieldText(row, "id", String(index))}`,
         fieldText(row, "title", "Tugas akademik"),
@@ -221,7 +267,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .eq("requester_id", account.id)
         .in("status", actionableLetterStatuses)
         .order("created_at", { ascending: false })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `requester-letter-${fieldText(row, "id", String(index))}`,
         fieldText(row, "subject", "Pengajuan surat"),
@@ -234,18 +281,32 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
   }
 
   if (account.role === "guru_bk") {
-    const [alertCount, caseCount] = await Promise.all([
-      supabase.from("attendance_bk_alerts")
-        .select("id", { count: "exact", head: true })
-        .eq("is_read", false),
-      supabase.from("kb_catatan_bk")
-        .select("id", { count: "exact", head: true })
-        .neq("status_kasus", "Selesai"),
-    ]);
-    if (alertCount.error) errors.push(`Jumlah peringatan BK: ${alertCount.error.message}`);
-    else summary.unreadBkAlerts = alertCount.count;
-    if (caseCount.error) errors.push(`Jumlah kasus BK aktif: ${caseCount.error.message}`);
-    else summary.openBkCases = caseCount.count;
+    try {
+      const [alertCount, caseCount] = await Promise.race([
+        Promise.all([
+          supabase.from("attendance_bk_alerts")
+            .select("id", { count: "exact", head: true })
+            .eq("is_read", false)
+            .abortSignal(requestController.signal),
+          supabase.from("kb_catatan_bk")
+            .select("id", { count: "exact", head: true })
+            .neq("status_kasus", "Selesai")
+            .abortSignal(requestController.signal),
+        ]),
+        deadline,
+      ]);
+      if (alertCount.error) errors.push(`Jumlah peringatan BK: ${alertCount.error.message}`);
+      else summary.unreadBkAlerts = alertCount.count;
+      if (caseCount.error) errors.push(`Jumlah kasus BK aktif: ${caseCount.error.message}`);
+      else summary.openBkCases = caseCount.count;
+    } catch (error) {
+      const message = deadlineExpired
+        ? "permintaan melewati batas waktu 20 detik"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      errors.push(`Ringkasan BK: ${message}`);
+    }
 
     await collectRows(
       "Peringatan absensi BK",
@@ -253,7 +314,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .select("id,student_name,attendance_date,title")
         .eq("is_read", false)
         .order("attendance_date", { ascending: false })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `bk-alert-${fieldText(row, "id", String(index))}`,
         fieldText(row, "title", "Peringatan absensi"),
@@ -269,7 +331,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .select("id,nama_siswa,status_kasus,tanggal_kontrol")
         .neq("status_kasus", "Selesai")
         .order("tanggal_kontrol", { ascending: true })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `bk-case-${fieldText(row, "id", String(index))}`,
         "Kasus BK perlu tindak lanjut",
@@ -281,13 +344,6 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
     );
   }
 
-  const isSchoolManager = [
-    "super_admin",
-    "kepala_sekolah",
-    "operator",
-    "kepala_tata_usaha",
-  ].includes(account.role);
-
   if (isSchoolManager) {
     await collectRows(
       "Antrean persuratan",
@@ -295,7 +351,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .select("id,subject,status,created_at")
         .in("status", actionableLetterStatuses)
         .order("created_at", { ascending: false })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `letter-queue-${fieldText(row, "id", String(index))}`,
         "Pengajuan surat menunggu pemeriksaan",
@@ -314,7 +371,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .select("id,description,amount,transaction_date")
         .eq("status", "menunggu")
         .order("transaction_date", { ascending: false })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `finance-${fieldText(row, "id", String(index))}`,
         "Transaksi menunggu persetujuan",
@@ -333,7 +391,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
         .select("id,asset_name,issue_type,status,reported_at")
         .neq("status", "Selesai")
         .order("reported_at", { ascending: false })
-        .limit(5),
+        .limit(5)
+        .abortSignal(requestController.signal),
       (rows) => rows.forEach((row, index) => addNotification(
         `inventory-${fieldText(row, "id", String(index))}`,
         "Laporan inventaris perlu tindak lanjut",
@@ -345,23 +404,8 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
     );
   }
 
-  if (isSchoolManager || account.role === "staff_tata_usaha") {
-    await collectRows(
-      "Log aktivitas",
-      supabase.from("app_activity_logs")
-        .select("id,actor_label,action,module_key,details,created_at")
-        .order("created_at", { ascending: false })
-        .limit(6),
-      (rows) => rows.forEach((row, index) => activities.push({
-        id: fieldText(row, "id", `activity-${index}`),
-        title: `${fieldText(row, "action", "Aktivitas")} · ${fieldText(row, "module_key", "Modul")}`,
-        detail: `${fieldText(row, "actor_label", "Pengguna")}${fieldText(row, "details") ? ` — ${fieldText(row, "details")}` : ""}`,
-        module: fieldText(row, "module_key", "Sistem"),
-        createdAt: fieldDate(row, "created_at"),
-      })),
-    );
-  }
-
+  await activityTask;
+  window.clearTimeout(timeoutId);
   notifications.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   return {
     notifications: notifications.slice(0, 12),
