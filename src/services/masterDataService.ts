@@ -126,8 +126,28 @@ const SCHOOL_CONTEXT_CACHE_MS = 90_000;
 const schoolContextCache = new Map<string, { data: SchoolContextData; cachedAt: number }>();
 const schoolContextRequests = new Map<string, Promise<SchoolContextData>>();
 
-function throwOnError(error: { message: string } | null, operation: string) {
-  if (error) throw new Error(`${operation}: ${error.message}`);
+type SupabaseErrorDetails = {
+  code?: string;
+  message: string;
+  details?: string;
+  hint?: string;
+};
+
+function formatSupabaseError(error: unknown, operation: string) {
+  const details = typeof error === "object" && error !== null
+    ? error as SupabaseErrorDetails
+    : null;
+  const message = error instanceof Error
+    ? error.message
+    : details?.message ?? String(error);
+  const code = details?.code ? `[${details.code}] ` : "";
+  const extraDetails = details?.details ? ` Detail: ${details.details}` : "";
+  const hint = details?.hint ? ` Saran: ${details.hint}` : "";
+  return `${operation}: ${code}${message}${extraDetails}${hint}`;
+}
+
+function throwOnError(error: SupabaseErrorDetails | null, operation: string) {
+  if (error) throw new Error(formatSupabaseError(error, operation));
 }
 
 function identityFor(
@@ -336,96 +356,189 @@ export type SchoolHoliday = {
 };
 
 export type SchoolSyncSummary = {
-  students: number;
-  teachers: number;
-  classes: number;
-  academicRecords: number;
-  teacherSubjectAssignments: number;
-  rooms: number;
-  roomsLinkedToClasses: number;
-  assets: number;
-  assetsLinkedToPlaces: number;
-  loans: number;
+  students: number | null;
+  teachers: number | null;
+  classes: number | null;
+  academicRecords: number | null;
+  teacherSubjectAssignments: number | null;
+  rooms: number | null;
+  roomsLinkedToClasses: number | null;
+  assets: number | null;
+  assetsLinkedToPlaces: number | null;
+  loans: number | null;
 };
 
 export type DataIndukSchoolPanelData = {
   settings: SchoolPanelSettings | null;
+  settingsError: string | null;
   holidays: SchoolHoliday[];
+  holidaysError: string | null;
   summary: SchoolSyncSummary;
+  loadErrors: string[];
 };
 
-function requiredCount(count: number | null, operation: string) {
-  if (count === null) throw new Error(`${operation}: jumlah data tidak tersedia.`);
-  return count;
+type QueryError = { code?: string; message: string; details?: string; hint?: string };
+type QueryOutcome<T> = { data: T | null; count: number | null; error: string | null };
+
+function parseSchoolPanelSettings(value: unknown): SchoolPanelSettings | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const nullableText = (item: unknown) => item === null || typeof item === "string";
+  const nullableNumber = (item: unknown) => item === null || typeof item === "number";
+  if (
+    typeof row.id !== "number"
+    || !nullableText(row.school_name)
+    || !nullableText(row.npsn)
+    || !nullableText(row.school_address)
+    || !nullableText(row.principal_name)
+    || !nullableText(row.principal_nip)
+    || !nullableNumber(row.latitude)
+    || !nullableNumber(row.longitude)
+    || !nullableNumber(row.geofence_radius_meters)
+  ) return null;
+  return {
+    id: row.id,
+    school_name: typeof row.school_name === "string" ? row.school_name : "",
+    npsn: typeof row.npsn === "string" ? row.npsn : "",
+    school_address: typeof row.school_address === "string" ? row.school_address : null,
+    principal_name: typeof row.principal_name === "string" ? row.principal_name : null,
+    principal_nip: typeof row.principal_nip === "string" ? row.principal_nip : null,
+    latitude: typeof row.latitude === "number" ? row.latitude : null,
+    longitude: typeof row.longitude === "number" ? row.longitude : null,
+    geofence_radius_meters: typeof row.geofence_radius_meters === "number"
+      ? row.geofence_radius_meters
+      : null,
+  };
 }
 
-export async function loadDataIndukSchoolPanelData(): Promise<DataIndukSchoolPanelData> {
-  const [
-    settingsResult,
-    holidaysResult,
-    studentsResult,
-    teachersResult,
-    classesResult,
-    academicRecordsResult,
-    assignmentsResult,
-    roomsResult,
-    linkedRoomsResult,
-    assetsResult,
-    linkedAssetsResult,
-    loansResult,
-  ] = await Promise.all([
-    supabase
-      .from("school_settings")
-      .select("id, school_name, npsn, school_address, principal_name, principal_nip, latitude, longitude, geofence_radius_meters")
-      .order("id")
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("school_holidays")
-      .select("id, holiday_date, title, category, is_non_kbm")
-      .order("holiday_date", { ascending: false })
-      .order("title"),
-    supabase.from("students").select("id", { count: "exact", head: true }),
-    supabase.from("teachers").select("id", { count: "exact", head: true }),
-    supabase.from("classes").select("id", { count: "exact", head: true }),
-    supabase.from("academic_records").select("id", { count: "exact", head: true }),
-    supabase.from("attendance_teacher_subject_assignments").select("id", { count: "exact", head: true }),
-    supabase.from("inv_places").select("id", { count: "exact", head: true }),
-    supabase.from("inv_places").select("id", { count: "exact", head: true }).not("class_id", "is", null),
-    supabase.from("inv_assets").select("id", { count: "exact", head: true }),
-    supabase.from("inv_assets").select("id", { count: "exact", head: true }).not("place_id", "is", null),
-    supabase.from("inv_loans").select("id", { count: "exact", head: true }),
-  ]);
+async function captureQuery<T>(
+  query: PromiseLike<{ data: T | null; count: number | null; error: QueryError | null }>,
+  operation: string,
+  didTimeout: () => boolean,
+): Promise<QueryOutcome<T>> {
+  try {
+    const result = await query;
+    return {
+      data: result.data,
+      count: result.count,
+      error: result.error
+        ? formatSupabaseError(result.error, operation)
+        : didTimeout()
+          ? `${operation}: permintaan melewati batas waktu 20 detik.`
+          : null,
+    };
+  } catch (error) {
+    return {
+      data: null,
+      count: null,
+      error: didTimeout()
+        ? `${operation}: permintaan melewati batas waktu 20 detik.`
+        : formatSupabaseError(error, operation),
+    };
+  }
+}
 
-  throwOnError(settingsResult.error, "Profil sekolah gagal dimuat");
-  throwOnError(holidaysResult.error, "Kalender sekolah gagal dimuat");
-  throwOnError(studentsResult.error, "Jumlah siswa gagal dimuat");
-  throwOnError(teachersResult.error, "Jumlah guru/tendik gagal dimuat");
-  throwOnError(classesResult.error, "Jumlah kelas gagal dimuat");
-  throwOnError(academicRecordsResult.error, "Jumlah data Akademik gagal dimuat");
-  throwOnError(assignmentsResult.error, "Jumlah penugasan mapel gagal dimuat");
-  throwOnError(roomsResult.error, "Jumlah ruangan Inventaris gagal dimuat");
-  throwOnError(linkedRoomsResult.error, "Jumlah ruangan tertaut gagal dimuat");
-  throwOnError(assetsResult.error, "Jumlah aset gagal dimuat");
-  throwOnError(linkedAssetsResult.error, "Jumlah aset tertaut gagal dimuat");
-  throwOnError(loansResult.error, "Jumlah peminjaman gagal dimuat");
+export async function loadDataIndukSchoolPanelData(signal?: AbortSignal): Promise<DataIndukSchoolPanelData> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 20_000);
+  const capture = <T,>(
+    query: PromiseLike<{ data: T | null; count: number | null; error: QueryError | null }>,
+    operation: string,
+  ) => captureQuery(query, operation, () => timedOut);
 
-  return {
-    settings: settingsResult.data,
-    holidays: holidaysResult.data ?? [],
-    summary: {
-      students: requiredCount(studentsResult.count, "Jumlah siswa"),
-      teachers: requiredCount(teachersResult.count, "Jumlah guru/tendik"),
-      classes: requiredCount(classesResult.count, "Jumlah kelas"),
-      academicRecords: requiredCount(academicRecordsResult.count, "Jumlah data Akademik"),
-      teacherSubjectAssignments: requiredCount(assignmentsResult.count, "Jumlah penugasan mapel"),
-      rooms: requiredCount(roomsResult.count, "Jumlah ruangan Inventaris"),
-      roomsLinkedToClasses: requiredCount(linkedRoomsResult.count, "Jumlah ruangan tertaut"),
-      assets: requiredCount(assetsResult.count, "Jumlah aset"),
-      assetsLinkedToPlaces: requiredCount(linkedAssetsResult.count, "Jumlah aset tertaut"),
-      loans: requiredCount(loansResult.count, "Jumlah peminjaman"),
-    },
-  };
+  try {
+    const [
+      settingsResult,
+      holidaysResult,
+      studentsResult,
+      teachersResult,
+      classesResult,
+      academicRecordsResult,
+      assignmentsResult,
+      roomsResult,
+      linkedRoomsResult,
+      assetsResult,
+      linkedAssetsResult,
+      loansResult,
+    ] = await Promise.all([
+      capture(supabase
+        .from("school_settings")
+        .select("id, school_name, npsn, school_address, principal_name, principal_nip, latitude, longitude, geofence_radius_meters")
+        .order("id")
+        .limit(1)
+        .abortSignal(controller.signal)
+        .maybeSingle(), "Profil sekolah gagal dimuat"),
+      capture(supabase
+        .from("school_holidays")
+        .select("id, holiday_date, title, category, is_non_kbm")
+        .order("holiday_date", { ascending: false })
+        .order("title")
+        .abortSignal(controller.signal), "Kalender sekolah gagal dimuat"),
+      capture(supabase.from("students").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah siswa gagal dimuat"),
+      capture(supabase.from("teachers").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah guru/tendik gagal dimuat"),
+      capture(supabase.from("classes").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah kelas gagal dimuat"),
+      capture(supabase.from("academic_records").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah data Akademik gagal dimuat"),
+      capture(supabase.from("attendance_teacher_subject_assignments").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah penugasan mapel gagal dimuat"),
+      capture(supabase.from("inv_places").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah ruangan Inventaris gagal dimuat"),
+      capture(supabase.from("inv_places").select("id", { count: "exact", head: true }).not("class_id", "is", null).abortSignal(controller.signal), "Jumlah ruangan tertaut gagal dimuat"),
+      capture(supabase.from("inv_assets").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah aset gagal dimuat"),
+      capture(supabase.from("inv_assets").select("id", { count: "exact", head: true }).not("place_id", "is", null).abortSignal(controller.signal), "Jumlah aset tertaut gagal dimuat"),
+      capture(supabase.from("inv_loans").select("id", { count: "exact", head: true }).abortSignal(controller.signal), "Jumlah peminjaman gagal dimuat"),
+    ]);
+
+    const loadErrors: string[] = [];
+    const count = <T,>(result: QueryOutcome<T>, operation: string) => {
+      if (result.error) {
+        loadErrors.push(result.error);
+        return null;
+      }
+      if (result.count === null) {
+        loadErrors.push(`${operation}: jumlah data tidak tersedia.`);
+        return null;
+      }
+      return result.count;
+    };
+    const rawSettings: unknown = settingsResult.data;
+    const settingsData = parseSchoolPanelSettings(rawSettings);
+    const settingsError = settingsResult.error ?? (
+      rawSettings !== null && settingsData === null
+        ? "Profil sekolah gagal dimuat: bentuk data dari Supabase tidak sesuai."
+        : null
+    );
+    const holidaysError = holidaysResult.error;
+    if (settingsError) loadErrors.push(settingsError);
+    if (holidaysError) loadErrors.push(holidaysError);
+
+    return {
+      settings: settingsData,
+      settingsError,
+      holidays: holidaysResult.data ?? [],
+      holidaysError,
+      summary: {
+        students: count(studentsResult, "Jumlah siswa"),
+        teachers: count(teachersResult, "Jumlah guru/tendik"),
+        classes: count(classesResult, "Jumlah kelas"),
+        academicRecords: count(academicRecordsResult, "Jumlah data Akademik"),
+        teacherSubjectAssignments: count(assignmentsResult, "Jumlah penugasan mapel"),
+        rooms: count(roomsResult, "Jumlah ruangan Inventaris"),
+        roomsLinkedToClasses: count(linkedRoomsResult, "Jumlah ruangan tertaut"),
+        assets: count(assetsResult, "Jumlah aset"),
+        assetsLinkedToPlaces: count(linkedAssetsResult, "Jumlah aset tertaut"),
+        loans: count(loansResult, "Jumlah peminjaman"),
+      },
+      loadErrors,
+    };
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortFromCaller);
+  }
 }
 
 export type SchoolProfileUpdate = {

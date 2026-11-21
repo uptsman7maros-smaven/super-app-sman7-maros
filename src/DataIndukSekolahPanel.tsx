@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { CalendarDays, MapPin, RefreshCw, Save, School, Trash2 } from "lucide-react";
 import {
@@ -53,11 +53,11 @@ function profileFormFrom(settings: SchoolPanelSettings | null): ProfileForm {
   };
 }
 
-function Metric({ label, value, detail }: { label: string; value: number; detail?: string }) {
+function Metric({ label, value, detail }: { label: string; value: number | null; detail?: string | null }) {
   return (
     <article className="di-school-metric">
       <span>{label}</span>
-      <strong>{value.toLocaleString("id-ID")}</strong>
+      <strong>{value === null ? "Tidak tersedia" : value.toLocaleString("id-ID")}</strong>
       {detail && <small>{detail}</small>}
     </article>
   );
@@ -72,21 +72,6 @@ function dateLabel(value: string) {
 }
 
 let cachedSchoolPanelData: DataIndukSchoolPanelData | null = null;
-let schoolPanelDataPromise: Promise<DataIndukSchoolPanelData> | null = null;
-
-function loadSchoolPanelData() {
-  if (!schoolPanelDataPromise) {
-    schoolPanelDataPromise = loadDataIndukSchoolPanelData()
-      .then((data) => {
-        cachedSchoolPanelData = data;
-        return data;
-      })
-      .finally(() => {
-        schoolPanelDataPromise = null;
-      });
-  }
-  return schoolPanelDataPromise;
-}
 
 export default function DataIndukSekolahPanel({ userRole }: Props) {
   const canManage = userRole === "super_admin" || userRole === "operator";
@@ -100,28 +85,49 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingHoliday, setSavingHoliday] = useState(false);
   const [error, setError] = useState("");
+  const [settingsError, setSettingsError] = useState(() => cachedSchoolPanelData?.settingsError ?? null);
+  const [holidaysError, setHolidaysError] = useState(() => cachedSchoolPanelData?.holidaysError ?? null);
+  const [loadErrors, setLoadErrors] = useState(() => cachedSchoolPanelData?.loadErrors ?? []);
   const [notice, setNotice] = useState("");
+  const loadControllerRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
     setLoading(true);
     setError("");
     try {
-      const data = await loadSchoolPanelData();
+      const data = await loadDataIndukSchoolPanelData(controller.signal);
+      if (controller.signal.aborted) return;
+      cachedSchoolPanelData = data;
       setSettings(data.settings);
       setSummary(data.summary);
       setHolidays(data.holidays);
       setProfileForm(profileFormFrom(data.settings));
+      setSettingsError(data.settingsError);
+      setHolidaysError(data.holidaysError);
+      setLoadErrors(data.loadErrors);
     } catch (loadError) {
-      setError(`Gagal memuat Sekolah & Sinkron: ${errorMessage(loadError)}`);
+      if (!controller.signal.aborted) {
+        setError(`Gagal memuat Sekolah & Sinkron: ${errorMessage(loadError)}`);
+      }
     } finally {
-      setLoading(false);
+      if (loadControllerRef.current === controller) {
+        loadControllerRef.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (cachedSchoolPanelData) return;
     const timer = window.setTimeout(() => void refresh(), 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      loadControllerRef.current?.abort();
+      loadControllerRef.current = null;
+    };
   }, [refresh]);
 
   const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
@@ -228,6 +234,12 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
 
       {error && <div className="di-school-alert is-error" role="alert">{error}</div>}
       {notice && <div className="di-school-alert is-success" role="status">{notice}</div>}
+      {loadErrors.length > 0 && (
+        <div className="di-school-alert is-error" role="status">
+          Sebagian data tidak dapat dimuat:
+          <ul>{loadErrors.map((loadError) => <li key={loadError}>{loadError}</li>)}</ul>
+        </div>
+      )}
 
       <section className="di-school-section" aria-labelledby="di-school-sync-title">
         <div className="di-school-section-heading">
@@ -259,8 +271,8 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
             <div className="di-school-sync-group">
               <h5>Inventaris</h5>
               <div className="di-school-metric-grid">
-                <Metric label="Ruangan" value={summary.rooms} detail={`${summary.roomsLinkedToClasses} tertaut ke kelas`} />
-                <Metric label="Aset" value={summary.assets} detail={`${summary.assetsLinkedToPlaces} tertaut ke ruangan`} />
+                <Metric label="Ruangan" value={summary.rooms} detail={`${summary.roomsLinkedToClasses ?? "Tidak tersedia"} tertaut ke kelas`} />
+                <Metric label="Aset" value={summary.assets} detail={`${summary.assetsLinkedToPlaces ?? "Tidak tersedia"} tertaut ke ruangan`} />
                 <Metric label="Peminjaman" value={summary.loans} />
               </div>
             </div>
@@ -278,8 +290,9 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
             <p>Informasi sekolah menggunakan sumber kanonik <code>school_settings</code>.</p>
           </div>
         </div>
+        {settingsError && <p className="di-school-alert is-error" role="status">{settingsError}</p>}
         {!settings ? (
-          <p className="di-school-empty">Baris pengaturan sekolah belum tersedia. Profil belum dapat disimpan.</p>
+          <p className="di-school-empty">{settingsError ? "Profil sekolah tidak tersedia karena query gagal." : "Baris pengaturan sekolah belum tersedia. Profil belum dapat disimpan."}</p>
         ) : (
           <form className="di-school-form" onSubmit={(event) => void saveProfile(event)}>
             <label>
@@ -335,6 +348,7 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
             <p>Kalender bersama untuk acuan layanan sekolah dan kegiatan belajar mengajar.</p>
           </div>
         </div>
+        {holidaysError && <p className="di-school-alert is-error" role="status">{holidaysError}</p>}
         {canManage && (
           <form className="di-school-holiday-form" onSubmit={(event) => void saveHoliday(event)}>
             <label>
@@ -384,7 +398,7 @@ export default function DataIndukSekolahPanel({ userRole }: Props) {
               )}
             </article>
           )) : (
-            <p className="di-school-empty">{loading ? "Memuat kalender..." : "Belum ada hari libur atau agenda non-KBM."}</p>
+            <p className="di-school-empty">{loading ? "Memuat kalender..." : holidaysError ? "Kalender tidak tersedia karena query gagal." : "Belum ada hari libur atau agenda non-KBM."}</p>
           )}
         </div>
         {!canManage && <p className="di-school-hint">Kalender hanya dapat diubah oleh Super Admin dan Operator.</p>}

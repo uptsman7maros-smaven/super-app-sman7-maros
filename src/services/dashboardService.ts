@@ -126,7 +126,7 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
   await collectRows(
     "Notifikasi sekolah",
     supabase.from("school_notifications")
-      .select("id,title,body,category,is_read,created_at")
+      .select("id,title,body,category,created_at")
       .order("created_at", { ascending: false })
       .limit(10),
     (rows) => {
@@ -138,7 +138,7 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
           fieldText(row, "category", "Sekolah"),
           informationPageForRole(account.role),
           fieldDate(row, "created_at"),
-          row.is_read === false,
+          false,
         );
       });
     },

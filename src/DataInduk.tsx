@@ -102,6 +102,29 @@ type DataIndukAuditEntry = {
   new_data: Record<string, unknown> | null;
 };
 
+const DATA_INDUK_QUERY_TIMEOUT_MS = 20_000;
+
+function createDataIndukRequest() {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DATA_INDUK_QUERY_TIMEOUT_MS);
+  return {
+    signal: controller.signal,
+    cancel: () => controller.abort(),
+    timedOut: () => timedOut,
+    dispose: () => window.clearTimeout(timeoutId),
+  };
+}
+
+function dataLoadError(error: unknown, operation: string, timedOut = false) {
+  return timedOut
+    ? `${operation} melewati batas waktu ${DATA_INDUK_QUERY_TIMEOUT_MS / 1000} detik. Periksa koneksi Supabase lalu coba lagi.`
+    : `${operation}: ${formatSupabaseError(error)}`;
+}
+
 function teacherOwnsHomeroomAssignment(
   teacher: Pick<Teacher, "id" | "profile_id">,
   homeroomTeacherId: string | null,
@@ -400,17 +423,18 @@ const emptyClassForm: ClassForm = {
 };
 
 const formatSupabaseError = (error: unknown) => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "message" in error) {
-    const message = String(error.message);
-    const code = "code" in error && typeof error.code === "string"
-      ? ` (${error.code})`
-      : "";
-    return `${message}${code}`;
+  if (typeof error === "string" && error) return error;
+  if (typeof error !== "object" || error === null) {
+    return error instanceof Error ? error.message : "Kesalahan tidak diketahui.";
   }
-  return typeof error === "string" && error
-    ? error
-    : "Kesalahan tidak diketahui.";
+  const fields = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
+  const code = typeof fields.code === "string" && fields.code ? `[${fields.code}] ` : "";
+  const message = typeof fields.message === "string" && fields.message
+    ? fields.message
+    : error instanceof Error ? error.message : "Kesalahan tidak diketahui.";
+  const details = typeof fields.details === "string" && fields.details ? ` Detail: ${fields.details}` : "";
+  const hint = typeof fields.hint === "string" && fields.hint ? ` Saran: ${fields.hint}` : "";
+  return `${code}${message}${details}${hint}`;
 };
 
 const normalizeAccountUsername = (value: string) => value.trim().toLowerCase();
@@ -519,6 +543,7 @@ const [bulkAccountProgress, setBulkAccountProgress] = useState<BulkAccountProgre
 const [classes, setClasses] = useState<
   { id: string; name: string; grade_level: number }[]
 >([]);
+const [classOptionsError, setClassOptionsError] = useState("");
 const [importRows, setImportRows] = useState<ImportStudentRow[]>([]);
 const [importError, setImportError] = useState("");
 const [importing, setImporting] = useState(false);
@@ -558,6 +583,9 @@ const [classRows, setClassRows] = useState<ClassRow[]>([]);
 const [classLoading, setClassLoading] = useState(false);
 const [classReloadVersion, setClassReloadVersion] = useState(0);
 const classLoadedVersionRef = useRef(-1);
+const [classLoadError, setClassLoadError] = useState("");
+const [classAcademicYearError, setClassAcademicYearError] = useState("");
+const [classDetailsError, setClassDetailsError] = useState("");
 const [showClassForm, setShowClassForm] = useState(false);
 const [editingClass, setEditingClass] = useState<ClassRow | null>(null);
 const [classForm, setClassForm] = useState<ClassForm>(emptyClassForm);
@@ -597,11 +625,11 @@ const logMasterChange = async (action: string, details: string) => {
   }
 };
 
-const fetchStudentRows = useCallback(async (): Promise<Student[]> => {
+const fetchStudentRows = useCallback(async (signal?: AbortSignal): Promise<Student[]> => {
   const rows: Student[] = [];
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
-    const { data, error } = await supabase
+    let query = supabase
       .from("students")
       .select(`
         id,
@@ -612,12 +640,13 @@ const fetchStudentRows = useCallback(async (): Promise<Student[]> => {
         birth_date,
         gender,
         status,
-        parent_phone,
-        class:classes!students_class_id_fkey (name)
+        parent_phone
       `)
       .order("full_name", { ascending: true })
       .order("id", { ascending: true })
       .range(offset, offset + pageSize - 1);
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
     if (error) throw error;
     const page = (data ?? []) as unknown as Student[];
     rows.push(...page);
@@ -630,13 +659,14 @@ useEffect(() => {
 
   let cancelled = false;
   const requestId = ++studentLoadRequestRef.current;
+  const request = createDataIndukRequest();
 
   async function loadStudents() {
     setLoadingStudents(true);
     setStudentError("");
 
     try {
-      const loadedStudents = await fetchStudentRows();
+      const loadedStudents = await fetchStudentRows(request.signal);
 
       if (!cancelled) {
         setStudents(loadedStudents);
@@ -644,9 +674,10 @@ useEffect(() => {
       }
     } catch (error) {
       if (!cancelled) {
-        setStudentError(`Gagal memuat data siswa dari Supabase: ${formatSupabaseError(error)}`);
+        setStudentError(dataLoadError(error, "Gagal memuat data siswa dari Supabase", request.timedOut()));
       }
     } finally {
+      request.dispose();
       if (requestId === studentLoadRequestRef.current) {
         setLoadingStudents(false);
       }
@@ -657,6 +688,8 @@ useEffect(() => {
 
   return () => {
     cancelled = true;
+    request.cancel();
+    request.dispose();
     if (requestId === studentLoadRequestRef.current) {
       studentLoadRequestRef.current += 1;
       setLoadingStudents(false);
@@ -678,12 +711,15 @@ const getStudentAccountStatus = (student: Student) => {
   return hasAccount ? "Sudah Ada Akun" : "Belum Ada Akun";
 };
 
+const studentClassName = (student: Student) =>
+  classes.find((classItem) => classItem.id === student.class_id)?.name ?? student.class?.name ?? "";
+
 const filteredStudents = students.filter((student) => {
   const keyword = search.trim().toLowerCase();
   const matchesSearch =
     student.nisn.toLowerCase().includes(keyword) ||
     student.full_name.toLowerCase().includes(keyword) ||
-    (student.class?.name ?? "").toLowerCase().includes(keyword);
+    studentClassName(student).toLowerCase().includes(keyword);
   const matchesClass = studentClassFilter === "all"
     || (studentClassFilter === "unassigned" ? !student.class_id : student.class_id === studentClassFilter);
   const matchesStatus = studentStatusFilter === "all" || student.status === studentStatusFilter;
@@ -919,10 +955,29 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
 
       throw result.error;
     }
+    const savedStudentId = result.data.id;
+    const currentClass = classes.find((item) => item.id === payload.class_id);
+    const savedStudent: Student = {
+      id: savedStudentId,
+      profile_id: editingStudent?.profile_id ?? null,
+      ...payload,
+      class: payload.class_id
+        ? { name: currentClass?.name ?? (editingStudent?.class_id === payload.class_id ? editingStudent.class?.name ?? "" : "") }
+        : null,
+    };
+    setStudents((current) => {
+      const next = editingStudent
+        ? current.map((student) => student.id === savedStudentId ? savedStudent : student)
+        : [...current, savedStudent];
+      return next.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    });
+    studentsLoadedRef.current = true;
+    setStudentError("");
+
     let accountSyncWarning = "";
     if (editingStudent && editingStudent.status !== studentForm.status) {
       try {
-        await syncStudentManagedAccount(result.data.id);
+        await syncStudentManagedAccount(savedStudentId);
       } catch (error) {
         accountSyncWarning = ` Status Data Induk tersimpan, tetapi sinkronisasi login gagal: ${formatSupabaseError(error)}`;
       }
@@ -932,16 +987,23 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
       `${full_name} · NISN ${nisn}`,
     );
 
-    const refreshedStudents = await fetchStudentRows();
-
-    setStudents(refreshedStudents);
-    studentsLoadedRef.current = true;
+    let refreshWarning = "";
+    const refreshRequest = createDataIndukRequest();
+    try {
+      const refreshedStudents = await fetchStudentRows(refreshRequest.signal);
+      setStudents(refreshedStudents);
+    } catch (error) {
+      refreshWarning = ` Data tersimpan, tetapi daftar siswa gagal diperbarui: ${formatSupabaseError(error)}${refreshRequest.timedOut() ? ` (batas ${DATA_INDUK_QUERY_TIMEOUT_MS / 1000} detik)` : ""}`;
+    } finally {
+      refreshRequest.dispose();
+    }
+    setClassReloadVersion((version) => version + 1);
     setStudentNotice(
       auditWarning
-        ? `Data tersimpan, tetapi audit aktivitas gagal: ${auditWarning}${accountSyncWarning}`
+        ? `Data tersimpan, tetapi audit aktivitas gagal: ${auditWarning}${accountSyncWarning}${refreshWarning}`
         : editingStudent
-          ? `Data siswa berhasil diperbarui.${accountSyncWarning}`
-          : `Data siswa berhasil ditambahkan.${accountSyncWarning}`
+          ? `Data siswa berhasil diperbarui.${accountSyncWarning}${refreshWarning}`
+          : `Data siswa berhasil ditambahkan.${accountSyncWarning}${refreshWarning}`
     );
     setShowStudentForm(false);
     setEditingStudent(null);
@@ -950,16 +1012,7 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
 } catch (error: unknown) {
   console.error("Gagal menyimpan data siswa:", error);
 
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === "object" && error !== null && "message" in error
-      ? String(error.message)
-      : "Kesalahan tidak diketahui.";
-
-  setStudentFormError(
-    `Gagal menyimpan data siswa: ${message}`
-  );
+  setStudentFormError(`Gagal menyimpan data siswa: ${formatSupabaseError(error)}`);
 } finally {
   setSavingStudent(false);
 }
@@ -967,24 +1020,27 @@ const handleSaveStudent = async (event: FormEvent<HTMLFormElement>) => {
 
 useEffect(() => {
   let cancelled = false;
+  const request = createDataIndukRequest();
 
   async function loadClasses() {
+    setClassOptionsError("");
     try {
       const { data, error } = await supabase
         .from("classes")
         .select("id, name, grade_level")
         .order("grade_level", { ascending: true })
-        .order("name", { ascending: true });
+        .order("name", { ascending: true })
+        .abortSignal(request.signal);
 
       if (cancelled) return;
       if (error) throw error;
       setClasses(data ?? []);
     } catch (error) {
       if (!cancelled) {
-        setStudentFormError(
-          `Daftar kelas gagal dimuat: ${formatSupabaseError(error)}`
-        );
+        setClassOptionsError(dataLoadError(error, "Daftar kelas untuk formulir gagal dimuat", request.timedOut()));
       }
+    } finally {
+      request.dispose();
     }
   }
 
@@ -992,21 +1048,28 @@ useEffect(() => {
 
   return () => {
     cancelled = true;
+    request.cancel();
+    request.dispose();
   };
-}, []);
+}, [classReloadVersion]);
 
   useEffect(() => {
     if (activeMenu !== "guru" || teachersLoadedRef.current) return;
     let cancelled = false;
     const requestId = ++teacherLoadRequestRef.current;
+    const request = createDataIndukRequest();
     (async () => {
       setTeacherLoading(true);
       setMasterError("");
       setTeacherSummaryError("");
       try {
         const [assignmentResult, classResult] = await Promise.all([
-          supabase.from("attendance_teacher_subject_assignments").select("teacher_id, class_id, subject"),
-          supabase.from("classes").select("id, name, homeroom_teacher_id"),
+          supabase.from("attendance_teacher_subject_assignments")
+            .select("teacher_id, class_id, subject")
+            .abortSignal(request.signal),
+          supabase.from("classes")
+            .select("id, name, homeroom_teacher_id")
+            .abortSignal(request.signal),
         ]);
         if (cancelled) return;
         const loadedTeachers: Teacher[] = [];
@@ -1016,7 +1079,8 @@ useEffect(() => {
             .select("id, profile_id, nip, full_name, employment_status, staff_category, primary_role, additional_roles, bk_class_ids")
             .order("full_name")
             .order("id")
-            .range(offset, offset + pageSize - 1);
+            .range(offset, offset + pageSize - 1)
+            .abortSignal(request.signal);
           if (error) throw error;
           const page = (data ?? []) as Teacher[];
           loadedTeachers.push(...page);
@@ -1052,13 +1116,16 @@ useEffect(() => {
         }
         teachersLoadedRef.current = true;
       } catch (error) {
-        if (!cancelled) setMasterError(`Data guru gagal dimuat: ${formatSupabaseError(error)}`);
+        if (!cancelled) setMasterError(dataLoadError(error, "Data guru/tendik gagal dimuat", request.timedOut()));
       } finally {
+        request.dispose();
         if (requestId === teacherLoadRequestRef.current) setTeacherLoading(false);
       }
     })();
     return () => {
       cancelled = true;
+      request.cancel();
+      request.dispose();
       if (requestId === teacherLoadRequestRef.current) {
         teacherLoadRequestRef.current += 1;
         setTeacherLoading(false);
@@ -1195,6 +1262,7 @@ useEffect(() => {
       setTeachers((current) => current.map((item) =>
         item.id === savedTeacher.id ? savedTeacher : item
       ));
+      setClassReloadVersion((version) => version + 1);
       setTeacherAccounts(existing
         ? currentUsers.map((user) => user.id === managedUser.id
           ? { ...user, full_name: savedTeacher.full_name, role: teacherRoleForPosition(teacherPrimaryRole(savedTeacher)) }
@@ -1217,69 +1285,128 @@ useEffect(() => {
   useEffect(() => {
     if (activeMenu !== "kelas" || classLoadedVersionRef.current === classReloadVersion) return;
     let cancelled = false;
+    const request = createDataIndukRequest();
     (async () => {
       setClassLoading(true);
-      setMasterError("");
+      setClassLoadError("");
+      setClassAcademicYearError("");
+      setClassDetailsError("");
       try {
         const [c, y] = await Promise.all([
-          supabase.from("classes").select("id, name, grade_level, academic_year_id, homeroom_teacher_id").order("grade_level").order("name"),
-          supabase.from("academic_years").select("id, name, is_active, start_date, end_date").order("start_date", { ascending: false }),
+          supabase.from("classes")
+            .select("id, name, grade_level, academic_year_id, homeroom_teacher_id")
+            .order("grade_level")
+            .order("name")
+            .abortSignal(request.signal),
+          supabase.from("academic_years")
+            .select("id, name, is_active, start_date, end_date")
+            .order("start_date", { ascending: false })
+            .abortSignal(request.signal),
         ]);
         if (cancelled) return;
-        const error = c.error || y.error;
-        if (error) throw error;
-
-        const linkedTeachers: Array<Pick<Teacher, "id" | "profile_id" | "full_name" | "staff_category" | "primary_role">> = [];
-        const teacherPageSize = 1000;
-        for (let offset = 0; ; offset += teacherPageSize) {
-          const { data, error: teacherError } = await supabase.from("teachers")
-            .select("id, profile_id, full_name, staff_category, primary_role")
-            .not("profile_id", "is", null)
-            .range(offset, offset + teacherPageSize - 1);
-          if (teacherError) throw teacherError;
-          const page = (data ?? []) as typeof linkedTeachers;
-          linkedTeachers.push(...page);
-          if (page.length < teacherPageSize) break;
+        if (c.error) throw c.error;
+        if (y.error) {
+          setClassAcademicYearError(dataLoadError(y.error, "Tahun ajaran gagal dimuat", request.timedOut()));
         }
 
-        const studentClassIds: Array<{ class_id: string | null }> = [];
-        const studentPageSize = 1000;
-        for (let offset = 0; ; offset += studentPageSize) {
-          const { data, error: studentError } = await supabase.from("students")
-            .select("class_id")
-            .range(offset, offset + studentPageSize - 1);
-          if (studentError) throw studentError;
-          const page = data ?? [];
-          studentClassIds.push(...page);
-          if (page.length < studentPageSize) break;
-        }
+        const years = y.error ? [] : y.data ?? [];
+        setClasses((c.data ?? []).map((row) => ({
+          id: row.id,
+          name: row.name,
+          grade_level: row.grade_level,
+        })));
+        if (!y.error) setAcademicYears(years as AcademicYear[]);
+        const teacherNames = new Map<string, string>();
+        const yearNames = new Map(years.map(x => [x.id, x.name]));
+        setClassRows((c.data ?? []).map((row) => ({
+          ...row,
+          academic_year_name: yearNames.get(row.academic_year_id) ?? "—",
+          homeroom_teacher_name: row.homeroom_teacher_id ? "Memuat nama wali kelas..." : "Belum ditentukan",
+          student_count: 0,
+        })) as ClassRow[]);
+        setClassLoading(false);
+
+        const loadLinkedTeachers = async () => {
+          const linkedTeachers: Array<Pick<Teacher, "id" | "profile_id" | "full_name" | "staff_category" | "primary_role">> = [];
+          for (let offset = 0; ; offset += 1000) {
+            const { data, error } = await supabase.from("teachers")
+              .select("id, profile_id, full_name, staff_category, primary_role")
+              .not("profile_id", "is", null)
+              .order("id")
+              .range(offset, offset + 999)
+              .abortSignal(request.signal);
+            if (error) throw error;
+            const page = (data ?? []) as typeof linkedTeachers;
+            linkedTeachers.push(...page);
+            if (page.length < 1000) return linkedTeachers;
+          }
+        };
+        const loadStudentClassIds = async () => {
+          const studentClassIds: Array<{ class_id: string | null }> = [];
+          for (let offset = 0; ; offset += 1000) {
+            const { data, error } = await supabase.from("students")
+              .select("class_id")
+              .order("id")
+              .range(offset, offset + 999)
+              .abortSignal(request.signal);
+            if (error) throw error;
+            const page = data ?? [];
+            studentClassIds.push(...page);
+            if (page.length < 1000) return studentClassIds;
+          }
+        };
+        const [teacherResult, studentResult] = await Promise.allSettled([
+          loadLinkedTeachers(),
+          loadStudentClassIds(),
+        ]);
         if (cancelled) return;
 
-        const years = y.data ?? [];
-        setAcademicYears(years as AcademicYear[]);
-        setClassTeacherOptions(
-          linkedTeachers.filter((teacher) =>
+        const detailErrors: string[] = [];
+        const linkedTeachers = teacherResult.status === "fulfilled" ? teacherResult.value : [];
+        if (teacherResult.status === "rejected") {
+          detailErrors.push(dataLoadError(teacherResult.reason, "Nama wali kelas gagal dimuat", request.timedOut()));
+        } else {
+          linkedTeachers.forEach((teacher) => {
+            teacherNames.set(teacher.id, teacher.full_name);
+            if (teacher.profile_id) teacherNames.set(teacher.profile_id, teacher.full_name);
+          });
+          setClassTeacherOptions(linkedTeachers.filter((teacher) =>
             teacher.staff_category === "Guru" && teacher.primary_role === "Guru Mata Pelajaran"
-          ),
-        );
-        const teacherNames = new Map<string, string>();
-        linkedTeachers.forEach((teacher) => {
-          teacherNames.set(teacher.id, teacher.full_name);
-          if (teacher.profile_id) teacherNames.set(teacher.profile_id, teacher.full_name);
-        });
-        const yearNames = new Map(years.map(x => [x.id, x.name]));
+          ));
+        }
         const counts = new Map<string, number>();
-        studentClassIds.forEach(x => { if (x.class_id) counts.set(x.class_id, (counts.get(x.class_id) ?? 0) + 1); });
-        setClassRows((c.data ?? []).map(x => ({ ...x, academic_year_name: yearNames.get(x.academic_year_id) ?? "—", homeroom_teacher_name: x.homeroom_teacher_id ? teacherNames.get(x.homeroom_teacher_id) ?? "Profil guru tidak ditemukan" : "Belum ditentukan", student_count: counts.get(x.id) ?? 0 })) as ClassRow[]);
-        classLoadedVersionRef.current = classReloadVersion;
+        if (studentResult.status === "fulfilled") {
+          studentResult.value.forEach((row) => {
+            if (row.class_id) counts.set(row.class_id, (counts.get(row.class_id) ?? 0) + 1);
+          });
+        } else {
+          detailErrors.push(dataLoadError(studentResult.reason, "Jumlah siswa per kelas gagal dimuat", request.timedOut()));
+        }
+        setClassRows((c.data ?? []).map((row) => ({
+          ...row,
+          academic_year_name: yearNames.get(row.academic_year_id) ?? "—",
+          homeroom_teacher_name: row.homeroom_teacher_id
+            ? teacherNames.get(row.homeroom_teacher_id) ?? "Profil guru tidak ditemukan"
+            : "Belum ditentukan",
+          student_count: counts.get(row.id) ?? 0,
+        })) as ClassRow[]);
+        setClassDetailsError(detailErrors.join(" "));
+        if (!y.error && detailErrors.length === 0) {
+          classLoadedVersionRef.current = classReloadVersion;
+        }
       } catch (error) {
-        if (!cancelled) setMasterError(`Data kelas gagal dimuat: ${formatSupabaseError(error)}`);
+        if (!cancelled) {
+          setClassLoadError(dataLoadError(error, "Data kelas gagal dimuat", request.timedOut()));
+        }
       } finally {
+        request.dispose();
         if (!cancelled) setClassLoading(false);
       }
     })();
     return () => {
       cancelled = true;
+      request.cancel();
+      request.dispose();
       setClassLoading(false);
     };
   }, [activeMenu, classReloadVersion]);
@@ -1291,6 +1418,7 @@ useEffect(() => {
       auditLoadedVersionRef.current === auditReloadVersion
     ) return;
     let cancelled = false;
+    const request = createDataIndukRequest();
     const timer = window.setTimeout(async () => {
       setAuditLoading(true);
       setAuditError("");
@@ -1299,7 +1427,8 @@ useEffect(() => {
           .from("datainduk_change_log")
           .select("id,changed_at,actor_id,actor_name,table_name,record_id,operation,changed_fields,old_data,new_data")
           .order("changed_at", { ascending: false })
-          .limit(200);
+          .limit(200)
+          .abortSignal(request.signal);
         if (error) throw error;
         if (!cancelled) {
           setAuditEntries((data ?? []) as DataIndukAuditEntry[]);
@@ -1307,15 +1436,18 @@ useEffect(() => {
         }
       } catch (error) {
         if (!cancelled) {
-          setAuditError(`Riwayat perubahan gagal dimuat: ${formatSupabaseError(error)}`);
+          setAuditError(dataLoadError(error, "Riwayat perubahan gagal dimuat", request.timedOut()));
         }
       } finally {
+        request.dispose();
         if (!cancelled) setAuditLoading(false);
       }
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      request.cancel();
+      request.dispose();
       setAuditLoading(false);
     };
   }, [activeMenu, auditReloadVersion, canManageDataInduk]);
@@ -1353,6 +1485,7 @@ useEffect(() => {
     setSavingTeacher(true);
     setMasterNotice("");
     let masterRecordSaved = false;
+    let persistedTeacher: Teacher | null = null;
 
     try {
       const additional_roles = teacherForm.staff_category === "Guru"
@@ -1392,12 +1525,14 @@ useEffect(() => {
       if (result.error) throw result.error;
       const savedTeacher = result.data as Teacher;
       masterRecordSaved = true;
+      persistedTeacher = savedTeacher;
       setTeachers((previous) =>
         [
           ...previous.filter((teacher) => teacher.id !== savedTeacher.id),
           savedTeacher,
         ].sort((a, b) => a.full_name.localeCompare(b.full_name)),
       );
+      setClassReloadVersion((version) => version + 1);
 
       let accountSyncWarning = "";
 
@@ -1434,7 +1569,6 @@ useEffect(() => {
             }))
           : []),
       ]);
-      setClassReloadVersion((version) => version + 1);
       const auditWarning = await logMasterChange(
         editingTeacher ? "Data guru/tendik diperbarui" : "Data guru/tendik ditambahkan",
         `${savedTeacher.full_name}${savedTeacher.nip ? ` · NIP ${savedTeacher.nip}` : ""}`,
@@ -1450,9 +1584,13 @@ useEffect(() => {
       setTeacherFormAssignmentSubject("");
       setTeacherFormAssignmentClassId("");
     } catch (error) {
+      if (persistedTeacher) {
+        setEditingTeacher(persistedTeacher);
+        setShowTeacherForm(true);
+      }
       setTeacherFormError(
         masterRecordSaved
-          ? `Data tersimpan, tetapi sinkronisasi jabatan/penugasan gagal: ${formatSupabaseError(error)}. Simpan ulang setelah memperbaiki masalah ini.`
+          ? `Data guru tersimpan, tetapi sinkronisasi jabatan/penugasan gagal: ${formatSupabaseError(error)}. Form tetap terhubung ke data yang tersimpan; perbaiki masalah lalu simpan ulang agar tidak membuat data duplikat.`
           : `Gagal ${editingTeacher ? "memperbarui" : "menambahkan"} data: ${formatSupabaseError(error)}`,
       );
     } finally {
@@ -1542,7 +1680,11 @@ useEffect(() => {
       name: row.name,
       grade_level: String(row.grade_level),
       academic_year_id: row.academic_year_id,
-      homeroom_teacher_id: classTeacherOptions.find((teacher) => teacher.profile_id === row.homeroom_teacher_id)?.profile_id ?? "",
+      homeroom_teacher_id: classTeacherOptions.find((teacher) =>
+        Boolean(row.homeroom_teacher_id)
+        && Boolean(teacher.profile_id)
+        && teacher.profile_id === row.homeroom_teacher_id
+      )?.profile_id ?? "",
     });
     setClassFormError("");
     setMasterNotice("");
@@ -1575,6 +1717,7 @@ useEffect(() => {
 
     setSavingClass(true);
     setClassFormError("");
+    let persistedClass: ClassRow | null = null;
     try {
       const payload = {
         name,
@@ -1585,6 +1728,22 @@ useEffect(() => {
         ? await supabase.from("classes").update(payload).eq("id", editingClass.id).select("id").single()
         : await supabase.from("classes").insert(payload).select("id").single();
       if (result.error) throw result.error;
+      const savedClass: ClassRow = {
+        id: result.data.id,
+        name,
+        grade_level,
+        academic_year_id: year.id,
+        homeroom_teacher_id: editingClass?.homeroom_teacher_id ?? null,
+        academic_year_name: year.name,
+        homeroom_teacher_name: editingClass?.homeroom_teacher_name ?? "Belum ditentukan",
+        student_count: editingClass?.student_count ?? 0,
+      };
+      persistedClass = savedClass;
+      setClassRows((current) => [
+        ...current.filter((item) => item.id !== savedClass.id),
+        savedClass,
+      ]);
+      setClassReloadVersion((version) => version + 1);
 
       const selectedTeacher = classTeacherOptions.find(
         (teacher) => Boolean(classForm.homeroom_teacher_id)
@@ -1627,9 +1786,16 @@ useEffect(() => {
       setShowClassForm(false);
       setEditingClass(null);
       setClassForm(emptyClassForm);
-      setClassReloadVersion((version) => version + 1);
     } catch (error) {
-      setClassFormError(`Gagal ${editingClass ? "memperbarui" : "menambahkan"} kelas: ${formatSupabaseError(error)}`);
+      if (persistedClass) {
+        setEditingClass(persistedClass);
+        setShowClassForm(true);
+      }
+      setClassFormError(
+        persistedClass
+          ? `Data kelas tersimpan, tetapi sinkronisasi wali kelas gagal: ${formatSupabaseError(error)}. Form tetap terhubung ke kelas yang tersimpan; simpan ulang setelah memperbaiki masalah agar tidak membuat duplikat.`
+          : `Gagal ${editingClass ? "memperbarui" : "menambahkan"} kelas: ${formatSupabaseError(error)}`,
+      );
     } finally {
       setSavingClass(false);
     }
@@ -1799,6 +1965,7 @@ useEffect(() => {
       const deletedIdSet = new Set(deletedIds);
       if (tableName === "students") {
         setStudents((current) => current.filter((student) => !deletedIdSet.has(student.id)));
+        setClassReloadVersion((version) => version + 1);
       } else if (tableName === "teachers") {
         setTeachers((current) => current.filter((teacher) => !deletedIdSet.has(teacher.id)));
         setTeacherAssignmentSummary((current) => current.filter((assignment) => !deletedIdSet.has(assignment.teacher_id)));
@@ -2566,6 +2733,7 @@ const handleImportStudents = async () => {
 
     if (insertError) throw insertError;
     studentsLoadedRef.current = false;
+    setClassReloadVersion((version) => version + 1);
     const auditWarning = await logMasterChange(
       "Data siswa diimpor",
       `${rowsToInsert.length} siswa berhasil diimpor.`,
@@ -2609,25 +2777,11 @@ const handleImportStudents = async () => {
 };
 
 const handleExportStudents = async () => {
-  const getClassName = (relation: unknown) => {
-    const classRow = Array.isArray(relation) ? relation[0] : relation;
-    if (
-      classRow === null ||
-      typeof classRow !== "object" ||
-      !("name" in classRow) ||
-      typeof classRow.name !== "string"
-    ) {
-      return "";
-    }
-
-    return classRow.name;
-  };
-
   try {
     const data: Array<{
       nisn: string;
       full_name: string;
-      class: unknown;
+      class_id: string | null;
       birth_date: string | null;
       gender: string | null;
       status: string;
@@ -2636,7 +2790,7 @@ const handleExportStudents = async () => {
     for (let offset = 0; ; offset += pageSize) {
       const { data: page, error } = await supabase
         .from("students")
-        .select("id, nisn, full_name, class:classes!students_class_id_fkey(name), birth_date, gender, status")
+        .select("id, nisn, full_name, class_id, birth_date, gender, status")
         .order("full_name")
         .order("id")
         .range(offset, offset + pageSize - 1);
@@ -2644,6 +2798,14 @@ const handleExportStudents = async () => {
       data.push(...(page ?? []));
       if ((page ?? []).length < pageSize) break;
     }
+
+    const { data: classData, error: classError } = await supabase
+      .from("classes")
+      .select("id, name");
+    if (classError) {
+      throw new Error(`Nama kelas untuk ekspor gagal dimuat: ${formatSupabaseError(classError)}`);
+    }
+    const classNames = new Map((classData ?? []).map((row) => [row.id, row.name]));
 
     if (!data || data.length === 0) {
       alert("Belum ada data siswa di database untuk diekspor.");
@@ -2653,7 +2815,7 @@ const handleExportStudents = async () => {
     const rows = data.map((student) => ({
       NISN: student.nisn,
       Nama: student.full_name,
-      Kelas: getClassName(student.class),
+      Kelas: student.class_id ? classNames.get(student.class_id) ?? "" : "",
       "Tanggal Lahir": student.birth_date ?? "",
       "Jenis Kelamin": student.gender ?? "",
       Status: student.status,
@@ -4491,6 +4653,18 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
         {activeMenu === "guru" && teacherSummaryError && (
           <div className="di-notice di-audit-error" role="alert">{teacherSummaryError}</div>
         )}
+        {["siswa", "guru"].includes(activeMenu) && classOptionsError && (
+          <div className="di-notice di-audit-error" role="alert">{classOptionsError}</div>
+        )}
+        {activeMenu === "kelas" && classLoadError && (
+          <div className="di-notice di-audit-error" role="alert">{classLoadError}</div>
+        )}
+        {activeMenu === "kelas" && classAcademicYearError && (
+          <div className="di-notice di-audit-error" role="alert">{classAcademicYearError}</div>
+        )}
+        {activeMenu === "kelas" && classDetailsError && (
+          <div className="di-notice di-audit-error" role="alert">{classDetailsError}</div>
+        )}
         {activeMenu === "sekolah" ? (
           <DataIndukSekolahPanel userRole={userRole} />
         ) : activeMenu === "riwayat" ? (
@@ -5129,7 +5303,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                           <td title={student.profile_id ? "Akun siswa terhubung ke Data Induk" : "Akun siswa belum tertaut"}>
                             {student.full_name}
                           </td>
-                          <td>{student.class?.name ?? "Belum ditentukan"}</td>
+                          <td>{studentClassName(student) || "Belum ditentukan"}</td>
                           <td>{student.birth_date ?? "—"}</td>
                           <td>{student.gender ?? "—"}</td>
                           <td>{student.status}</td>
@@ -5277,7 +5451,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                     })
                   ) : (
                     classLoading ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty">Memuat data kelas...</div></td></tr>
-                    : masterError ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Gagal memuat data</strong><p>{masterError}</p></div></td></tr>
+                    : classLoadError && classRows.length === 0 ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Gagal memuat data kelas</strong><p>{classLoadError}</p></div></td></tr>
                     : filteredClasses.length === 0 ? <tr><td colSpan={canDeleteMasterData ? 7 : 6}><div className="di-empty"><strong>Belum ada data kelas</strong><p>Pastikan tahun ajaran sudah dibuat, lalu tambahkan kelas.</p></div></td></tr>
                     : filteredClasses.map(c => <tr key={c.id}>
                       {canDeleteMasterData && (

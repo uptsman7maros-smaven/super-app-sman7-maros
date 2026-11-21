@@ -39,12 +39,10 @@
 .attendance-hero p, .attendance-panel-title p { margin: 0; color: #64748b; }
 .attendance-hero p { max-width: 650px; color: #d9f7ef; font-size: 13px; }
 .attendance-eyebrow { font-size: 10px; letter-spacing: 2px; font-weight: 800; color: #c7f5e9; }
-.attendance-hero>.attendance-secondary { z-index: 2; margin-left: auto; white-space: nowrap; border-color: rgba(255,255,255,.25); background: rgba(255,255,255,.13); color: #fff; backdrop-filter: blur(8px); }
 .attendance-hero-decoration span { position: absolute; border-radius: 50%; border: 1px solid rgba(255,255,255,.14); pointer-events: none; }
 .attendance-hero-decoration span:first-child { width: 280px; height: 280px; right: -70px; top: -180px; }
 .attendance-hero-decoration span:nth-child(2) { width: 150px; height: 150px; right: 80px; bottom: -110px; background: rgba(255,255,255,.035); }
 .attendance-hero-decoration span:last-child { width: 90px; height: 90px; right: 245px; top: -45px; animation: attendance-float 7s ease-in-out infinite; }
-.attendance-refresh.is-loading svg { animation: attendance-spin .9s linear infinite; }
 
 .attendance-stats { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 12px; }
 .attendance-stat {
@@ -91,6 +89,18 @@
 .attendance-person-verified { color:#0a9474; flex:none; }
 .attendance-self-date { display:flex; align-items:center; gap:8px; padding:11px 12px; margin-bottom:14px; border-radius:11px; background:#f8fafc; color:#64748b; font-size:12px; }
 .attendance-self-date strong { margin-left:auto; color:#172033; font-size:13px; }
+.attendance-student-qr-list { display:grid; gap:12px; margin:0 0 16px; padding:14px; border:1px solid #d5eee5; border-radius:15px; background:linear-gradient(125deg,#f1fbf7,#f8fbff); }
+.attendance-student-qr-heading { display:grid; gap:4px; }
+.attendance-student-qr-heading strong { color:#087f66; font-size:14px; }
+.attendance-student-qr-heading small,.attendance-student-qr-inactive { color:#64748b; font-size:12px; line-height:1.5; }
+.attendance-student-qr-inactive { margin:0; }
+.attendance-student-qr-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.attendance-student-qr-card { display:grid; justify-items:center; gap:8px; padding:12px; border:1px solid #dce9e5; border-radius:12px; background:#fff; }
+.attendance-student-qr-card strong { color:#172033; font-size:13px; }
+.attendance-student-qr-card svg { max-width:100%; height:auto; }
+.attendance-student-qr-card span { color:#047857; font-size:12px; font-weight:800; }
+.attendance-qr-student-status,.attendance-qr-student-note { display:grid; gap:7px; color:#475569; font-size:12px; font-weight:750; }
+.attendance-qr-countdown { color:#047857; font-weight:850; }
 .attendance-lookup-message { margin:-5px 0 12px; font-size:12px; }
 .lookup-loading { color:#64748b; }
 .lookup-found { color:#047857; }
@@ -144,6 +154,18 @@
 .attendance-wa-toggle input { width:18px!important; height:18px; accent-color:#087f66; }
 .attendance-wa-toggle span { display:grid; gap:3px; flex:1; }
 .attendance-wa-toggle small { color:#64748b; font-weight:500; }
+.attendance-weekly-template,.attendance-homeroom-weekly { display:grid; gap:14px; }
+.attendance-file-input { display:none; }
+.attendance-weekly-template-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#64748b; font-size:12px; }
+.attendance-template-editor { display:grid; gap:7px; color:#475569; font-size:12px; font-weight:750; }
+.attendance-template-editor textarea { width:100%; box-sizing:border-box; font-family:Consolas,monospace!important; font-size:12px!important; }
+.attendance-homeroom-class { display:grid; gap:12px; padding-top:14px; border-top:1px solid #edf0f4; }
+.attendance-homeroom-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.attendance-homeroom-heading h3 { margin:0 0 4px; color:#172033; font-size:16px; }
+.attendance-homeroom-heading span { color:#64748b; font-size:12px; }
+.attendance-homeroom-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.attendance-homeroom-actions .attendance-secondary { white-space:nowrap; }
+.attendance-homeroom-table { max-height:420px; }
 
 @keyframes attendance-enter { from { opacity:0 } to { opacity:1 } }
 @keyframes attendance-rise { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:translateY(0) } }
@@ -158,19 +180,20 @@
 @media(max-width:560px) {
   .attendance-hero { align-items:flex-start; flex-wrap:wrap; padding:19px; }
   .attendance-hero-icon { width:52px; height:52px; }
-  .attendance-hero>.attendance-secondary { margin-left:68px; }
   .attendance-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .attendance-stat { padding:13px; }
   .attendance-panel { padding:15px; border-radius:16px; }
   .attendance-tools .attendance-secondary { font-size:12px; padding:9px; }
   .attendance-month-export { align-items:stretch; flex-direction:column; }
+  .attendance-student-qr-grid { grid-template-columns:1fr; }
+  .attendance-homeroom-heading { align-items:flex-start; flex-direction:column; }
 }
 @media(prefers-reduced-motion:reduce) {
-  .attendance-page,.attendance-stat,.attendance-panel,.attendance-alert,.attendance-hero-decoration span,.attendance-refresh.is-loading svg,.attendance-camera::after { animation:none!important; }
+  .attendance-page,.attendance-stat,.attendance-panel,.attendance-alert,.attendance-hero-decoration span,.attendance-camera::after { animation:none!important; }
 }
 .attendance-print-header { display: none; }
 @media print {
-  .sidebar,.topbar,.attendance-hero>.attendance-secondary,.attendance-columns>form,.attendance-tools,.attendance-month-export,.attendance-footnote { display:none!important; }
+  .sidebar,.topbar,.attendance-columns>form,.attendance-tools,.attendance-month-export,.attendance-footnote,.attendance-weekly-template,.attendance-homeroom-actions { display:none!important; }
   .page-content { padding:0!important; }
   .attendance-columns { display:block; }
   .attendance-panel { box-shadow:none; border:0; padding:0; }

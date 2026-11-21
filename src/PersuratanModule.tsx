@@ -509,7 +509,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [letterheadSlot,setLetterheadSlot]=useState<LetterheadSlot>('1')
   const [logoPosition,setLogoPosition]=useState<LogoPosition>('top')
   const [loading,setLoading]=useState(true), [sessionReady,setSessionReady]=useState(false), [busy,setBusy]=useState(false), [error,setError]=useState('')
-  const [expiryClock,setExpiryClock]=useState(Date.now())
+  const [expiryClock,setExpiryClock]=useState(()=>Date.now())
   const [pdfBusy,setPdfBusy]=useState(false), [printing,setPrinting]=useState(false)
   const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([])
   const [categories,setCategories]=useState<LetterCategory[]>([])
@@ -629,10 +629,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       let cleanupAlreadyAttempted=cleanupAttemptedUserRef.current===uid
       try{
         cleanupAlreadyAttempted=cleanupAlreadyAttempted||sessionStorage.getItem(cleanupKey)==='1'
-      }catch{}
+      }catch(storageError){
+        console.warn('Status pembersihan pengajuan surat tidak dapat dibaca dari penyimpanan sesi:',storageError)
+      }
       if(!cleanupAlreadyAttempted){
         cleanupAttemptedUserRef.current=uid
-        try{sessionStorage.setItem(cleanupKey,'1')}catch{}
+        try{sessionStorage.setItem(cleanupKey,'1')}catch(storageError){
+          console.warn('Status pembersihan pengajuan surat tidak dapat disimpan di penyimpanan sesi:',storageError)
+        }
         const {error:cleanupError}=await supabase.rpc('cleanup_expired_letter_requests')
         if(cleanupError)console.warn('Pembersihan pengajuan surat kadaluarsa tidak tersedia:',cleanupError.message)
       }
@@ -1247,7 +1251,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     return !q||[r.request_code,r.subject,r.requester_name,r.status].some(v=>String(v||'').toLowerCase().includes(q))
   }),[requests,search])
   const ownRequests=useMemo(()=>requests.filter(request=>request.requester_id===session?.user.id),[requests,session?.user.id])
-  const ownVisibleRequests=useMemo(()=>visibleRequests.filter(request=>request.requester_id===session?.user.id),[session?.user.id,visibleRequests])
+  const ownVisibleRequests=useMemo(()=>visibleRequests.filter(request=>request.requester_id===sessionUserId),[sessionUserId,visibleRequests])
   const selectedTemplateRecord=templates.find(template=>template.id===selectedTemplate)
   const issueTemplate=issueRequest?templates.find(template=>template.id===issueRequest.template_id):undefined
   const issueEditableFields=(issueTemplate?.fields_schema||issueRequest?.letter_templates?.fields_schema||[])

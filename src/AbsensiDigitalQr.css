@@ -101,120 +101,6 @@
   opacity: .7;
 }
 
-.attendance-page .attendance-qr-type-picker {
-  flex: 1 1 420px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.attendance-page .attendance-qr-type-picker legend {
-  margin-bottom: 9px;
-  color: #35405a;
-  font-size: .9rem;
-  font-weight: 750;
-}
-
-.attendance-page .attendance-qr-type-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.attendance-page .attendance-qr-type-options label {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 68px;
-  flex: initial;
-  align-items: center;
-  gap: 11px;
-  padding: 12px;
-  border: 1px solid #e1e7f0;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, .86);
-  color: #58647c;
-  cursor: pointer;
-  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease;
-}
-
-.attendance-page .attendance-qr-type-options label:hover {
-  transform: translateY(-1px);
-  border-color: #b7c8db;
-}
-
-.attendance-page .attendance-qr-type-options label:focus-within {
-  outline: 3px solid rgba(8, 127, 102, .16);
-  outline-offset: 2px;
-}
-
-.attendance-page .attendance-qr-type-options label.is-selected {
-  border-color: #49b49a;
-  background: linear-gradient(135deg, #effbf7, #fff);
-  box-shadow: 0 7px 18px rgba(8, 127, 102, .1);
-  color: #174e43;
-}
-
-.attendance-page .attendance-qr-type-options input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  clip-path: inset(50%);
-}
-
-.attendance-page .attendance-qr-type-icon {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  place-items: center;
-  border-radius: 12px;
-  background: #e3f7ef;
-  color: #078367;
-}
-
-.attendance-page .attendance-qr-type-icon.is-departure {
-  background: #edf0ff;
-  color: #5b62c9;
-}
-
-.attendance-page .attendance-qr-type-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.attendance-page .attendance-qr-type-copy strong {
-  color: #24304a;
-  font-size: .86rem;
-}
-
-.attendance-page .attendance-qr-type-copy small {
-  color: #748099;
-  font-size: .74rem;
-  line-height: 1.35;
-}
-
-.attendance-page .attendance-qr-type-check {
-  flex: 0 0 auto;
-  margin-left: auto;
-  color: #09866c;
-  opacity: 0;
-  transform: scale(.8);
-  transition: opacity .18s ease, transform .18s ease;
-}
-
-.attendance-page .attendance-qr-type-options label.is-selected .attendance-qr-type-check {
-  opacity: 1;
-  transform: scale(1);
-}
-
 .attendance-page .attendance-qr-active {
   display: flex;
   align-items: center;
@@ -602,10 +488,6 @@
 @media (max-width: 620px) {
   .attendance-page .attendance-qr-heading {
     flex-direction: column;
-  }
-
-  .attendance-page .attendance-qr-type-options {
-    grid-template-columns: 1fr;
   }
 
   .attendance-page .attendance-qr-create > .attendance-primary {

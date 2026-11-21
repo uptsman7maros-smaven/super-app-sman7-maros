@@ -129,6 +129,7 @@ Deno.serve(async (request) => {
       .eq("session_type", eventType)
       .eq("person_type", "siswa")
       .eq("person_identifier", personIdentifier)
+      .eq("is_voided", false)
       .maybeSingle();
     if (qrRecordError) throw qrRecordError;
     if (!qrRecord) return jsonResponse({ sent: false, reason: "qr_record_not_found" }, 404);
