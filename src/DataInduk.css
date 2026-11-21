@@ -117,19 +117,75 @@
 
 .di-nip {
   display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
+  max-width: none;
   color: #334155;
   font-family: "Cascadia Code", "Consolas", monospace;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .di-teacher-name {
+  min-width: 0;
   color: #172344;
   font-weight: 750;
   text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.di-teacher-status,
+.di-teacher-assignments {
+  overflow-wrap: anywhere;
+}
+
+.di-table td.di-teacher-name,
+.di-table td.di-teacher-status,
+.di-table td.di-teacher-assignments {
+  white-space: normal;
+}
+
+.di-teacher-actions {
+  min-width: 0;
+}
+
+.di-assignment-picker {
+  margin-top: 12px;
+  border: 1px solid #e3eaf3;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.di-assignment-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.di-assignment-picker-heading > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.di-link-button {
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: #3156a8;
+  font: inherit;
+  cursor: pointer;
+}
+
+.di-link-button:hover {
+  text-decoration: underline;
 }
 
 .di-role-tags {
@@ -200,6 +256,16 @@
   gap: 10px;
   overflow-y: auto;
   padding: 4px;
+}
+
+.di-assignment-picker .di-class-checklist {
+  max-height: 150px;
+}
+
+.di-assignment-picker > small {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
 }
 
 .di-assignment-list {
