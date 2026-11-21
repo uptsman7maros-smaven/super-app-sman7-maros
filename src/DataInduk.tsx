@@ -4706,7 +4706,12 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
           <div className="di-notice di-audit-error" role="alert">{teacherSummaryError}</div>
         )}
         {["siswa", "guru"].includes(activeMenu) && classOptionsError && (
-          <div className="di-notice di-audit-error" role="alert">{classOptionsError}</div>
+          <div className="di-notice di-audit-error" role="alert">
+            {classOptionsError}
+            <button type="button" className="di-button" onClick={() => setClassReloadVersion((version) => version + 1)}>
+              Muat ulang daftar kelas
+            </button>
+          </div>
         )}
         {activeMenu === "kelas" && classLoadError && (
           <div className="di-notice di-audit-error" role="alert">

@@ -279,28 +279,36 @@ async function authenticatedFetch(
 
   const authorization = requestHeaders.get("Authorization");
   const requestAccessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
-  let session: Session | null = requestAccessToken && requestAccessToken !== key
-      ? cachedSession?.access_token === requestAccessToken ? cachedSession : null
-      : null;
   let accessToken = requestAccessToken && requestAccessToken !== key
-      ? requestAccessToken
-      : null;
+    ? requestAccessToken
+    : cachedSession?.access_token ?? requestAccessToken ?? key;
+  let session: Session | null = cachedSession?.access_token === accessToken
+    ? cachedSession
+    : null;
 
-  if (!accessToken) {
-      try {
-        session = await getValidSupabaseSession();
-      } catch (error) {
+  const cachedSessionExpiresAt = (session?.expires_at ?? 0) * 1000;
+  if (
+    session &&
+    cachedSessionExpiresAt > 0 &&
+    cachedSessionExpiresAt <= Date.now()
+  ) {
+    try {
+      const refreshedSession = await refreshSupabaseSession(session);
+      if (refreshedSession) {
+        session = refreshedSession;
+        accessToken = refreshedSession.access_token;
+      } else if (cachedSessionExpiresAt <= Date.now()) {
+        return authFailureResponse(new Error("Sesi Supabase telah kedaluwarsa. Silakan masuk kembali."));
+      }
+    } catch (error) {
+      if (cachedSessionExpiresAt <= Date.now()) {
         return authFailureResponse(error);
       }
-
-      if (!session) {
-        return authFailureResponse(new Error("Sesi login tidak aktif. Silakan masuk kembali."));
-      }
-      accessToken = session.access_token;
+    }
   }
 
   if (metadataTable && method === "GET") {
-      const cachedResponse = getCachedMetadataResponse(parsedUrl, accessToken);
+    const cachedResponse = getCachedMetadataResponse(parsedUrl, accessToken);
     if (cachedResponse) return cachedResponse;
   } else if (metadataTable) {
     invalidateMetadataCache(metadataTable);
@@ -325,13 +333,29 @@ async function authenticatedFetch(
 
   try {
     const latestSession = cachedSession;
-    const retrySession = latestSession && latestSession.access_token !== accessToken
+    const latestSessionStillValid = Boolean(
+      latestSession?.access_token &&
+      (latestSession.expires_at ?? 0) * 1000 > Date.now(),
+    );
+    const retrySession = latestSession && latestSessionStillValid &&
+      latestSession.access_token !== accessToken
       ? latestSession
-      : await refreshSupabaseSession(session ?? latestSession);
+      : await getValidSupabaseSession();
 
     if (!retrySession) return response;
+    if (retrySession.access_token === accessToken) {
+      if ((retrySession.expires_at ?? 0) * 1000 > Date.now()) return response;
+      const refreshedSession = await refreshSupabaseSession(retrySession);
+      if (!refreshedSession) return response;
+      if (refreshedSession.access_token === accessToken) return response;
+      session = refreshedSession;
+      accessToken = refreshedSession.access_token;
+    } else {
+      session = retrySession;
+      accessToken = retrySession.access_token;
+    }
 
-    const retryResponse = await sendWithSession(retrySession.access_token);
+    const retryResponse = await sendWithSession(accessToken);
     if (retryResponse.status === 429) {
       rememberApiRateLimit(retryResponse.headers.get("Retry-After"));
       return retryResponse;
@@ -456,6 +480,7 @@ function refreshSupabaseSession(fallbackSession: Session | null = null) {
       const { data, error } = await supabase.auth.refreshSession();
       if (error) throw error;
 
+      cachedSession = data.session;
       clearSessionRateLimit();
       return data.session;
     } catch (error) {
@@ -504,7 +529,7 @@ export async function getValidSupabaseSession() {
         if (!error) cachedSession = data.session;
         const expiresAt = (data.session?.expires_at ?? 0) * 1000;
         const tokenStillValid = Boolean(data.session?.access_token && expiresAt > Date.now());
-        if (data.session?.access_token && expiresAt > Date.now() + 60_000) {
+        if (data.session?.access_token && expiresAt > Date.now()) {
           return data.session;
         }
         if (error) {
