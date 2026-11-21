@@ -73,6 +73,7 @@ type Props = {
 };
 
 const AREA_OPTIONS = ["Pribadi", "Sosial", "Belajar", "Karir"] as const;
+const STUDENT_PAGE_SIZE = 6;
 const RPL_PRESETS = [
   "Pencegahan & Penanganan Bullying (Perundungan)",
   "Membangun Kepercayaan Diri (Self-Confidence)",
@@ -277,6 +278,7 @@ export default function CounselingWorkflowPanel({
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("");
   const [counselorFilter, setCounselorFilter] = useState("");
+  const [studentPage, setStudentPage] = useState(1);
   const [serviceCounts, setServiceCounts] = useState<Map<string, number>>(new Map());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -419,15 +421,43 @@ export default function CounselingWorkflowPanel({
     return () => { active = false; };
   }, [canEditStudentProfile, selectedStudent]);
 
+  const counselorStudents = useMemo(
+    () => students.filter(item => item.counselor_profile_id === currentUser.id),
+    [currentUser.id, students],
+  );
+  const counselorClassIds = useMemo(
+    () => new Set(counselorStudents.map(item => item.class_id).filter((id): id is string => Boolean(id))),
+    [counselorStudents],
+  );
+  const studentClassOptions = role === "guru_bk"
+    ? classes.filter(item => counselorClassIds.has(item.id))
+    : classes;
+  const normalizedSearch = search.trim().toLowerCase();
   const visibleStudents = useMemo(() => students.filter(item => {
     const assigned = role !== "guru_bk" || item.counselor_profile_id === currentUser.id;
     return assigned
       && (!classFilter || item.class_id === classFilter)
       && (!counselorFilter || item.counselor_profile_id === counselorFilter)
-      && `${item.full_name} ${item.nisn} ${item.class_name}`.toLowerCase().includes(search.toLowerCase());
-  }), [classFilter, counselorFilter, currentUser.id, role, search, students]);
+      && `${item.full_name} ${item.nisn} ${item.class_name}`.toLowerCase().includes(normalizedSearch);
+  }), [classFilter, counselorFilter, currentUser.id, normalizedSearch, role, students]);
+  const totalStudentPages = Math.max(1, Math.ceil(visibleStudents.length / STUDENT_PAGE_SIZE));
+  const currentStudentPage = Math.min(studentPage, totalStudentPages);
+  const pageStart = (currentStudentPage - 1) * STUDENT_PAGE_SIZE;
+  const paginatedStudents = visibleStudents.slice(pageStart, pageStart + STUDENT_PAGE_SIZE);
+  const rangeStart = visibleStudents.length ? pageStart + 1 : 0;
+  const rangeEnd = Math.min(pageStart + STUDENT_PAGE_SIZE, visibleStudents.length);
   const counselorOptions = [...new Map(students.filter(item => item.counselor_profile_id)
     .map(item => [item.counselor_profile_id as string, item.counselor_name ?? "Guru BK"])).entries()];
+
+  useEffect(() => {
+    setStudentPage(current => Math.min(current, totalStudentPages));
+  }, [totalStudentPages]);
+
+  useEffect(() => {
+    if (selectedStudent && !visibleStudents.some(item => item.id === selectedStudent.id)) {
+      setSelectedStudent(null);
+    }
+  }, [selectedStudent, visibleStudents]);
 
   const selectedAkpd = forms.find(form => form.id === selectedForm) ?? forms[0] ?? null;
   const studentResponse = selectedAkpd && student
@@ -982,15 +1012,25 @@ export default function CounselingWorkflowPanel({
       <section className="kb-panel kb-workflow-panel">
         <PrintHeader header={outputHeader} title="Biodata Bimbingan dan Konseling Peserta Didik" />
         {!isStudent && <div className="kb-document-output-options"><SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot} /></div>}
-        <div className="kb-panel-heading"><div><span className="kb-eyebrow">DATA INDUK TERHUBUNG</span><h2>Daftar Siswa Asuh</h2></div>
-          <div className="kb-student-filters">
-            <input className="kb-search" aria-label="Cari nama, NISN atau kelas" placeholder="Cari nama, NISN, kelas..." value={search} onChange={event => setSearch(event.target.value)} />
-            {role !== "guru_bk" && <select aria-label="Filter kelas" value={classFilter} onChange={event => setClassFilter(event.target.value)}><option value="">Semua kelas</option>{classes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
-            {role !== "guru_bk" && <select aria-label="Filter Guru BK" value={counselorFilter} onChange={event => setCounselorFilter(event.target.value)}><option value="">Semua Guru BK</option>{counselorOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>}
-          </div>
+        <div className="kb-panel-heading kb-student-heading">
+          <div><span className="kb-eyebrow">DATA INDUK TERHUBUNG</span><h2>Daftar Siswa Asuh</h2></div>
+        </div>
+        <div className={`kb-student-filters${role === "guru_bk" ? " kb-student-filters-counselor" : ""}`}>
+          <input className="kb-search" aria-label="Cari nama, NISN atau kelas" placeholder="Cari nama, NISN, kelas..." value={search} onChange={event => { setSearch(event.target.value); setStudentPage(1); }} />
+          {role !== "siswa" && <select aria-label="Filter kelas" value={classFilter} onChange={event => { setClassFilter(event.target.value); setStudentPage(1); }}><option value="">Semua kelas</option>{studentClassOptions.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+          {role !== "guru_bk" && role !== "siswa" && <select aria-label="Filter Guru BK" value={counselorFilter} onChange={event => { setCounselorFilter(event.target.value); setStudentPage(1); }}><option value="">Semua Guru BK</option>{counselorOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>}
         </div>
         {error && <div className="kb-alert" role="alert">{error}</div>}
-        <div className="kb-workflow-student-layout"><div className="kb-workflow-list">{visibleStudents.map(item => <button key={item.id} type="button" className={`kb-workflow-student${selectedStudent?.id === item.id ? " active" : ""}`} onClick={() => setSelectedStudent(item)}><strong>{item.full_name}</strong><span>NISN {item.nisn} · {item.class_name || "Belum ada kelas"}</span><small>{item.status} · {serviceCounts.get(item.id) ?? 0} layanan BK · Guru BK: {item.counselor_name ?? "Belum ditugaskan"}</small></button>)}{!visibleStudents.length && <div className="kb-empty">Siswa tidak ditemukan.</div>}</div>
+        {notice && <div className="kb-success" role="status">{notice}</div>}
+        <div className="kb-workflow-student-layout">
+          <div className="kb-workflow-student-list-column">
+            <div className="kb-workflow-list">{paginatedStudents.map(item => <button key={item.id} type="button" className={`kb-workflow-student${selectedStudent?.id === item.id ? " active" : ""}`} onClick={() => setSelectedStudent(item)}><strong>{item.full_name}</strong><span>NISN {item.nisn} · {item.class_name || "Belum ada kelas"}</span><small>{item.status} · {serviceCounts.get(item.id) ?? 0} layanan BK · Guru BK: {item.counselor_name ?? "Belum ditugaskan"}</small></button>)}{!visibleStudents.length && <div className="kb-empty">{role === "guru_bk" && !normalizedSearch && !classFilter ? "Belum ada siswa asuh yang terhubung ke akun Guru BK ini." : "Tidak ada siswa yang cocok dengan pencarian atau filter."}</div>}</div>
+            <div className="kb-student-pagination" aria-label="Navigasi daftar siswa asuh">
+              <button className="kb-secondary" type="button" disabled={currentStudentPage <= 1} onClick={() => setStudentPage(page => Math.max(1, page - 1))}>Sebelumnya</button>
+              <span aria-live="polite">{rangeStart}–{rangeEnd} dari {visibleStudents.length} siswa · Hal {currentStudentPage} / {totalStudentPages}</span>
+              <button className="kb-secondary" type="button" disabled={currentStudentPage >= totalStudentPages} onClick={() => setStudentPage(page => Math.min(totalStudentPages, page + 1))}>Selanjutnya</button>
+            </div>
+          </div>
           {selectedStudent && (profileDraft || !canEditStudentProfile) ? <div className="kb-workflow-profile">
             <div className="kb-panel-heading"><div><span className="kb-eyebrow">KARTU BIODATA BK</span><h3>{selectedStudent.full_name}</h3></div><button className="kb-secondary" type="button" onClick={printReport}>Unduh / Cetak Biodata</button></div>
             <div className="kb-profile-identity"><p><strong>NISN</strong><span>{selectedStudent.nisn}</span></p><p><strong>Kelas / Tingkat</strong><span>{selectedStudent.class_name} / {selectedStudent.grade_level ?? "—"}</span></p><p><strong>Status</strong><span>{selectedStudent.status}</span></p><p><strong>Tanggal lahir</strong><span>{selectedStudent.birth_date ?? "—"}</span></p><p><strong>Jenis kelamin</strong><span>{selectedStudent.gender ?? "—"}</span></p><p><strong>WhatsApp orang tua</strong><span>{selectedStudent.parent_phone ?? "—"}</span></p><p><strong>Guru BK</strong><span>{selectedStudent.counselor_name ?? "Belum ditugaskan"}</span></p></div>

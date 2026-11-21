@@ -65,7 +65,7 @@ function toStudentOption(
           id: row.class_id,
           name: row.class_name,
           academic_year_id: typeof row.academic_year_id === "string" ? row.academic_year_id : null,
-          homeroom_teacher_id: null,
+          homeroom_teacher_id: typeof row.homeroom_teacher_id === "string" ? row.homeroom_teacher_id : null,
           grade_level: typeof row.grade_level === "number" ? row.grade_level : null,
           academic_year: typeof row.academic_year === "string" ? { name: row.academic_year } : null,
         }
@@ -81,7 +81,10 @@ function toStudentOption(
     gender: typeof row.gender === "string" ? row.gender : null,
     class_id: typeof row.class_id === "string" ? row.class_id : null,
     class_name: classRow?.name ?? "",
-    homeroom_teacher_name: classRow?.homeroom_teacher_id ? teacherNames.get(classRow.homeroom_teacher_id) ?? null : null,
+    homeroom_teacher_name: classRow?.homeroom_teacher_id
+      ? teacherNames.get(classRow.homeroom_teacher_id) ??
+        (typeof row.homeroom_teacher_name === "string" ? row.homeroom_teacher_name : null)
+      : null,
     academic_year_id: classRow?.academic_year_id ?? null,
     academic_year: academicYear?.name ?? null,
     counselor_profile_id: counselorProfileId,
@@ -108,6 +111,37 @@ async function fetchStudentsAndYears(role: UserRole): Promise<StudentsAndYears> 
       classes: context?.class_id && context?.class_name
         ? [{ id: String(context.class_id), name: String(context.class_name), grade_level: Number(context.grade_level ?? 0), academic_year_id: String(context.academic_year_id ?? "") }]
         : [],
+    };
+  }
+
+  if (role === "guru_bk") {
+    const [studentsResult, yearsResult] = await Promise.all([
+      supabase.rpc("kb_counselor_assigned_students"),
+      supabase.from("academic_years").select("id,name,is_active").order("start_date", { ascending: false }),
+    ]);
+    throwOnError(studentsResult.error);
+    throwOnError(yearsResult.error);
+
+    const rows = (studentsResult.data ?? []) as Record<string, unknown>[];
+    const students = rows.map(row => toStudentOption(
+      row,
+      typeof row.counselor_profile_id === "string" ? row.counselor_profile_id : null,
+    ));
+    const classes = new Map<string, ClassOption>();
+    for (const student of students) {
+      if (!student.class_id || !student.class_name) continue;
+      classes.set(student.class_id, {
+        id: student.class_id,
+        name: student.class_name,
+        grade_level: student.grade_level ?? 0,
+        academic_year_id: student.academic_year_id ?? "",
+      });
+    }
+
+    return {
+      students,
+      academicYears: (yearsResult.data ?? []) as AcademicYearOption[],
+      classes: [...classes.values()],
     };
   }
 

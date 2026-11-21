@@ -147,6 +147,7 @@ export default function KesiswaanBK({
   const [savingAssignmentId, setSavingAssignmentId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
+  const [masterDataError, setMasterDataError] = useState("");
   const [notice, setNotice] = useState("");
   const rowsRequestId = useRef(0);
 
@@ -234,15 +235,18 @@ export default function KesiswaanBK({
   useEffect(() => {
     if (!hasModuleAccess) return;
     let activeEffect = true;
+    setMasterDataError("");
+    invalidateStudentsAndYearsCache(currentUser.id);
     void loadStudentsAndYears(role, currentUser.id).then(result => {
       if (!activeEffect) return;
       setStudents(result.students);
       setAcademicYears(result.academicYears);
       setClasses(result.classes);
+      setMasterDataError("");
       const currentYear = result.academicYears.find(year => year.is_active);
       if (currentYear) setFilters(current => current.academicYearId ? current : { ...current, academicYearId: currentYear.id });
     }).catch(loadError => {
-      if (activeEffect) setError(messageOf(loadError, "Data siswa dan tahun ajaran gagal dimuat."));
+      if (activeEffect) setMasterDataError(messageOf(loadError, "Data siswa dan tahun ajaran gagal dimuat."));
     }).finally(() => {
       if (activeEffect) setLoadedMasterDataKey(masterDataKey);
     });
@@ -612,6 +616,7 @@ export default function KesiswaanBK({
       {isStudentCounseling && !currentStudent && !masterDataLoading && !error && (
         <div className="kb-privacy" role="status">Profil siswa belum terhubung ke Data Induk. Hubungi administrator sekolah agar akun dapat ditautkan.</div>
       )}
+      {masterDataError && <div className="kb-alert" role="alert">{masterDataError}</div>}
       {error && <div className="kb-alert" role="alert">{error}</div>}
       {notice && <div className="kb-success" role="status">{notice}</div>}
 

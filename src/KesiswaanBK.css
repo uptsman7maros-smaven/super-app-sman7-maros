@@ -728,7 +728,9 @@
   .kb-workflow-panel .kb-row-actions,
   .kb-workflow-panel .kb-workflow-list button,
   .kb-workflow-panel .kb-curhat-layout,
-  .kb-workflow-panel .kb-workflow-student-layout > .kb-workflow-list,
+  .kb-workflow-panel .kb-workflow-student-list-column,
+  .kb-workflow-panel .kb-student-filters,
+  .kb-workflow-panel .kb-student-pagination,
   .kb-workflow-panel .kb-checkbox-label,
   .kb-data-panel .kb-form,
   .kb-data-panel .kb-panel-heading button,
@@ -909,6 +911,96 @@
   min-width: 0;
 }
 
+.kb-workflow-student-list-column {
+  min-width: 0;
+}
+
+.kb-workflow-panel .kb-student-heading {
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.kb-student-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.8fr) minmax(150px, 1fr) minmax(180px, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #e5e5f1;
+  border-radius: 12px;
+  background: #fcfcff;
+}
+
+.kb-student-filters-counselor {
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px);
+}
+
+.kb-student-filters input,
+.kb-student-filters select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #e5e5f1;
+  border-radius: 12px;
+  background-color: #fcfcff;
+  color: #262642;
+  outline: none;
+  font: inherit;
+  font-weight: 450;
+  transition: border .2s, box-shadow .2s;
+}
+
+.kb-student-filters .kb-search {
+  width: 100%;
+}
+
+.kb-student-filters select {
+  appearance: none;
+  padding-right: 36px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #777b96 50%),
+    linear-gradient(135deg, #777b96 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) 50%,
+    calc(100% - 12px) 50%;
+  background-repeat: no-repeat;
+  background-size: 5px 5px, 5px 5px;
+}
+
+.kb-student-filters input:focus,
+.kb-student-filters select:focus {
+  border-color: #8e79e9;
+  box-shadow: 0 0 0 3px #8e79e91b;
+}
+
+.kb-student-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.kb-student-pagination button {
+  min-width: 112px;
+}
+
+.kb-student-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+  transform: none;
+}
+
+.kb-student-pagination span {
+  color: #777b96;
+  font-size: 12px;
+  text-align: center;
+}
+
 .kb-workflow-list > article,
 .kb-workflow-student {
   display: flex;
@@ -1062,6 +1154,24 @@
   .kb-workflow-student-layout,
   .kb-curhat-layout {
     grid-template-columns: 1fr;
+  }
+
+  .kb-student-filters,
+  .kb-student-filters-counselor {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-student-pagination {
+    flex-wrap: wrap;
+  }
+
+  .kb-student-pagination span {
+    order: -1;
+    flex-basis: 100%;
+  }
+
+  .kb-student-pagination button {
+    flex: 1;
   }
 
   .kb-workflow-list > article {
