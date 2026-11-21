@@ -659,7 +659,9 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     };
 
     void loadStudentQrs();
-    const timer = window.setInterval(() => void loadStudentQrs(), 30_000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadStudentQrs();
+    }, 180_000);
     return () => {
       active = false;
       window.clearInterval(timer);

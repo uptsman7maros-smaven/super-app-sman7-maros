@@ -31,6 +31,53 @@ export type MasterAccountDeletionResult = {
   error?: string;
 };
 
+type StudentSyncResult = {
+  id: string;
+  synced: boolean;
+  error?: string;
+  message?: string;
+};
+
+function parseStudentSyncResults(
+  value: unknown,
+  expectedIds: string[],
+): StudentSyncResult[] {
+  if (!Array.isArray(value) || value.length !== expectedIds.length) {
+    throw new Error("Respons sinkronisasi akun siswa tidak lengkap.");
+  }
+
+  const expectedIdSet = new Set(expectedIds);
+  const seenIds = new Set<string>();
+  const results = value.map((result: unknown) => {
+    if (!result || typeof result !== "object") {
+      throw new Error("Hasil sinkronisasi akun siswa tidak valid.");
+    }
+    const row = result as Record<string, unknown>;
+    if (
+      typeof row.id !== "string" ||
+      !expectedIdSet.has(row.id) ||
+      seenIds.has(row.id) ||
+      typeof row.synced !== "boolean" ||
+      (row.error !== undefined && typeof row.error !== "string") ||
+      (row.message !== undefined && typeof row.message !== "string")
+    ) {
+      throw new Error("Hasil sinkronisasi akun siswa tidak lengkap.");
+    }
+    seenIds.add(row.id);
+    return {
+      id: row.id,
+      synced: row.synced,
+      ...(typeof row.error === "string" ? { error: row.error } : {}),
+      ...(typeof row.message === "string" ? { message: row.message } : {}),
+    };
+  });
+
+  if (seenIds.size !== expectedIdSet.size) {
+    throw new Error("Respons sinkronisasi tidak mencakup semua siswa yang dipilih.");
+  }
+  return results;
+}
+
 function functionErrorResponse(error: unknown): Response | null {
   if (
     !error ||
@@ -153,7 +200,30 @@ export async function getManagedUsers(): Promise<ManagedUser[]> {
   if (!Array.isArray(data.users)) {
     throw new Error("Respons daftar pengguna tidak valid.");
   }
-  return data.users as ManagedUser[];
+  return data.users.map((user: unknown) => {
+    if (!user || typeof user !== "object") {
+      throw new Error("Data pengguna pada respons daftar tidak valid.");
+    }
+    const row = user as Record<string, unknown>;
+    if (
+      typeof row.id !== "string" ||
+      typeof row.username !== "string" ||
+      typeof row.full_name !== "string" ||
+      typeof row.role !== "string" ||
+      typeof row.status !== "string" ||
+      typeof row.created_at !== "string"
+    ) {
+      throw new Error("Data pengguna pada respons daftar tidak lengkap.");
+    }
+    return {
+      id: row.id,
+      username: row.username,
+      full_name: row.full_name,
+      role: row.role,
+      status: row.status,
+      created_at: row.created_at,
+    };
+  });
 }
 
 export async function deleteMasterRecords(
@@ -198,11 +268,11 @@ export async function deleteMasterRecords(
 
 export async function syncStudentManagedAccount(studentId: string): Promise<void> {
   const data = await invokeManageUsersAction("sync-student-status", { student_id: studentId });
-  if (!Array.isArray(data.results)) {
-    throw new Error("Respons sinkronisasi akun siswa tidak valid.");
+  const [result] = parseStudentSyncResults(data.results, [studentId]);
+  if (result.error) throw new Error(result.error);
+  if (!result.synced && !result.message) {
+    throw new Error("Status akun siswa tidak berhasil disinkronkan.");
   }
-  const result = data.results[0] as { error?: unknown } | undefined;
-  if (typeof result?.error === "string") throw new Error(result.error);
 }
 
 export async function syncStudentManagedAccounts(studentIds: string[]): Promise<void> {
@@ -210,24 +280,22 @@ export async function syncStudentManagedAccounts(studentIds: string[]): Promise<
     throw new Error("Pilih antara 1 sampai 100 siswa untuk sinkronisasi akun.");
   }
   const data = await invokeManageUsersAction("sync-student-status", { student_ids: studentIds });
-  if (!Array.isArray(data.results)) {
-    throw new Error("Respons sinkronisasi akun siswa tidak valid.");
-  }
-  const failures = data.results
-    .filter((result: unknown) =>
-      result &&
-      typeof result === "object" &&
-      "error" in result &&
-      typeof result.error === "string"
-    )
-    .map((result: { id?: unknown; error?: unknown }) =>
-      `${typeof result.id === "string" ? `${result.id}: ` : ""}${String(result.error)}`
-    );
+  const results = parseStudentSyncResults(data.results, [...new Set(studentIds)]);
+  const failures = results
+    .filter((result) => Boolean(result.error) || (!result.synced && !result.message))
+    .map((result) => `${result.id}: ${result.error ?? "status akun tidak berhasil disinkronkan."}`);
   if (failures.length) {
     throw new Error(failures.slice(0, 3).join(" "));
   }
 }
 
 export async function syncTeacherManagedAccount(teacherId: string): Promise<void> {
-  await invokeManageUsersAction("sync-teacher-account", { teacher_id: teacherId });
+  const data = await invokeManageUsersAction("sync-teacher-account", { teacher_id: teacherId });
+  if (data.synced !== true || typeof data.role !== "string") {
+    throw new Error(
+      typeof data.message === "string"
+        ? data.message
+        : "Respons sinkronisasi akun guru/tendik tidak valid.",
+    );
+  }
 }

@@ -544,6 +544,7 @@ const roleAccess: Record<string, string[]> = {
     "Persuratan",
     "Perpustakaan",
     "Inventaris",
+    "Keuangan",
     "Akademik",
     "SMAVEN Learn",
     "Kesiswaan",
@@ -1708,19 +1709,19 @@ useEffect(() => {
         role: profile.role,
       };
       writeCachedSessionUser(nextUser);
-      currentUserRef.current = {
-        ...currentUserRef.current,
-        ...nextUser,
-      };
+      currentUserRef.current = currentUserRef.current?.id === nextUser.id
+        ? { ...currentUserRef.current, ...nextUser }
+        : nextUser;
       setSupabaseStatus("Database terhubung");
-      setCurrentUser((currentUser) =>
-        currentUser !== null &&
-        currentUser.id === nextUser.id &&
-        currentUser.username === nextUser.username &&
-        currentUser.role === nextUser.role
-          ? currentUser
-          : nextUser,
-      );
+      setCurrentUser((currentUser) => {
+        const mergedUser = currentUser?.id === nextUser.id
+          ? { ...currentUser, ...nextUser }
+          : currentUserRef.current?.id === nextUser.id
+            ? currentUserRef.current
+            : nextUser;
+        currentUserRef.current = mergedUser;
+        return mergedUser;
+      });
     } catch (error) {
       if (mounted && syncId === sessionSyncId) {
         if (isTemporarySessionFailure(error)) {

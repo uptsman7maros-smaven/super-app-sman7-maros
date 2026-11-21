@@ -238,14 +238,15 @@ async function authenticatedFetch(
     (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")
   ).toUpperCase();
   const metadataTable = getMetadataTable(parsedUrl);
+  const requestHeaders = new Headers(
+    typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined,
+  );
+  new Headers(init?.headers).forEach((value, name) => requestHeaders.set(name, value));
   const sendWithSession = (accessToken: string) => {
     const request = typeof Request !== "undefined" && input instanceof Request
       ? input.clone()
       : input;
-    const headers = new Headers(
-      init?.headers ??
-        (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined),
-    );
+    const headers = new Headers(requestHeaders);
     headers.set("Authorization", `Bearer ${accessToken}`);
     const requestSignal = init?.signal ??
       (typeof Request !== "undefined" && input instanceof Request ? input.signal : undefined);
@@ -276,19 +277,30 @@ async function authenticatedFetch(
       });
   };
 
-  let session;
-  try {
-    session = await getValidSupabaseSession();
-  } catch (error) {
-    return authFailureResponse(error);
-  }
+  const authorization = requestHeaders.get("Authorization");
+  const requestAccessToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+  let session: Session | null = requestAccessToken && requestAccessToken !== key
+      ? cachedSession?.access_token === requestAccessToken ? cachedSession : null
+      : null;
+  let accessToken = requestAccessToken && requestAccessToken !== key
+      ? requestAccessToken
+      : null;
 
-  if (!session) {
-    return authFailureResponse(new Error("Sesi login tidak aktif. Silakan masuk kembali."));
+  if (!accessToken) {
+      try {
+        session = await getValidSupabaseSession();
+      } catch (error) {
+        return authFailureResponse(error);
+      }
+
+      if (!session) {
+        return authFailureResponse(new Error("Sesi login tidak aktif. Silakan masuk kembali."));
+      }
+      accessToken = session.access_token;
   }
 
   if (metadataTable && method === "GET") {
-    const cachedResponse = getCachedMetadataResponse(parsedUrl, session.access_token);
+      const cachedResponse = getCachedMetadataResponse(parsedUrl, accessToken);
     if (cachedResponse) return cachedResponse;
   } else if (metadataTable) {
     invalidateMetadataCache(metadataTable);
@@ -298,13 +310,13 @@ async function authenticatedFetch(
     return retryableApiRateLimitResponse();
   }
 
-  const response = await sendWithSession(session.access_token);
+  const response = await sendWithSession(accessToken);
   if (response.status === 429) {
     rememberApiRateLimit(response.headers.get("Retry-After"));
     return response;
   }
   if (metadataTable && method === "GET" && response.ok) {
-    cacheMetadataResponse(metadataTable, parsedUrl, session.access_token, response);
+    cacheMetadataResponse(metadataTable, parsedUrl, accessToken, response);
   }
   if (response.status !== 401) {
     if (response.ok) clearApiRateLimit();
@@ -313,13 +325,9 @@ async function authenticatedFetch(
 
   try {
     const latestSession = cachedSession;
-    const tokenExpiresSoon = (session.expires_at ?? 0) <=
-      Math.floor(Date.now() / 1000) + ACCESS_TOKEN_SAFETY_WINDOW_SECONDS;
-    const retrySession = latestSession && latestSession.access_token !== session.access_token
+    const retrySession = latestSession && latestSession.access_token !== accessToken
       ? latestSession
-      : tokenExpiresSoon
-        ? await refreshSupabaseSession()
-        : null;
+      : await refreshSupabaseSession(session ?? latestSession);
 
     if (!retrySession) return response;
 
@@ -360,7 +368,6 @@ let lastApiRateLimitAt = 0;
 const SESSION_RATE_LIMIT_BASE_MS = 30_000;
 const SESSION_RATE_LIMIT_MAX_MS = 15 * 60_000;
 const SESSION_RATE_LIMIT_DEDUP_MS = 30_000;
-const ACCESS_TOKEN_SAFETY_WINDOW_SECONDS = 120;
 
 export function getCachedSupabaseSession() {
   return cachedSession;
@@ -390,7 +397,7 @@ export function isSupabaseRateLimitError(error: unknown) {
 }
 
 export function getSupabaseSessionRetryDelayMs() {
-  return Math.max(0, sessionRetryAfter - Date.now(), apiRetryAfter - Date.now());
+  return Math.max(0, sessionRetryAfter - Date.now());
 }
 
 function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
@@ -494,7 +501,7 @@ export async function getValidSupabaseSession() {
           sessionTimeout,
         ]);
         sessionCandidate = data.session;
-        cachedSession = data.session;
+        if (!error) cachedSession = data.session;
         const expiresAt = (data.session?.expires_at ?? 0) * 1000;
         const tokenStillValid = Boolean(data.session?.access_token && expiresAt > Date.now());
         if (data.session?.access_token && expiresAt > Date.now() + 60_000) {
@@ -502,6 +509,12 @@ export async function getValidSupabaseSession() {
         }
         if (error) {
           if (tokenStillValid && data.session) return data.session;
+          const fallbackSession: Session | null = getCachedSupabaseSession();
+          const cachedSessionStillValid = Boolean(
+            fallbackSession?.access_token &&
+            (fallbackSession.expires_at ?? 0) * 1000 > Date.now(),
+          );
+          if (cachedSessionStillValid && fallbackSession) return fallbackSession;
           throw error;
         }
         if (!data.session) return null;

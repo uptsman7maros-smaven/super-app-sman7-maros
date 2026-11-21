@@ -41,14 +41,16 @@ const money = (n: number) => new Intl.NumberFormat("id-ID", {
 
 const csvCell = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
 
-function evidencePath(id: string, file: File) {
+function evidencePath(userId: string, id: string, file: File) {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  return `${id}/${Date.now()}-${safeName}`;
+  return `${userId}/${id}/${Date.now()}-${safeName}`;
 }
 
 export default function KeuanganDigital({ userRole = "" }: { userRole?: string }) {
   const { currentUser, activeAcademicYear } = useSchoolContext();
-  const canManageFinance = ["super_admin", "kepala_tata_usaha"].includes(userRole);
+  const canManageFinance = ["super_admin", "operator", "kepala_tata_usaha", "bendahara"].includes(userRole);
+  const canApproveFinance = ["super_admin", "kepala_sekolah"].includes(userRole);
+  const canReviewFinance = canManageFinance || canApproveFinance;
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [loading, setLoading] = useState(true);
@@ -176,7 +178,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
   }
 
   async function reviewTransaction(id: string, status: "disetujui" | "ditolak") {
-    if (!canManageFinance) { setError("Role Anda tidak dapat menyetujui transaksi."); return; }
+    if (!canReviewFinance) { setError("Role Anda tidak dapat menyetujui transaksi."); return; }
     setError("");
     const actorId = currentUser?.id;
     if (!actorId) { setError("Sesi login tidak aktif. Silakan masuk kembali."); return; }
@@ -210,8 +212,9 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
 
   async function uploadEvidence(id: string, file?: File) {
     if (!file || !canManageFinance) return;
+    if (!currentUser?.id) { setError("Sesi login tidak aktif. Silakan masuk kembali."); return; }
     setError("");
-    const path = evidencePath(id, file);
+    const path = evidencePath(currentUser.id, id, file);
     const { error: uploadError } = await supabase.storage.from("finance-evidence").upload(path, file, { upsert: false });
     if (uploadError) { setError(uploadError.message); return; }
     const { error: updateError } = await supabase.from("finance_transactions").update({ evidence_path: path }).eq("id", id);
@@ -242,7 +245,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
       </div>
     </header>
 
-    {!canManageFinance && <div className="finance-security-note"><ShieldCheck size={18}/><span>Akses baca saja. Pengelolaan transaksi dan anggaran dibatasi untuk Super Admin dan Kepala Tata Usaha.</span></div>}
+    {!canManageFinance && !canApproveFinance && <div className="finance-security-note"><ShieldCheck size={18}/><span>Akses baca saja. Pengelolaan mengikuti peran dan kebijakan sekolah.</span></div>}
     <div className="finance-security-note"><ShieldCheck size={18}/><span>Akses data mengikuti autentikasi dan kebijakan RLS Supabase. Jangan bagikan laporan keuangan kepada pihak yang tidak berwenang.</span></div>
     {error && <div className="finance-error" role="alert">{error}</div>}
 
@@ -256,7 +259,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
     <div className="finance-tabs" role="tablist">
       <button className={activeTab === "transaksi" ? "active" : ""} onClick={() => setActiveTab("transaksi")}><ReceiptText size={16}/> Transaksi</button>
       <button className={activeTab === "anggaran" ? "active" : ""} onClick={() => setActiveTab("anggaran")}><Landmark size={16}/> Anggaran</button>
-      {canManageFinance && <button className={activeTab === "persetujuan" ? "active" : ""} onClick={() => setActiveTab("persetujuan")}><ClipboardCheck size={16}/> Persetujuan <span className="finance-tab-count">{pending}</span></button>}
+      {canReviewFinance && <button className={activeTab === "persetujuan" ? "active" : ""} onClick={() => setActiveTab("persetujuan")}><ClipboardCheck size={16}/> Persetujuan <span className="finance-tab-count">{pending}</span></button>}
     </div>
 
     {activeTab === "anggaran" ? <section className="finance-panel">
@@ -268,7 +271,7 @@ export default function KeuanganDigital({ userRole = "" }: { userRole?: string }
     </section> : <section className="finance-panel">
       <div className="finance-panel-head"><div><h2>{activeTab === "persetujuan" ? "Antrean persetujuan" : "Riwayat transaksi"}</h2><p>{activeTab === "persetujuan" ? "Tinjau transaksi yang menunggu keputusan." : "Cari, saring, dan ekspor catatan transaksi."}</p></div></div>
       <div className="finance-filters"><label className="finance-search"><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Cari uraian, kategori, referensi…"/></label><label className="finance-select"><Filter size={16}/><select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}><option value="semua">Semua jenis</option><option value="pemasukan">Pemasukan</option><option value="pengeluaran">Pengeluaran</option></select></label><label className="finance-select"><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="semua">Semua status</option><option value="menunggu">Menunggu</option><option value="disetujui">Disetujui</option><option value="ditolak">Ditolak</option><option value="dibayar">Dibayar</option><option value="draft">Draft</option></select></label></div>
-      {loading ? <p className="finance-muted">Memuat transaksi…</p> : visible.filter(t => activeTab !== "persetujuan" || t.status === "menunggu").length === 0 ? <div className="finance-empty"><ReceiptText size={30}/><strong>Tidak ada transaksi</strong><span>Data akan tampil sesuai hak akses dan filter yang dipilih.</span></div> : <div className="finance-table-wrap"><table className="finance-table"><thead><tr><th>Tanggal</th><th>Uraian</th><th>Jenis</th><th>Nominal</th><th>Status</th><th>Bukti</th>{activeTab === "persetujuan" && canManageFinance && <th>Tindakan</th>}</tr></thead><tbody>{visible.filter(t => activeTab !== "persetujuan" || t.status === "menunggu").map(t => <tr key={t.id}><td>{t.transaction_date}</td><td><strong>{t.description}</strong><small>{t.category}{t.reference_number ? ` • ${t.reference_number}` : ""}</small></td><td><span className={`finance-type type-${t.transaction_type}`}>{t.transaction_type}</span></td><td className="finance-amount">{money(t.amount)}</td><td><span className={`finance-status status-${t.status}`}>{t.status}</span></td><td>{canManageFinance ? <label className="finance-upload" title="Unggah bukti transaksi"><Paperclip size={15}/><input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e => void uploadEvidence(t.id, e.target.files?.[0])}/>{t.evidence_path ? "Ganti bukti" : "Unggah"}</label> : t.evidence_path ? "Tersedia" : "—"}</td>{activeTab === "persetujuan" && canManageFinance && <td><div className="finance-row-actions"><button title="Setujui" onClick={() => void reviewTransaction(t.id, "disetujui")}><CheckCircle2 size={17}/></button><button title="Tolak" onClick={() => void reviewTransaction(t.id, "ditolak")}><XCircle size={17}/></button></div></td>}</tr>)}</tbody></table></div>}
+      {loading ? <p className="finance-muted">Memuat transaksi…</p> : visible.filter(t => activeTab !== "persetujuan" || t.status === "menunggu").length === 0 ? <div className="finance-empty"><ReceiptText size={30}/><strong>Tidak ada transaksi</strong><span>Data akan tampil sesuai hak akses dan filter yang dipilih.</span></div> : <div className="finance-table-wrap"><table className="finance-table"><thead><tr><th>Tanggal</th><th>Uraian</th><th>Jenis</th><th>Nominal</th><th>Status</th><th>Bukti</th>{activeTab === "persetujuan" && canReviewFinance && <th>Tindakan</th>}</tr></thead><tbody>{visible.filter(t => activeTab !== "persetujuan" || t.status === "menunggu").map(t => <tr key={t.id}><td>{t.transaction_date}</td><td><strong>{t.description}</strong><small>{t.category}{t.reference_number ? ` • ${t.reference_number}` : ""}</small></td><td><span className={`finance-type type-${t.transaction_type}`}>{t.transaction_type}</span></td><td className="finance-amount">{money(t.amount)}</td><td><span className={`finance-status status-${t.status}`}>{t.status}</span></td><td>{canManageFinance ? <label className="finance-upload" title="Unggah bukti transaksi"><Paperclip size={15}/><input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e => void uploadEvidence(t.id, e.target.files?.[0])}/>{t.evidence_path ? "Ganti bukti" : "Unggah"}</label> : t.evidence_path ? "Tersedia" : "—"}</td>{activeTab === "persetujuan" && canReviewFinance && <td><div className="finance-row-actions"><button title="Setujui" onClick={() => void reviewTransaction(t.id, "disetujui")}><CheckCircle2 size={17}/></button><button title="Tolak" onClick={() => void reviewTransaction(t.id, "ditolak")}><XCircle size={17}/></button></div></td>}</tr>)}</tbody></table></div>}
     </section>}
 
     {showForm && canManageFinance && <div className="finance-modal-backdrop" role="presentation" onMouseDown={e => {if (e.target === e.currentTarget) setShowForm(false);}}>
