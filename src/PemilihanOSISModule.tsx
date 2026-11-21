@@ -10,6 +10,7 @@ const eosisAdminRpcNames = new Set([
   "get_class_stats",
   "get_classes_v3",
   "get_voter_registry_v3",
+  "get_voter_registry_page_v3",
   "get_system_sync_status_v3",
   "set_voting_status",
   "reset_voting_results",
@@ -20,9 +21,10 @@ const eosisAdminRpcNames = new Set([
   "delete_class_v3",
   "import_students",
   "eosis_sync_voters_from_datainduk",
-  "add_admin_v4",
-  "get_admins_v4",
-  "delete_admin_v4",
+  "eosis_has_admin_access",
+  "eosis_is_super_admin",
+  "eosis_get_kpu_students",
+  "eosis_set_kpu_member",
   "eosis_current_student",
   "get_candidates",
   "eosis_cast_vote",
@@ -58,9 +60,76 @@ function getRpcErrorPayload(error: unknown) {
   };
 }
 
-export default function PemilihanOSISModule({ hasAuthenticatedUser }: { hasAuthenticatedUser: boolean }) {
-  const [isLoaded, setIsLoaded] = useState(false);
+export default function PemilihanOSISModule({
+  hasAuthenticatedUser,
+  userId,
+}: {
+  hasAuthenticatedUser: boolean;
+  userId: string | null;
+}) {
+  const [loadedIframePath, setLoadedIframePath] = useState<string | null>(null);
+  const [hasAdminAccess, setHasAdminAccess] = useState<boolean | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [accessError, setAccessError] = useState("");
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    let checking = false;
+
+    async function refreshAdminAccess() {
+      if (!hasAuthenticatedUser) {
+        setHasAdminAccess(false);
+        setIsSuperAdmin(false);
+        setAccessError("");
+        return;
+      }
+
+      if (checking) return;
+      checking = true;
+      try {
+        const [accessResult, superAdminResult] = await Promise.all([
+          supabase.rpc("eosis_has_admin_access"),
+          supabase.rpc("eosis_is_super_admin"),
+        ]);
+        if (!active) return;
+        const rpcError = accessResult.error || superAdminResult.error;
+        if (rpcError) {
+          setHasAdminAccess(false);
+          setIsSuperAdmin(false);
+          setAccessError(`Tidak dapat memeriksa akses pengelola OSIS: ${rpcError.message}`);
+          return;
+        }
+
+        setAccessError("");
+        const hasAccess = accessResult.data === true;
+        setHasAdminAccess(hasAccess);
+        setIsSuperAdmin(hasAccess && superAdminResult.data === true);
+      } catch (error) {
+        if (!active) return;
+        setHasAdminAccess(false);
+        setIsSuperAdmin(false);
+        setAccessError(`Tidak dapat memeriksa akses pengelola OSIS: ${getRpcErrorPayload(error).message}`);
+      } finally {
+        checking = false;
+      }
+    }
+
+    void refreshAdminAccess();
+    const intervalId = window.setInterval(() => {
+      if (!document.hidden) void refreshAdminAccess();
+    }, 30_000);
+    const handleVisibilityChange = () => {
+      if (!document.hidden) void refreshAdminAccess();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [hasAuthenticatedUser, userId]);
 
   useEffect(() => {
     async function handleMessage(event: MessageEvent<unknown>) {
@@ -115,23 +184,35 @@ export default function PemilihanOSISModule({ hasAuthenticatedUser }: { hasAuthe
     return () => window.removeEventListener("message", handleMessage);
   }, [hasAuthenticatedUser]);
 
+  const adminEntry = hasAdminAccess ? (isSuperAdmin ? "admin" : "kpu") : "";
+  const iframePath = adminEntry ? `/eosis/index.html?entry=${adminEntry}` : "/eosis/index.html";
+  const isLoaded = loadedIframePath === iframePath;
+
   return (
     <div className="osis-module">
+      {accessError && (
+        <div className="osis-access-notice" role="alert">
+          {accessError}
+        </div>
+      )}
       {!isLoaded && (
         <div className="osis-loading-overlay" role="status" aria-live="polite">
           <span className="osis-loading-spinner" />
           <strong>Memuat Pemilihan OSIS...</strong>
-          <small>Menyiapkan aplikasi pemungutan suara digital</small>
+          <small>{hasAuthenticatedUser && hasAdminAccess === null ? "Memeriksa akses pengelola" : "Menyiapkan aplikasi pemungutan suara digital"}</small>
         </div>
       )}
-      <iframe
-        ref={iframeRef}
-        className={`osis-frame ${isLoaded ? "is-loaded" : ""}`}
-        src="/eosis/index.html"
-        title="Aplikasi Pemilihan eOSIS"
-        allowFullScreen
-        onLoad={() => setIsLoaded(true)}
-      />
+      {(!hasAuthenticatedUser || hasAdminAccess !== null) && (
+        <iframe
+          key={iframePath}
+          ref={iframeRef}
+          className={`osis-frame ${isLoaded ? "is-loaded" : ""}`}
+          src={iframePath}
+          title="Aplikasi Pemilihan eOSIS"
+          allowFullScreen
+          onLoad={() => setLoadedIframePath(iframePath)}
+        />
+      )}
     </div>
   );
 }

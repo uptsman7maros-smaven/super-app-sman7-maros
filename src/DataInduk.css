@@ -121,8 +121,16 @@
   color: #334155;
   font-family: "Cascadia Code", "Consolas", monospace;
   font-variant-numeric: tabular-nums;
-  white-space: normal;
-  overflow-wrap: anywhere;
+}
+
+.di-table td.di-nip-cell {
+  padding-right: 12px;
+  padding-left: 12px;
+}
+
+.di-table td .di-nip {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .di-teacher-name {

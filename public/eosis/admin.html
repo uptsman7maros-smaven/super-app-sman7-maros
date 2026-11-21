@@ -12,7 +12,7 @@
   <div class="brand">eOSIS Admin</div><h1>Panel Admin</h1>
   <p class="muted">Kelola pemilihan melalui sesi admin aktif Super App.</p>
   <form id="adminLoginForm">
-    <p class="small-note">Masuk ke Super App dengan akun aktif ber-role Super Admin, Kepala Sekolah, atau Operator.</p>
+    <p class="small-note">Akses hanya untuk Super Admin dan siswa yang ditunjuk sebagai anggota KPU.</p>
     <button class="btn primary full" type="submit">Verifikasi Sesi Super App</button><p id="adminMessage" class="message" aria-live="polite"></p>
   </form>
 </section>
@@ -157,6 +157,16 @@
       <div class="actions"><button class="btn primary" type="submit">Simpan Pengaturan</button><button id="previewPdfBtn" class="btn secondary" type="button">Preview/Unduh PDF</button></div>
       <p id="settingsMessage" class="message"></p>
     </form>
+  </div>
+  <div class="panel hidden" id="kpuManagementPanel">
+    <div class="section-title">
+      <div><h2>Anggota KPU Siswa</h2><p class="muted">Pilih akun siswa aktif untuk memberi atau mencabut akses pengelolaan eOSIS.</p></div>
+      <button id="refreshKpuBtn" class="btn secondary small" type="button">↻ Muat ulang</button>
+    </div>
+    <label for="kpuSearch">Cari siswa</label>
+    <input id="kpuSearch" type="search" placeholder="Nama atau NISN">
+    <p id="kpuMessage" class="message" aria-live="polite"></p>
+    <div id="kpuStudentList" class="kpu-student-list"></div>
   </div>
 
 </section>

@@ -8,6 +8,7 @@ const adminRpcNames = new Set([
   'get_class_stats',
   'get_classes_v3',
   'get_voter_registry_v3',
+  'get_voter_registry_page_v3',
   'get_system_sync_status_v3',
   'set_voting_status',
   'reset_voting_results',
@@ -18,9 +19,9 @@ const adminRpcNames = new Set([
   'delete_class_v3',
   'import_students',
   'eosis_sync_voters_from_datainduk',
-  'add_admin_v4',
-  'get_admins_v4',
-  'delete_admin_v4',
+  'eosis_is_super_admin',
+  'eosis_get_kpu_students',
+  'eosis_set_kpu_member',
   'eosis_current_student',
   'get_candidates',
   'eosis_cast_vote'
@@ -89,17 +90,38 @@ export const adminApi = {
   classStats: () => call('get_class_stats'),
   classes: () => call('get_classes_v3'),
   voters: () => call('get_voter_registry_v3'),
+  votersPage: page => call('get_voter_registry_page_v3', { p_page: page, p_page_size: 100 }),
   sync: () => call('get_system_sync_status_v3'),
   setVoting: active => call('set_voting_status', { p_aktif: active }),
   reset: () => call('reset_voting_results'),
   saveCandidate: args => call('save_candidate', args),
   deleteCandidate: id => call('delete_candidate', { p_id: id }),
   saveSettings: args => call('save_school_settings_v3', args),
-  syncDataInduk: () => call('eosis_sync_voters_from_datainduk'),
+  syncDataInduk: async () => {
+    if (!hasAdminSession()) throw new Error('Sesi admin belum aktif.');
+    const { data, error } = await adminRpc('eosis_sync_voters_from_datainduk');
+    if (error) throw new Error(error.message);
+    return data;
+  },
   addClass: name => call('add_class', { p_nama_kelas: name }),
   deleteClass: id => call('delete_class_v3', { p_id: id }),
   importStudents: rows => call('import_students', { p_rows: rows }),
-  addAdmin: args => call('add_admin_v4', args),
-  admins: () => call('get_admins_v4'),
-  deleteAdmin: id => call('delete_admin_v4', { p_id: id })
+  isSuperAdmin: async () => {
+    const { data, error } = await adminRpc('eosis_is_super_admin');
+    if (error) throw new Error(error.message);
+    return data === true;
+  },
+  kpuStudents: async () => {
+    const { data, error } = await adminRpc('eosis_get_kpu_students');
+    if (error) throw new Error(error.message);
+    return data;
+  },
+  setKpuMember: async (profileId, enabled) => {
+    const { data, error } = await adminRpc('eosis_set_kpu_member', {
+      p_profile_id: profileId,
+      p_is_kpu: enabled
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  }
 };

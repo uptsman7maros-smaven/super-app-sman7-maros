@@ -19,13 +19,17 @@
       <div id="closedNotice" class="notice hidden">Pemilihan sedang ditutup oleh admin. Silakan menunggu pengumuman dari panitia.</div>
       <div class="actions">
         <a id="startVoteBtn" class="btn primary" href="login.html">Mulai Memilih</a>
-        <a class="btn secondary" href="admin.html">Panel Admin</a>
+        <a id="kpuLoginBtn" class="btn secondary hidden" href="admin.html">Login sebagai KPU</a>
+        <a id="adminLoginBtn" class="btn secondary hidden" href="admin.html">Panel Admin</a>
       </div>
       <div class="info-row"><div><strong>1×</strong><small>Hak suara</small></div><div><strong>🔒</strong><small>Terjaga</small></div><div><strong>✓</strong><small>Terdata</small></div></div>
     </section>
   </main>
   <script type="module">
     import { loadBranding } from './js/branding.js';
+    const entry = new URLSearchParams(location.search).get('entry');
+    if (entry === 'kpu') document.getElementById('kpuLoginBtn').classList.remove('hidden');
+    if (entry === 'admin') document.getElementById('adminLoginBtn').classList.remove('hidden');
     try { const s = await loadBranding(); if (s.masa_bakti_mulai || s.masa_bakti_selesai) document.getElementById('publicPeriod').textContent = `Masa Bakti: ${s.masa_bakti_mulai || '-'} s.d. ${s.masa_bakti_selesai || '-'}`; if (!s.pemilihan_aktif) { document.getElementById('startVoteBtn').classList.add('disabled'); document.getElementById('startVoteBtn').removeAttribute('href'); document.getElementById('closedNotice').classList.remove('hidden'); } } catch(e) { console.error(e); }
   </script>
 </body></html>

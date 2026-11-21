@@ -5443,7 +5443,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                 {activeMenu === "guru" && (
                   <colgroup>
                     {canDeletePeopleData && <col style={{ width: 52 }} />}
-                    <col style={{ width: 205 }} />
+                    <col style={{ width: 230 }} />
                     <col style={{ width: 250 }} />
                     <col style={{ width: 190 }} />
                     <col />
@@ -5640,7 +5640,7 @@ const filteredAuditEntries = auditEntries.filter((entry) => {
                               />
                             </td>
                           )}
-                          <td>
+                          <td className="di-nip-cell">
                             <span className="di-nip">{teacher.nip || "—"}</span>
                           </td>
                           <td className="di-teacher-name">{teacher.full_name}</td>

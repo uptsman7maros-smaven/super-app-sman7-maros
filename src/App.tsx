@@ -698,6 +698,18 @@ function AppContent() {
     refreshSchoolContext,
     contextError,
   } = useSchoolContext();
+  const dashboardUserName = (currentUser?.full_name || currentUser?.username || "Pengguna")
+    .trim()
+    .toLocaleLowerCase("id-ID")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      const [firstCharacter, ...remainingCharacters] = Array.from(word);
+      return firstCharacter
+        ? `${firstCharacter.toLocaleUpperCase("id-ID")}${remainingCharacters.join("")}`
+        : "";
+    })
+    .join(" ");
   const currentUserRef = useRef<CachedSessionUser | null>(currentUser);
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -2607,7 +2619,7 @@ const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "SMAVEN Learn": <SmavenLearn currentUser={currentUser} userRole={currentUser.role} userName={currentUser.full_name} />,
   "Kesiswaan": <KesiswaanBK key="kesiswaan" currentUser={currentUser} userRole={currentUser.role} module="kesiswaan" canAccessKesiswaan={canAccessKesiswaan} onOpenParentLetter={openParentLetter} />,
   "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" onOpenParentLetter={openParentLetter} />,
-  "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} />,
+  "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} userId={currentUser.id} />,
   "Laporan & Analitik": <LaporanAnalitik userRole={currentUser.role} />,
   "Pengaturan": <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />,
 };
@@ -2881,7 +2893,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
   Status Supabase: {supabaseStatus}
 </p>
                     <DashboardDateTime />
-                    <h1>Selamat datang di<br /><span>Super App SMAN 7 Maros!</span></h1>
+                    <h1>Selamat datang {dashboardUserName} di<br /><span>Super App SMAN 7 Maros</span></h1>
                     <p>Satu pintu untuk mengelola layanan dan aktivitas sekolah dengan lebih mudah, cepat, dan terintegrasi.</p>
                     <button className="welcome-button" onClick={() => document.getElementById("app-directory")?.scrollIntoView({ behavior: "smooth" })}>Jelajahi aplikasi <ArrowRight size={17} /></button>
                   </div>
@@ -3085,7 +3097,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
      </motion.div>
 ) : activePage === "Pemilihan OSIS" ? (
      <motion.div key="pemilihan-osis" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-       <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} />
+       <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} userId={currentUser.id} />
      </motion.div>
 ) : activePage === "Laporan & Analitik" ? (
      <motion.div key="laporan-analitik" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>

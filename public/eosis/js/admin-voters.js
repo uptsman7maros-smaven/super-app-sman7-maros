@@ -4,6 +4,10 @@ import { escapeHtml } from './utils.js';
 let selectedFile = null;
 let generatedRows = [];
 let classes = [];
+let voterPage = 1;
+let voterPageCount = 0;
+let voterTotal = 0;
+let refreshVoterSummary = async () => {};
 
 function excelDateToISO(value) {
   if (value instanceof Date && !isNaN(value)) return value.toISOString().slice(0, 10);
@@ -42,7 +46,8 @@ function formatDateTime(value) {
   return d.toLocaleString('id-ID', { dateStyle:'short', timeStyle:'short' });
 }
 
-export function initVoterModule() {
+export function initVoterModule(onVotersUpdated = async () => {}) {
+  refreshVoterSummary = onVotersUpdated;
   document.getElementById('syncDataIndukBtn').onclick = syncFromDataInduk;
   document.getElementById('studentFile').addEventListener('change', e => {
     selectedFile = e.target.files[0] || null;
@@ -59,7 +64,12 @@ export function initVoterModule() {
   document.getElementById('importBtn').onclick = importRows;
   document.getElementById('templateBtn').onclick = downloadTemplate;
   document.getElementById('refreshClassesBtn').onclick = loadClasses;
-  document.getElementById('refreshVotersBtn').onclick = loadVoters;
+  document.getElementById('refreshVotersBtn').onclick = () => loadVoters();
+  document.getElementById('voterRegistry').addEventListener('click', event => {
+    const button = event.target.closest('[data-voter-page]');
+    if (!button || button.disabled) return;
+    loadVoters(Number(button.dataset.voterPage));
+  });
 
   document.getElementById('classForm').onsubmit = async e => {
     e.preventDefault();
@@ -83,6 +93,7 @@ async function syncFromDataInduk() {
   try {
     const result = await adminApi.syncDataInduk();
     await Promise.all([loadClasses(), loadVoters()]);
+    await refreshVoterSummary();
     msg.textContent = `Sinkron selesai: ${result.processed} siswa, ${result.created} baru, ${result.updated} diperbarui, ${result.ineligible} tidak aktif untuk eOSIS.`;
   } catch (err) {
     msg.textContent = err.message;
@@ -165,6 +176,7 @@ async function importRows() {
     msg.textContent = `Sinkron selesai. Diproses ${result.processed}, data baru ${result.created}, diperbarui ${result.updated}.`;
     await loadClasses();
     await loadVoters();
+    await refreshVoterSummary();
   } catch (err) {
     msg.textContent = err.message;
     btn.disabled = false;
@@ -189,20 +201,39 @@ export async function loadClasses() {
   } catch(e) { box.textContent = e.message; }
 }
 
-export async function loadVoters() {
+export async function loadVoters(page = 1) {
   const box = document.getElementById('voterRegistry');
   box.innerHTML = '<div class="muted">Memuat data pemilih...</div>';
   try {
-    const data = await adminApi.voters();
-    box.innerHTML = data.length ? `<table><thead><tr>
+    const result = await adminApi.votersPage(page);
+    if (!Array.isArray(result?.rows) || !Number.isFinite(Number(result.total_count))) {
+      throw new Error('Respons daftar pemilih dari Supabase tidak valid.');
+    }
+
+    voterPage = Number(result.page);
+    voterTotal = Number(result.total_count);
+    voterPageCount = Number(result.page_count);
+    const startIndex = voterTotal ? (voterPage - 1) * 100 : 0;
+    const endIndex = Math.min(startIndex + result.rows.length, voterTotal);
+
+    box.innerHTML = voterTotal ? `<table><thead><tr>
       <th>#</th><th>NISN</th><th>Nama</th><th>Kelas</th><th>Tanggal Lahir</th><th>Jenis Kelamin</th><th>Status Hak Suara</th><th>Waktu Memilih</th>
-    </tr></thead><tbody>${data.map((r,i) => `<tr>
-      <td>${i+1}</td><td>${escapeHtml(r.nisn)}</td><td>${escapeHtml(r.nama)}</td><td>${escapeHtml(r.nama_kelas)}</td>
+    </tr></thead><tbody>${result.rows.map((r,i) => `<tr>
+      <td>${startIndex + i + 1}</td><td>${escapeHtml(r.nisn)}</td><td>${escapeHtml(r.nama)}</td><td>${escapeHtml(r.nama_kelas)}</td>
       <td>${escapeHtml(r.tgl_lahir || '-')}</td><td>${escapeHtml(r.jenis_kelamin || '-')}</td>
       <td><span class="status-pill ${r.status_memilih?'open':'closed'}">${r.status_memilih?'SUDAH MEMILIH':'BELUM MEMILIH'}</span></td>
       <td>${escapeHtml(formatDateTime(r.waktu_memilih))}</td>
-    </tr>`).join('')}</tbody></table>` : '<div class="empty">Belum ada data pemilih.</div>';
-  } catch(e) { box.textContent = e.message; }
+    </tr>`).join('')}</tbody></table>
+    <nav class="voter-pagination" aria-label="Navigasi daftar pemilih">
+      <span>Menampilkan ${startIndex + 1}–${endIndex} dari ${voterTotal} pemilih · Halaman ${voterPage} dari ${voterPageCount}</span>
+      <div>
+        <button class="btn secondary small" type="button" data-voter-page="${voterPage - 1}" ${voterPage <= 1 ? 'disabled' : ''}>Sebelumnya</button>
+        <button class="btn secondary small" type="button" data-voter-page="${voterPage + 1}" ${voterPage >= voterPageCount ? 'disabled' : ''}>Berikutnya</button>
+      </div>
+    </nav>` : '<div class="empty">Belum ada data pemilih. Total pemilih: 0.</div>';
+  } catch(e) {
+    box.innerHTML = `<div class="notice">${escapeHtml(e.message)}</div>`;
+  }
 }
 
 function downloadTemplate() {

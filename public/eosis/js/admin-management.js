@@ -1,60 +1,83 @@
 import { adminApi } from './admin-api.js';
 import { escapeHtml } from './utils.js';
 
+let kpuStudents = [];
+
 export function initAdminManagement() {
-  const form = document.getElementById('addAdminForm');
-  const refresh = document.getElementById('refreshAdminsBtn');
-  if (form) form.onsubmit = addAdmin;
-  if (refresh) refresh.onclick = loadAdmins;
+  const search = document.getElementById('kpuSearch');
+  const refresh = document.getElementById('refreshKpuBtn');
+  const list = document.getElementById('kpuStudentList');
+
+  if (!search || !refresh || !list) return;
+
+  search.addEventListener('input', renderKpuStudents);
+  refresh.addEventListener('click', loadKpuMembers);
+  list.addEventListener('click', async event => {
+    const button = event.target.closest('[data-profile-id]');
+    if (!button || button.disabled) return;
+
+    const profileId = button.dataset.profileId;
+    if (!profileId) return;
+
+    const enabled = button.dataset.isKpu !== 'true';
+    const message = document.getElementById('kpuMessage');
+    button.disabled = true;
+    message.textContent = enabled ? 'Memberikan akses KPU...' : 'Mencabut akses KPU...';
+
+    try {
+      await adminApi.setKpuMember(profileId, enabled);
+      message.textContent = enabled ? 'Akun siswa ditambahkan sebagai anggota KPU.' : 'Akses KPU akun siswa dicabut.';
+      await loadKpuMembers();
+    } catch (error) {
+      message.textContent = error instanceof Error ? error.message : String(error);
+      button.disabled = false;
+    }
+  });
 }
 
-export async function loadAdmins() {
-  const box = document.getElementById('adminList');
-  if (!box) return;
-  box.innerHTML = '<div class="muted">Memuat daftar admin...</div>';
+export async function loadKpuMembers() {
+  const list = document.getElementById('kpuStudentList');
+  const message = document.getElementById('kpuMessage');
+  if (!list || !message) return;
+
+  list.innerHTML = '<div class="muted">Memuat daftar akun siswa...</div>';
   try {
-    const data = await adminApi.admins();
-    box.innerHTML = data.length ? data.map(a => `
-      <div class="class-row">
-        <div>
-          <strong>${escapeHtml(a.username)}</strong>
-          <small>Ditambahkan: ${formatDate(a.created_at)}</small>
-        </div>
-        <button class="btn danger small delete-admin" data-id="${a.id}" data-username="${escapeHtml(a.username)}">Hapus</button>
-      </div>`).join('') : '<div class="empty">Belum ada admin.</div>';
-    box.querySelectorAll('.delete-admin').forEach(btn => {
-      btn.onclick = async () => {
-        if (!confirm(`Hapus admin "${btn.dataset.username}"?`)) return;
-        try {
-          await adminApi.deleteAdmin(Number(btn.dataset.id));
-          await loadAdmins();
-          alert('Admin berhasil dihapus.');
-        } catch (e) { alert(e.message); }
-      };
-    });
-  } catch (e) {
-    box.innerHTML = `<div class="notice">${escapeHtml(e.message)}</div>`;
+    const result = await adminApi.kpuStudents();
+    if (!Array.isArray(result)) throw new Error('Respons daftar akun siswa dari Supabase tidak valid.');
+    kpuStudents = result;
+    renderKpuStudents();
+  } catch (error) {
+    list.innerHTML = `<div class="notice">${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`;
   }
 }
 
-async function addAdmin(e) {
-  e.preventDefault();
-  const msg = document.getElementById('addAdminMessage');
-  const username = document.getElementById('addAdminUsername').value.trim();
-  const password = document.getElementById('addAdminPassword').value;
-  msg.textContent = 'Menambahkan admin...';
-  try {
-    await adminApi.addAdmin({ p_new_username: username, p_new_password: password });
-    msg.textContent = 'Admin baru berhasil ditambahkan.';
-    e.target.reset();
-    await loadAdmins();
-  } catch (err) {
-    msg.textContent = err.message;
-  }
-}
+function renderKpuStudents() {
+  const list = document.getElementById('kpuStudentList');
+  const search = document.getElementById('kpuSearch');
+  if (!list || !search) return;
 
-function formatDate(value) {
-  if (!value) return '-';
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString('id-ID');
+  const query = search.value.trim().toLocaleLowerCase('id-ID');
+  const rows = kpuStudents.filter(student =>
+    `${student.full_name || ''} ${student.nisn || ''}`.toLocaleLowerCase('id-ID').includes(query)
+  );
+
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty">Tidak ada akun siswa aktif yang cocok.</div>';
+    return;
+  }
+
+  list.innerHTML = rows.map(student => `
+    <div class="kpu-student-row">
+      <div>
+        <strong>${escapeHtml(student.full_name || 'Tanpa nama')}</strong>
+        <small>NISN ${escapeHtml(student.nisn || '-')} · ${escapeHtml(student.class_name || 'Kelas belum diatur')}</small>
+      </div>
+      <button
+        class="btn small ${student.is_kpu ? 'kpu-enabled' : 'secondary'}"
+        type="button"
+        data-profile-id="${escapeHtml(student.profile_id)}"
+        data-is-kpu="${student.is_kpu ? 'true' : 'false'}"
+        aria-pressed="${student.is_kpu ? 'true' : 'false'}"
+      >${student.is_kpu ? 'Cabut akses KPU' : 'Jadikan anggota KPU'}</button>
+    </div>`).join('');
 }

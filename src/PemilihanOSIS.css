@@ -39,6 +39,19 @@
 }
 .osis-loading-overlay strong { margin-top: 8px; font-size: 16px; }
 .osis-loading-overlay small { color: #64748b; }
+.osis-access-notice {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  padding: 10px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  color: #991b1b;
+  background: #fff1f2;
+  font-size: 13px;
+}
 .osis-loading-spinner {
   width: 42px;
   height: 42px;

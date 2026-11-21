@@ -6,7 +6,7 @@ import { initSettings, loadSettings } from './admin-settings.js';
 import { initVoterModule, loadClasses, loadVoters } from './admin-voters.js';
 import { exportResultsExcel, exportResultsPdf } from './admin-export.js';
 import { adminApi, adminRpc } from './admin-api.js';
-import { initAdminManagement, loadAdmins } from './admin-management.js';
+import { initAdminManagement, loadKpuMembers } from './admin-management.js';
 
 const loginForm = document.getElementById('adminLoginForm');
 const loginCard = document.getElementById('adminLoginCard');
@@ -15,6 +15,7 @@ const message = document.getElementById('adminMessage');
 const verifyButton = loginForm.querySelector('button[type="submit"]');
 let settings = null;
 let verifyingAdmin = false;
+let isSuperAdmin = false;
 
 window.addEventListener('eosis-auth-expired', () => {
   dashboard.classList.add('hidden');
@@ -107,7 +108,10 @@ document.querySelectorAll('.tab').forEach(tab => tab.onclick = async () => {
     if (tab.dataset.tab === 'dashboardTab') await loadDashboard();
     if (tab.dataset.tab === 'candidateTab') await loadCandidates();
     if (tab.dataset.tab === 'voterTab') { await loadClasses(); await loadVoters(); }
-    if (tab.dataset.tab === 'settingsTab') { await loadSettings(); await loadAdmins(); }
+    if (tab.dataset.tab === 'settingsTab') {
+      await loadSettings();
+      if (isSuperAdmin) await loadKpuMembers();
+    }
     if (tab.dataset.tab === 'syncTab') await runSyncCheck();
   } catch(e) { showMessage(e.message); }
 });
@@ -143,16 +147,29 @@ async function runSyncCheck() {
 
 initCandidateModule();
 initSettings();
-initVoterModule();
+initVoterModule(async () => {
+  try {
+    await loadDashboard();
+    await runSyncCheck();
+  } catch (error) {
+    showMessage(`Data pemilih tersimpan, tetapi ringkasan belum diperbarui: ${error.message}`);
+  }
+});
 initAdminManagement();
 
 async function startDashboard() {
+  isSuperAdmin = await adminApi.isSuperAdmin();
+  document.getElementById('kpuManagementPanel').classList.toggle('hidden', !isSuperAdmin);
   settings = await loadSettings();
   updateStatusBadge(Boolean(settings.pemilihan_aktif));
   await loadDashboard();
   await loadCandidates();
   await loadClasses();
   await loadVoters();
+}
+
+if (window.parent !== window) {
+  loginForm.requestSubmit();
 }
 
 function showMessage(text) {
