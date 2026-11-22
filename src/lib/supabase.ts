@@ -72,6 +72,7 @@ function invalidateMetadataCache(table: string) {
 }
 
 function clearApiRateLimit() {
+  if (Date.now() < apiRetryAfter) return;
   apiRetryAfter = 0;
   apiRateLimitAttempts = 0;
   lastApiRateLimitAt = 0;
@@ -436,10 +437,7 @@ function rememberSessionRateLimit(error: unknown, serverRetryAfterMs = 0) {
     SESSION_RATE_LIMIT_MAX_MS,
   );
   const jitterMs = Math.floor(Math.random() * SESSION_RATE_LIMIT_BASE_MS);
-  const retryAfterMs = Math.min(
-    SESSION_RATE_LIMIT_MAX_MS,
-    Math.max(backoffMs + jitterMs, serverRetryAfterMs),
-  );
+  const retryAfterMs = Math.max(backoffMs + jitterMs, serverRetryAfterMs);
   sessionRateLimitError = error instanceof Error
     ? error
     : new Error("Supabase membatasi pembaruan sesi sementara.");
@@ -457,10 +455,7 @@ function rememberApiRateLimit(serverRetryAfter: string | null) {
     SESSION_RATE_LIMIT_MAX_MS,
   );
   const jitterMs = Math.floor(Math.random() * SESSION_RATE_LIMIT_BASE_MS);
-  const retryAfterMs = Math.min(
-    SESSION_RATE_LIMIT_MAX_MS,
-    Math.max(backoffMs + jitterMs, getRetryAfterMs(serverRetryAfter)),
-  );
+  const retryAfterMs = Math.max(backoffMs + jitterMs, getRetryAfterMs(serverRetryAfter));
   apiRetryAfter = Math.max(apiRetryAfter, now + retryAfterMs);
 }
 
