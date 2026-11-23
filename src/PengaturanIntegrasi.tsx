@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 import { useSchoolContext } from "./context/useSchoolContext";
-import { logAppActivity } from "./services/activityLogService";
+import { logAppActivity, normalizeActivityActorLabel } from "./services/activityLogService";
 import type { AppModuleRegistryEntry } from "./services/moduleRegistry";
 import { DEFAULT_SCHOOL_LETTERHEAD_ADDRESS, getSchoolLetterhead } from "./services/masterDataService";
 import { SchoolLetterheadPreview } from "./components/shared/SchoolLetterheadPicker";
@@ -128,6 +128,7 @@ export default function PengaturanIntegrasi({
       await logAppActivity({
         actorId: currentUser?.id,
         actorLabel: currentUser?.full_name || currentUser?.username,
+        actorRole: currentUser?.role,
         action,
         moduleKey: "Pengaturan",
         details,
@@ -146,10 +147,20 @@ export default function PengaturanIntegrasi({
         supabase.from("app_activity_logs").select("*").order("created_at", { ascending: false }).limit(50)
       ]);
       if (sv.data) setServices(sv.data as ServiceItem[]);
-      if (a.data) setActivity(a.data as ActivityItem[]);
+      if (a.data) {
+        setActivity((a.data as ActivityItem[]).map((item) => ({
+          ...item,
+          actor_label: normalizeActivityActorLabel(item.actor_label),
+        })));
+      } else if (a.error) {
+        setActivity([]);
+      }
       const errors = [sv.error, a.error].filter(Boolean);
+      if (sv.error) console.error("Daftar layanan integrasi gagal dimuat:", sv.error);
+      if (a.error) console.error("Riwayat aktivitas gagal dimuat:", a.error);
       if (errors.length) notify(`Sebagian data belum dapat dimuat. Pastikan tabel tersedia dan akses sesuai. ${errors[0]!.message}`);
     } catch (error) {
+      console.error("Data pengaturan gagal dimuat:", error);
       notify(error instanceof Error ? `Data pengaturan gagal dimuat: ${error.message}` : "Data pengaturan gagal dimuat.");
     } finally {
       setBusy(false);

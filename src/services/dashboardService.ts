@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { normalizeActivityActorLabel } from "./activityLogService";
 
 export type DashboardAccount = {
   id: string;
@@ -147,23 +148,21 @@ export async function loadDashboardFeed(account: DashboardAccount): Promise<Dash
     notifications.push({ id, title, body, module, page, createdAt, unread });
   }
 
-  const activityTask = isSchoolManager || account.role === "staff_tata_usaha"
-    ? collectRows(
-        "Log aktivitas",
-        supabase.from("app_activity_logs")
-          .select("id,actor_label,action,module_key,details,created_at")
-          .order("created_at", { ascending: false })
-          .limit(6)
-          .abortSignal(requestController.signal),
-        (rows) => rows.forEach((row, index) => activities.push({
-          id: fieldText(row, "id", `activity-${index}`),
-          title: `${fieldText(row, "action", "Aktivitas")} · ${fieldText(row, "module_key", "Modul")}`,
-          detail: `${fieldText(row, "actor_label", "Pengguna")}${fieldText(row, "details") ? ` — ${fieldText(row, "details")}` : ""}`,
-          module: fieldText(row, "module_key", "Sistem"),
-          createdAt: fieldDate(row, "created_at"),
-        })),
-      )
-    : Promise.resolve();
+  const activityTask = collectRows(
+    "Log aktivitas",
+    supabase.from("app_activity_logs")
+      .select("id,actor_id,actor_label,action,module_key,details,created_at")
+      .order("created_at", { ascending: false })
+      .limit(6)
+      .abortSignal(requestController.signal),
+    (rows) => rows.forEach((row, index) => activities.push({
+      id: fieldText(row, "id", `activity-${index}`),
+      title: `${fieldText(row, "action", "Aktivitas")} · ${fieldText(row, "module_key", "Modul")}`,
+      detail: `${normalizeActivityActorLabel(fieldText(row, "actor_label", "Pengguna"))}${fieldText(row, "details") ? ` — ${fieldText(row, "details")}` : ""}`,
+      module: fieldText(row, "module_key", "Sistem"),
+      createdAt: fieldDate(row, "created_at"),
+    })),
+  );
 
   await collectRows(
     "Notifikasi sekolah",

@@ -57,6 +57,7 @@ import "./index.css";
 import {
   createManagedUser as createManagedUserAccount,
   getManagedUsers,
+  syncTeacherManagedAccount,
 } from "./lib/manageUsers";
 import type { ManagedUser } from "./lib/manageUsers";
 import { LETTER_IN_PROGRESS_STATUSES } from "./lib/letterMetrics";
@@ -464,6 +465,36 @@ type StudentAccountSourceRow = {
   class: { name: string | null } | { name: string | null }[] | null;
 };
 
+type TeacherAccountGeneratorStatus =
+  | "ready"
+  | "link"
+  | "existing"
+  | "duplicate"
+  | "invalid"
+  | "creating"
+  | "created"
+  | "failed";
+
+type TeacherAccountGeneratorRow = {
+  id: string;
+  profileId: string | null;
+  nip: string;
+  fullName: string;
+  employmentStatus: string;
+  staffCategory: string;
+  primaryRole: string;
+  additionalRoles: string[];
+  role: string;
+  hasAccount: boolean;
+  status: TeacherAccountGeneratorStatus;
+  message: string;
+};
+
+type TeacherAccountSourceRow = Pick<
+  TeacherAccountGeneratorRow,
+  "id" | "profileId" | "nip" | "fullName" | "employmentStatus" | "staffCategory" | "primaryRole" | "additionalRoles"
+>;
+
 type ManagedUserDirectoryEntry = ManagedUser & {
   employmentStatus: string | null;
   className: string | null;
@@ -503,6 +534,84 @@ function getManagedUserGroup(user: ManagedUserDirectoryEntry): ManagedUserGroup 
   const hasNonTeacherPosition = /\b(kepala sekolah|kepala tata usaha|kepala tu|operator|staff? tata usaha|bendahara|tendik|pengelola)\b/i
     .test(user.employmentStatus ?? "");
   return isTeacherRole && !hasNonTeacherPosition ? "teachers" : "staff";
+}
+
+const normalizeAccountUsername = (username: string) =>
+  username.trim().toLocaleLowerCase("id-ID");
+
+const teacherRoleForGenerator = (primaryRole: string, staffCategory: string) => {
+  switch (primaryRole) {
+    case "Guru BK":
+    case "Guru BK / Konselor":
+      return "guru_bk";
+    case "Kepala Sekolah":
+      return "kepala_sekolah";
+    case "Kepala Tata Usaha":
+      return "kepala_tata_usaha";
+    case "Staff Tata Usaha":
+      return "staff_tata_usaha";
+    case "Bendahara Pengeluaran":
+    case "Bendahara":
+      return "bendahara";
+    case "Operator Sekolah":
+      return "operator";
+    case "Tendik Lainnya":
+    case "Tenaga Kependidikan (Tendik)":
+      return "tendik";
+    default:
+      return staffCategory === "Tenaga Kependidikan" ? "tendik" : "guru";
+  }
+};
+
+const academicTitles: Record<string, string> = {
+  "s.pd.": "S.Pd.",
+  "m.pd.": "M.Pd.",
+  "s.pdi.": "S.PdI.",
+  "m.pdi.": "M.PdI.",
+  "s.pd.i.": "S.Pd.I.",
+  "m.pd.i.": "M.Pd.I.",
+  "s.psi.": "S.Psi.",
+  "s.ag.": "S.Ag.",
+  "s.kom.": "S.Kom.",
+  "s.si.": "S.Si.",
+  "s.sos.": "S.Sos.",
+  "s.e.": "S.E.",
+  "s.h.": "S.H.",
+  "s.t.": "S.T.",
+  "s.or.": "S.Or.",
+  "s.sn.": "S.Sn.",
+  "m.si.": "M.Si.",
+  "m.kom.": "M.Kom.",
+  "m.m.": "M.M.",
+  "dr.": "Dr.",
+  "drs.": "Drs.",
+  "dra.": "Dra.",
+  "h.": "H.",
+  "hj.": "Hj.",
+};
+
+function formatDashboardName(value: string | null | undefined, role: string | undefined) {
+  const rawName = value?.trim() ?? "";
+  if (role === "super_admin" && (!rawName || rawName.includes("@"))) return "Administrator";
+  if (!rawName || rawName.includes("@")) return role === "super_admin" ? "Administrator" : "Pengguna";
+
+  const titleCaseName = (name: string) => name
+    .toLocaleLowerCase("id-ID")
+    .split(/(\s+|-|')/)
+    .map((part) => {
+      if (!part || /^\s+$/.test(part) || part === "-" || part === "'") return part;
+      const [first, ...rest] = Array.from(part);
+      return first ? `${first.toLocaleUpperCase("id-ID")}${rest.join("")}` : "";
+    })
+    .join("");
+
+  const parts = rawName.split(",");
+  const name = titleCaseName(parts.shift() ?? "");
+  const titles = parts.map((part) => {
+    const title = part.trim();
+    return academicTitles[title.toLocaleLowerCase("id-ID")] ?? titleCaseName(title);
+  });
+  return [name, ...titles].filter(Boolean).join(", ");
 }
 
 const roleAccess: Record<string, string[]> = {
@@ -698,18 +807,10 @@ function AppContent() {
     refreshSchoolContext,
     contextError,
   } = useSchoolContext();
-  const dashboardUserName = (currentUser?.full_name || currentUser?.username || "Pengguna")
-    .trim()
-    .toLocaleLowerCase("id-ID")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => {
-      const [firstCharacter, ...remainingCharacters] = Array.from(word);
-      return firstCharacter
-        ? `${firstCharacter.toLocaleUpperCase("id-ID")}${remainingCharacters.join("")}`
-        : "";
-    })
-    .join(" ");
+  const dashboardUserName = formatDashboardName(
+    currentUser?.full_name || currentUser?.username,
+    currentUser?.role,
+  );
   const currentUserRef = useRef<CachedSessionUser | null>(currentUser);
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -780,6 +881,16 @@ function AppContent() {
   const [studentGeneratorCreating, setStudentGeneratorCreating] = useState(false);
   const [studentGeneratorError, setStudentGeneratorError] = useState("");
   const [studentGeneratorMessage, setStudentGeneratorMessage] = useState("");
+  const [showTeacherAccountGenerator, setShowTeacherAccountGenerator] = useState(false);
+  const [teacherGeneratorRows, setTeacherGeneratorRows] = useState<TeacherAccountGeneratorRow[]>([]);
+  const [teacherGeneratorSelectedIds, setTeacherGeneratorSelectedIds] = useState<string[]>([]);
+  const [teacherGeneratorSearch, setTeacherGeneratorSearch] = useState("");
+  const [teacherGeneratorCategory, setTeacherGeneratorCategory] = useState("all");
+  const [teacherGeneratorUncreatedOnly, setTeacherGeneratorUncreatedOnly] = useState(false);
+  const [teacherGeneratorLoading, setTeacherGeneratorLoading] = useState(false);
+  const [teacherGeneratorCreating, setTeacherGeneratorCreating] = useState(false);
+  const [teacherGeneratorError, setTeacherGeneratorError] = useState("");
+  const [teacherGeneratorMessage, setTeacherGeneratorMessage] = useState("");
   const [userDirectoryMetadataWarning, setUserDirectoryMetadataWarning] = useState("");
   const [createUserError, setCreateUserError] = useState("");
   const [createUserMessage, setCreateUserMessage] = useState("");
@@ -868,11 +979,21 @@ useEffect(() => {
     promise: null,
   };
   dashboardFeedRefreshState.current.set(account.id, requestState);
-  const refreshFeed = async () => {
+  const refreshFeed = async (force = false) => {
     if (!active) return;
+    if (force && requestState.promise) {
+      const activeRequest = requestState.promise;
+      try {
+        await activeRequest;
+      } catch (error) {
+        console.error("Pemuatan dashboard sebelumnya gagal sebelum penyegaran real-time:", error);
+      }
+      if (!active) return;
+      if (requestState.promise === activeRequest) requestState.promise = null;
+    }
     let feedPromise = requestState.promise;
     if (!feedPromise) {
-      if (Date.now() - requestState.lastRequestedAt < 90_000) return;
+      if (!force && Date.now() - requestState.lastRequestedAt < 90_000) return;
       requestState.lastRequestedAt = Date.now();
       feedPromise = loadDashboardFeed(account);
       requestState.promise = feedPromise;
@@ -900,13 +1021,12 @@ useEffect(() => {
   };
 
   void refreshFeed();
-  if (account.role === "siswa") {
-    return () => {
-      active = false;
-    };
-  }
 
-  const realtimeTables = new Set<string>(["school_notifications", "school_announcements"]);
+  const realtimeTables = new Set<string>([
+    "school_notifications",
+    "school_announcements",
+    "app_activity_logs",
+  ]);
   if (account.role === "guru" && account.teacher_id) {
     ["academic_records", "attendance_qr_records", "letter_requests"]
       .forEach((table) => realtimeTables.add(table));
@@ -915,7 +1035,7 @@ useEffect(() => {
       .forEach((table) => realtimeTables.add(table));
   }
   if (["super_admin", "kepala_sekolah", "operator", "kepala_tata_usaha"].includes(account.role)) {
-    ["letter_requests", "finance_transactions", "inv_issues", "app_activity_logs"]
+    ["letter_requests", "finance_transactions", "inv_issues"]
       .forEach((table) => realtimeTables.add(table));
   }
   let channel = supabase.channel(`dashboard-notifications-${account.id}`);
@@ -925,7 +1045,7 @@ useEffect(() => {
       { event: "*", schema: "public", table },
       () => {
         if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
-        realtimeRefreshTimer = window.setTimeout(() => void refreshFeed(), 1000);
+        realtimeRefreshTimer = window.setTimeout(() => void refreshFeed(true), 1000);
       },
     );
   });
@@ -1132,6 +1252,265 @@ const loadStudentAccountGenerator = async () => {
   }
 };
 
+const loadTeacherAccountGenerator = async () => {
+  if (currentUser?.role !== "super_admin") return;
+  setTeacherGeneratorLoading(true);
+  setTeacherGeneratorError("");
+  setTeacherGeneratorMessage("");
+  try {
+    const [users, teachers] = await Promise.all([
+      getManagedUsers(),
+      (async () => {
+        const rows: TeacherAccountSourceRow[] = [];
+        const pageSize = 1000;
+        for (let offset = 0; ; offset += pageSize) {
+          const { data, error } = await supabase.from("teachers")
+            .select("id,profile_id,nip,full_name,employment_status,staff_category,primary_role,additional_roles")
+            .order("full_name")
+            .order("id")
+            .range(offset, offset + pageSize - 1);
+          if (error) throw error;
+          const page = (data ?? []).map((teacher) => ({
+            id: teacher.id,
+            profileId: teacher.profile_id,
+            nip: teacher.nip?.trim() ?? "",
+            fullName: teacher.full_name?.trim() ?? "",
+            employmentStatus: teacher.employment_status?.trim() ?? "",
+            staffCategory: teacher.staff_category?.trim() ?? "",
+            primaryRole: teacher.primary_role?.trim() || teacher.employment_status?.trim() || "",
+            additionalRoles: Array.isArray(teacher.additional_roles) ? teacher.additional_roles : [],
+          }));
+          rows.push(...page);
+          if (page.length < pageSize) break;
+        }
+        return rows;
+      })(),
+    ]);
+
+    const usernameCounts = new Map<string, number>();
+    teachers.forEach((teacher) => {
+      const username = normalizeAccountUsername(teacher.nip);
+      if (username) usernameCounts.set(username, (usernameCounts.get(username) ?? 0) + 1);
+    });
+    const usersByUsername = new Map(
+      users.map((user) => [normalizeAccountUsername(user.username), user]),
+    );
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    const rows = teachers.map((teacher): TeacherAccountGeneratorRow => {
+      const username = normalizeAccountUsername(teacher.nip);
+      const profileAccount = teacher.profileId ? usersById.get(teacher.profileId) : undefined;
+      const usernameAccount = username ? usersByUsername.get(username) : undefined;
+      const account = profileAccount ?? usernameAccount;
+      const role = teacherRoleForGenerator(teacher.primaryRole, teacher.staffCategory);
+      const linked = Boolean(teacher.profileId && profileAccount?.id === teacher.profileId);
+      const row: TeacherAccountGeneratorRow = {
+        ...teacher,
+        role,
+        hasAccount: Boolean(account),
+        status: "ready",
+        message: "Siap dibuat",
+      };
+
+      if (!/^\d{6,}$/.test(teacher.nip)) {
+        row.status = "invalid";
+        row.message = "NIP harus berisi minimal 6 angka";
+      } else if (teacher.fullName.length < 2 || teacher.fullName.length > 150) {
+        row.status = "invalid";
+        row.message = "Nama harus terdiri dari 2–150 karakter";
+      } else if ((usernameCounts.get(username) ?? 0) > 1) {
+        row.status = "duplicate";
+        row.message = "NIP muncul lebih dari sekali di Data Induk";
+      } else if (
+        profileAccount
+        && usernameAccount
+        && profileAccount.id !== usernameAccount.id
+      ) {
+        row.status = "invalid";
+        row.message = usernameAccount.role === "siswa"
+          ? "NIP sudah digunakan akun siswa"
+          : usernameAccount.role === "super_admin"
+            ? "NIP sudah digunakan akun Super Admin"
+            : "NIP sudah digunakan akun lain selain profil tertaut";
+      } else if (account?.role === "siswa") {
+        row.status = "invalid";
+        row.message = "NIP sudah digunakan akun siswa";
+      } else if (account?.role === "super_admin") {
+        row.status = "invalid";
+        row.message = "Akun Super Admin tidak dapat ditautkan";
+      } else if (teacher.profileId && account && teacher.profileId !== account.id) {
+        row.status = "invalid";
+        row.message = "Data Induk sudah tertaut ke akun lain";
+      } else if (teacher.profileId && !account) {
+        row.status = "invalid";
+        row.message = "Profil tertaut tidak ditemukan di daftar pengguna";
+      } else if (linked) {
+        row.status = "existing";
+        row.message = "Akun sudah tertaut";
+      } else if (account) {
+        row.status = "link";
+        row.message = "Akun dengan NIP ini akan ditautkan";
+      }
+      return row;
+    });
+
+    setManagedUsers(await attachManagedUserDirectoryMetadata(users));
+    setUsersLoaded(true);
+    setUsersError("");
+    setTeacherGeneratorRows(rows);
+    setTeacherGeneratorSelectedIds([]);
+  } catch (error) {
+    setTeacherGeneratorError(
+      error instanceof Error ? error.message : "Data guru/tendik atau akun gagal dimuat.",
+    );
+  } finally {
+    setTeacherGeneratorLoading(false);
+  }
+};
+
+const createTeacherAccountsFromDataInduk = async () => {
+  if (currentUser?.role !== "super_admin" || teacherGeneratorCreating) return;
+  const selectedRows = teacherGeneratorRows.filter((row) =>
+    ["ready", "link"].includes(row.status) && teacherGeneratorSelectedIds.includes(row.id),
+  );
+  if (!selectedRows.length) return;
+  if (!window.confirm(
+    `Proses ${selectedRows.length} akun guru/tendik yang dipilih? Akun baru memakai NIP sebagai username dan password awal.`,
+  )) return;
+
+  setTeacherGeneratorCreating(true);
+  setTeacherGeneratorError("");
+  setTeacherGeneratorMessage("");
+  const completedIds: string[] = [];
+  let createdCount = 0;
+  let linkedCount = 0;
+  let syncWarningCount = 0;
+  try {
+    const latestUsers = await getManagedUsers();
+    const usersByUsername = new Map(
+      latestUsers.map((user) => [normalizeAccountUsername(user.username), user]),
+    );
+    const usersById = new Map(latestUsers.map((user) => [user.id, user]));
+    setManagedUsers(await attachManagedUserDirectoryMetadata(latestUsers));
+    setUsersLoaded(true);
+
+    for (let index = 0; index < selectedRows.length; index += 1) {
+      const row = selectedRows[index];
+      setTeacherGeneratorRows((current) => current.map((item) => item.id === row.id
+        ? { ...item, status: "creating", message: "Membuat atau menautkan akun..." }
+        : item));
+
+      try {
+        if (!/^\d{6,}$/.test(row.nip)) {
+          throw new Error("NIP harus berisi minimal 6 angka.");
+        }
+        const profileAccount = row.profileId ? usersById.get(row.profileId) : undefined;
+        const usernameAccount = usersByUsername.get(normalizeAccountUsername(row.nip));
+        if (
+          profileAccount
+          && usernameAccount
+          && profileAccount.id !== usernameAccount.id
+        ) {
+          if (usernameAccount.role === "siswa") {
+            throw new Error("NIP sudah digunakan akun siswa; penautan dibatalkan.");
+          }
+          if (usernameAccount.role === "super_admin") {
+            throw new Error("NIP sudah digunakan akun Super Admin; penautan dibatalkan.");
+          }
+          throw new Error("NIP sudah digunakan akun lain selain profil tertaut.");
+        }
+        let account: ManagedUser | undefined = profileAccount ?? usernameAccount;
+        if (account?.role === "siswa") {
+          throw new Error("NIP sudah digunakan akun siswa; penautan dibatalkan.");
+        }
+        if (account?.role === "super_admin") {
+          throw new Error("Akun Super Admin dilindungi dan tidak dapat ditautkan.");
+        }
+        if (row.profileId && account && row.profileId !== account.id) {
+          throw new Error("Data Induk sudah tertaut ke akun lain.");
+        }
+        if (row.profileId && !account) {
+          throw new Error("Profil tertaut tidak ditemukan di daftar pengguna.");
+        }
+
+        let wasCreated = false;
+        if (!account) {
+          const createdUser = await createManagedUserAccount({
+            username: row.nip,
+            full_name: row.fullName,
+            role: row.role,
+            password: row.nip,
+          });
+          account = { ...createdUser, created_at: new Date().toISOString() };
+          wasCreated = true;
+          latestUsers.push(account);
+          usersById.set(account.id, account);
+          usersByUsername.set(normalizeAccountUsername(account.username), account);
+        }
+
+        const { data: savedTeacher, error: linkError } = await supabase.from("teachers")
+          .update({ profile_id: account.id })
+          .eq("id", row.id)
+          .select("id")
+          .single();
+        if (linkError) throw new Error(`Tautan Data Induk gagal: ${linkError.message}`);
+        if (!savedTeacher) throw new Error("Data guru/tendik tidak ditemukan saat menyimpan tautan.");
+
+        let syncWarning = "";
+        try {
+          await syncTeacherManagedAccount(row.id);
+        } catch (error) {
+          syncWarning = error instanceof Error ? error.message : String(error);
+          syncWarningCount += 1;
+        }
+        completedIds.push(row.id);
+        if (wasCreated) createdCount += 1;
+        else linkedCount += 1;
+        setTeacherGeneratorRows((current) => current.map((item) => item.id === row.id
+          ? {
+              ...item,
+              profileId: account.id,
+              hasAccount: true,
+              status: "created",
+              role: syncWarning ? item.role : account.role,
+              message: syncWarning
+                ? `Akun tertaut, tetapi sinkronisasi peran gagal: ${syncWarning}`
+                : wasCreated ? "Akun dibuat, ditautkan, dan disinkronkan" : "Akun berhasil ditautkan dan disinkronkan",
+            }
+          : item));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Akun gagal dibuat atau ditautkan.";
+        setTeacherGeneratorRows((current) => current.map((item) => item.id === row.id
+          ? { ...item, status: "failed", message }
+          : item));
+      }
+      if (index < selectedRows.length - 1) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+      }
+    }
+
+    setTeacherGeneratorSelectedIds((current) => current.filter((id) => !completedIds.includes(id)));
+    const failedCount = selectedRows.length - completedIds.length;
+    setTeacherGeneratorMessage(
+      `${createdCount} akun dibuat, ${linkedCount} akun ditautkan, ${failedCount} gagal.`
+      + (syncWarningCount ? ` Sinkronisasi peran gagal pada ${syncWarningCount} akun.` : ""),
+    );
+    if (completedIds.length) {
+      const auditWarning = await auditUserChange(
+        "Akun guru/tendik disinkronkan dari Data Induk",
+        `${createdCount} akun dibuat dan ${linkedCount} akun yang sudah ada ditautkan.`,
+      );
+      if (auditWarning) setTeacherGeneratorMessage((current) => `${current} ${auditWarning}`);
+    }
+    await loadManagedUsers();
+  } catch (error) {
+    setTeacherGeneratorError(
+      error instanceof Error ? error.message : "Daftar akun terbaru gagal dimuat.",
+    );
+  } finally {
+    setTeacherGeneratorCreating(false);
+  }
+};
+
 const createStudentAccountsFromDataInduk = async () => {
   if (currentUser?.role !== "super_admin" || studentGeneratorCreating) return;
   const selectedRows = studentGeneratorRows.filter(
@@ -1293,6 +1672,7 @@ const auditUserChange = async (action: string, details: string) => {
     await logAppActivity({
       actorId: currentUser?.id,
       actorLabel: currentUser?.full_name || currentUser?.username,
+      actorRole: currentUser?.role,
       action,
       moduleKey: "Pengguna",
       details,
@@ -2358,6 +2738,31 @@ const selectedReadyStudentCount = studentGeneratorRows.filter(
   (row) => row.status === "ready" && studentGeneratorSelectedIds.includes(row.id),
 ).length;
 
+const filteredTeacherGeneratorRows = useMemo(() => {
+  const searchTerm = teacherGeneratorSearch.trim().toLocaleLowerCase("id-ID");
+  return teacherGeneratorRows.filter((row) => {
+    const matchesSearch = !searchTerm
+      || `${row.nip} ${row.fullName} ${row.employmentStatus} ${row.primaryRole} ${row.additionalRoles.join(" ")}`
+        .toLocaleLowerCase("id-ID").includes(searchTerm);
+    const matchesCategory = teacherGeneratorCategory === "all"
+      || (teacherGeneratorCategory === "guru"
+        ? row.staffCategory === "Guru"
+        : row.staffCategory !== "Guru");
+    const matchesUncreated = !teacherGeneratorUncreatedOnly
+      || (row.status !== "existing" && row.status !== "created");
+    return matchesSearch && matchesCategory && matchesUncreated;
+  });
+}, [
+  teacherGeneratorCategory,
+  teacherGeneratorRows,
+  teacherGeneratorSearch,
+  teacherGeneratorUncreatedOnly,
+]);
+
+const selectedReadyTeacherCount = teacherGeneratorRows.filter((row) =>
+  ["ready", "link"].includes(row.status) && teacherGeneratorSelectedIds.includes(row.id),
+).length;
+
 const managedUserSubtitle = (user: ManagedUserDirectoryEntry) => {
   if (user.role === "siswa") {
     return user.className ? `Siswa · Kelas ${user.className}` : "Siswa · Kelas belum terhubung";
@@ -2893,7 +3298,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
   Status Supabase: {supabaseStatus}
 </p>
                     <DashboardDateTime />
-                    <h1>Selamat datang {dashboardUserName} di<br /><span>Super App SMAN 7 Maros</span></h1>
+                    <h1>Selamat datang {dashboardUserName} di<br /><span>Super App SMAN 7 Maros!</span></h1>
                     <p>Satu pintu untuk mengelola layanan dan aktivitas sekolah dengan lebih mudah, cepat, dan terintegrasi.</p>
                     <button className="welcome-button" onClick={() => document.getElementById("app-directory")?.scrollIntoView({ behavior: "smooth" })}>Jelajahi aplikasi <ArrowRight size={17} /></button>
                   </div>
@@ -3189,6 +3594,21 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
           {showStudentAccountGenerator ? "Tutup Generator Siswa" : "Generate Akun dari Data Induk"}
         </button>
       )}
+      {currentUser?.role === "super_admin" && (
+        <button
+          type="button"
+          className="user-button user-button-primary user-button-generator"
+          onClick={() => {
+            const nextOpen = !showTeacherAccountGenerator;
+            setShowTeacherAccountGenerator(nextOpen);
+            if (nextOpen) void loadTeacherAccountGenerator();
+          }}
+          disabled={teacherGeneratorCreating}
+        >
+          <UserRoundPlus size={17} />
+          {showTeacherAccountGenerator ? "Tutup Generator Guru / Tendik" : "Generate Akun Guru / Tendik"}
+        </button>
+      )}
       <span className="user-actions-spacer" />
       {usersLoaded && <span className="user-sync-indicator"><span /> Data tersinkron dari server</span>}
     </div>
@@ -3362,6 +3782,178 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
         )}
         {!studentGeneratorLoading && !studentGeneratorError && studentGeneratorRows.length === 0 && (
           <p className="student-import-guidance">Belum ada data siswa pada Data Induk.</p>
+        )}
+      </section>
+    )}
+
+    {showTeacherAccountGenerator && currentUser?.role === "super_admin" && (
+      <section className="content-card user-list-card student-account-import-card">
+        <div className="card-heading">
+          <div>
+            <h3>Generate Akun Guru / Tendik</h3>
+            <p>Akun baru menggunakan NIP sebagai username dan password awal. Akun dengan NIP yang sudah terdaftar akan ditautkan ke Data Induk.</p>
+          </div>
+          <span className="heading-icon"><UserRoundPlus size={19} /></span>
+        </div>
+
+        <div className="student-import-actions">
+          <button
+            type="button"
+            className="user-action-button"
+            onClick={() => void loadTeacherAccountGenerator()}
+            disabled={teacherGeneratorLoading || teacherGeneratorCreating}
+          >
+            <RefreshCw size={16} className={teacherGeneratorLoading ? "user-spin" : ""} />
+            {teacherGeneratorLoading ? "Memuat Data Induk..." : "Muat ulang Data Induk"}
+          </button>
+          {teacherGeneratorLoading && <span className="student-import-filename">Memeriksa NIP dan akun guru/tendik...</span>}
+        </div>
+
+        {teacherGeneratorError && (
+          <div className="module-notice" role="alert">
+            <CircleAlert size={18} /><span>{teacherGeneratorError}</span>
+          </div>
+        )}
+        {teacherGeneratorMessage && (
+          <p className="student-import-result" role="status">{teacherGeneratorMessage}</p>
+        )}
+
+        {teacherGeneratorRows.length > 0 && (
+          <>
+            <p className="student-import-count">
+              {teacherGeneratorRows.filter((row) => row.status === "ready" || row.status === "link").length} siap dibuat/ditautkan ·{" "}
+              {teacherGeneratorRows.filter((row) => row.status === "existing").length} sudah tertaut ·{" "}
+              {teacherGeneratorRows.filter((row) => ["invalid", "duplicate", "failed"].includes(row.status)).length} perlu diperiksa
+            </p>
+
+            <div className="user-table-toolbar">
+              <label className="user-search-field">
+                <Search size={16} />
+                <input
+                  type="search"
+                  value={teacherGeneratorSearch}
+                  onChange={(event) => setTeacherGeneratorSearch(event.target.value)}
+                  placeholder="Cari nama, NIP, atau jabatan..."
+                  aria-label="Cari guru atau tendik di pratinjau akun"
+                />
+              </label>
+              <label className="user-filter-field">
+                <select
+                  value={teacherGeneratorCategory}
+                  onChange={(event) => setTeacherGeneratorCategory(event.target.value)}
+                  aria-label="Filter kategori guru atau tendik"
+                >
+                  <option value="all">Semua</option>
+                  <option value="guru">Guru</option>
+                  <option value="tendik">Tendik</option>
+                </select>
+              </label>
+              <label className="user-filter-field">
+                <input
+                  type="checkbox"
+                  checked={teacherGeneratorUncreatedOnly}
+                  onChange={(event) => setTeacherGeneratorUncreatedOnly(event.target.checked)}
+                />
+                Belum punya akun
+              </label>
+            </div>
+
+            <div className="user-table-scroll">
+              <table className="student-import-table">
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        type="checkbox"
+                        aria-label="Pilih semua guru/tendik siap diproses yang terlihat"
+                        checked={
+                          filteredTeacherGeneratorRows.some((row) => row.status === "ready" || row.status === "link")
+                          && filteredTeacherGeneratorRows
+                            .filter((row) => row.status === "ready" || row.status === "link")
+                            .every((row) => teacherGeneratorSelectedIds.includes(row.id))
+                        }
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
+                          const visibleReadyIds = filteredTeacherGeneratorRows
+                            .filter((row) => row.status === "ready" || row.status === "link")
+                            .map((row) => row.id);
+                          setTeacherGeneratorSelectedIds((current) => {
+                            const selected = new Set(current);
+                            visibleReadyIds.forEach((id) => {
+                              if (checked) selected.add(id);
+                              else selected.delete(id);
+                            });
+                            return [...selected];
+                          });
+                        }}
+                        disabled={teacherGeneratorCreating || teacherGeneratorLoading}
+                      />
+                    </th>
+                    <th>NIP</th>
+                    <th>Nama Lengkap</th>
+                    <th>Kategori / Jabatan</th>
+                    <th>Role Akun</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTeacherGeneratorRows.length === 0 ? (
+                    <tr><td colSpan={6}>Tidak ada guru/tendik yang cocok dengan filter.</td></tr>
+                  ) : filteredTeacherGeneratorRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Pilih ${row.fullName}`}
+                          checked={["ready", "link"].includes(row.status) && teacherGeneratorSelectedIds.includes(row.id)}
+                          disabled={!["ready", "link"].includes(row.status) || teacherGeneratorCreating || teacherGeneratorLoading}
+                          onChange={(event) => {
+                            const checked = event.currentTarget.checked;
+                            setTeacherGeneratorSelectedIds((current) => checked
+                              ? [...new Set([...current, row.id])]
+                              : current.filter((item) => item !== row.id));
+                          }}
+                        />
+                      </td>
+                      <td>{row.nip || "—"}</td>
+                      <td>{row.fullName || "—"}</td>
+                      <td>{row.staffCategory || "Tenaga Kependidikan"} · {row.primaryRole || row.employmentStatus || "Jabatan tidak dicantumkan"}</td>
+                      <td>{roleLabels[row.role] ?? row.role}</td>
+                      <td>
+                        <span className={`student-import-status is-${row.status}`}>
+                          {row.status === "ready" ? "Siap dibuat"
+                            : row.status === "link" ? "Siap ditautkan"
+                              : row.status === "existing" ? "Sudah tertaut"
+                                : row.status === "duplicate" ? "Duplikat NIP"
+                                  : row.status === "invalid" ? "Perlu diperiksa"
+                                    : row.status === "creating" ? "Memproses..."
+                                      : row.status === "created" ? "Akun tersinkron"
+                                        : "Gagal diproses"}
+                        </span>
+                        {row.message && row.status !== "ready" && row.status !== "link" && (
+                          <small className="student-import-guidance">{row.message}</small>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <button
+              type="button"
+              className="primary-button student-import-create"
+              onClick={() => void createTeacherAccountsFromDataInduk()}
+              disabled={teacherGeneratorCreating || teacherGeneratorLoading || selectedReadyTeacherCount === 0}
+            >
+              {teacherGeneratorCreating
+                ? "Membuat/menautkan akun..."
+                : `Generate / Tautkan ${selectedReadyTeacherCount} Akun`}
+            </button>
+          </>
+        )}
+        {!teacherGeneratorLoading && !teacherGeneratorError && teacherGeneratorRows.length === 0 && (
+          <p className="student-import-guidance">Belum ada data guru/tendik pada Data Induk.</p>
         )}
       </section>
     )}
