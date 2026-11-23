@@ -153,6 +153,88 @@
   background: #f8faff;
 }
 
+.attendance-page .attendance-admin-arrival-broadcast {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid #d5eee5;
+  border-radius: 16px;
+  background: linear-gradient(125deg, #f1fbf7, #f8fbff);
+}
+
+.attendance-page .attendance-admin-arrival-broadcast > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.attendance-page .attendance-admin-arrival-broadcast > div:first-child strong {
+  color: #087f66;
+}
+
+.attendance-page .attendance-admin-arrival-broadcast > div:first-child small {
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.attendance-page .attendance-broadcast-create {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.attendance-page .attendance-broadcast-create label {
+  display: grid;
+  min-width: 180px;
+  gap: 6px;
+  color: #475569;
+  font-size: .82rem;
+  font-weight: 750;
+}
+
+.attendance-page .attendance-broadcast-create input {
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 1px solid #dce3eb;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.attendance-page .attendance-admin-arrival-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #b8e4d7;
+  border-radius: 13px;
+  background: #fff;
+  text-align: center;
+}
+
+.attendance-page .attendance-admin-arrival-card > strong {
+  color: #087f66;
+}
+
+.attendance-page .attendance-admin-arrival-card svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.attendance-page .attendance-admin-arrival-card code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #1d2b4a;
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 750;
+}
+
+.attendance-page .attendance-admin-arrival-card span {
+  color: #047857;
+  font-size: .78rem;
+  font-weight: 750;
+}
+
 .attendance-page .attendance-qr-manual-code > span {
   color: #64718c;
   font-size: .68rem;
@@ -526,6 +608,11 @@
   }
 
   .attendance-page .attendance-qr-manual {
+    flex-direction: column;
+  }
+
+  .attendance-page .attendance-broadcast-create {
+    align-items: stretch;
     flex-direction: column;
   }
 }

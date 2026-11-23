@@ -62,6 +62,11 @@ type StudentAttendanceQr = {
   token: string;
   expires_at: string;
 };
+type AdminBroadcastQr = {
+  session_id: string;
+  token: string;
+  expires_at: string;
+};
 type HomeroomWeeklyAttendanceRow = {
   class_id: string;
   class_name: string;
@@ -70,8 +75,11 @@ type HomeroomWeeklyAttendanceRow = {
   student_id: string;
   person_identifier: string;
   person_name: string;
+  gender: "L" | "P" | null;
   status: AttendanceRowStatus;
   note: string | null;
+  recorded_at: string | null;
+  is_effective_day: boolean;
 };
 const initialAttendanceSchedule: AttendanceScheduleSettings = {
   automation_enabled: false,
@@ -172,12 +180,12 @@ const attendancePageSize = 1000;
 const attendanceTimezone = "Asia/Makassar";
 const attendanceHistoryWindowMs = 6 * 24 * 60 * 60 * 1000;
 const studentQrPrefix = "SMAN7SISWA|";
-const defaultWeeklyReportTemplate = `<h1>Rekap Mingguan Kehadiran</h1>
+const defaultWeeklyReportTemplate = `<h1>REKAPITULASI KEHADIRAN MINGGUAN PESERTA DIDIK (ABSENSI DIGITAL)</h1>
 <p>Kelas: {{nama_kelas}}</p>
-<p>Wali kelas: {{wali_kelas}} · NIP: {{nip_wali_kelas}}</p>
+<p>Guru Pengampu / Wali Kelas: {{wali_kelas}}</p>
 <p>Periode: {{periode_minggu}}</p>
-{{tabel_kehadiran}}
-<p>Tanggal unduh: {{tanggal_unduh}}</p>`;
+{{kop_surat}}
+{{baris_siswa}}`;
 const statuses: {value: AttendanceStatus; label: string}[] = [
   {value:"hadir",label:"Hadir"}, {value:"sakit",label:"Sakit"},
   {value:"izin",label:"Izin"}, {value:"terlambat",label:"Terlambat"},
@@ -195,6 +203,13 @@ const today = () => {
   const day = parts.find((part) => part.type === "day")?.value;
   if (!year || !month || !day) throw new Error("Tanggal absensi sekolah tidak dapat ditentukan.");
   return `${year}-${month}-${day}`;
+};
+const mondayOfWeek = (date: string) => {
+  const [year, month, day] = date.split("-").map(Number);
+  const localDate = new Date(Date.UTC(year, month - 1, day));
+  const weekday = localDate.getUTCDay();
+  localDate.setUTCDate(localDate.getUTCDate() - ((weekday + 6) % 7));
+  return localDate.toISOString().slice(0, 10);
 };
 const statusLabel = (s: AttendanceStatus | "belum_tercatat") =>
   s === "pulang" ? "Pulang" : s === "belum_tercatat" ? "Belum tercatat" : statuses.find(x => x.value === s)?.label ?? s;
@@ -234,7 +249,14 @@ function sanitizeAttendanceTemplateHtml(value: string) {
     if (node.nodeType === Node.TEXT_NODE) return escapeAttendanceHtml(node.textContent ?? "");
     if (!(node instanceof Element)) return "";
     const tag = node.tagName.toLowerCase();
-    if (["script", "style", "iframe", "object", "embed", "form", "input", "button"].includes(tag)) return "";
+    if (tag === "style") {
+      const css = node.textContent ?? "";
+      if (css.length <= 20_000 && !/@import|url\s*\(|expression\s*\(|javascript:|<\/style/i.test(css)) {
+        return `<style>${css.replaceAll("<", "\\3c ")}</style>`;
+      }
+      return "";
+    }
+    if (["script", "iframe", "object", "embed", "form", "input", "button"].includes(tag)) return "";
     const children = [...node.childNodes].map(sanitizeNode).join("");
     if (!allowedTags.has(tag)) return children;
     const attributes: string[] = [];
@@ -260,6 +282,18 @@ function sanitizeAttendanceTemplateHtml(value: string) {
 const remainingTimeLabel = (expiresAt: string, now: number) => {
   const seconds = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
   return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
+};
+const formatWitaTime = (value: string) => new Intl.DateTimeFormat("id-ID", {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: attendanceTimezone,
+}).format(new Date(value));
+const weeklyStatusCode: Partial<Record<AttendanceRowStatus, "H" | "T" | "S" | "I" | "A">> = {
+  hadir: "H",
+  terlambat: "T",
+  sakit: "S",
+  izin: "I",
+  alpa: "A",
 };
 const isTeacherAttendanceAssignment = (
   value: unknown,
@@ -319,6 +353,18 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const [qrError, setQrError] = useState("");
   const [manualQrValue, setManualQrValue] = useState("");
   const [copiedQrToken, setCopiedQrToken] = useState("");
+  const [adminArrivalQr, setAdminArrivalQr] = useState<AdminBroadcastQr | null>(null);
+  const [adminDepartureQr, setAdminDepartureQr] = useState<AdminBroadcastQr | null>(null);
+  const [arrivalQrDuration, setArrivalQrDuration] = useState(30);
+  const [departureQrDuration, setDepartureQrDuration] = useState(30);
+  const [arrivalQrLoading, setArrivalQrLoading] = useState(false);
+  const [arrivalQrError, setArrivalQrError] = useState("");
+  const [arrivalQrNotice, setArrivalQrNotice] = useState("");
+  const [departureQrLoading, setDepartureQrLoading] = useState(false);
+  const [departureQrError, setDepartureQrError] = useState("");
+  const [departureQrNotice, setDepartureQrNotice] = useState("");
+  const [weeklyStartDate, setWeeklyStartDate] = useState(() => mondayOfWeek(today()));
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
   const [scheduleSettings, setScheduleSettings] = useState<AttendanceScheduleSettings>(initialAttendanceSchedule);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleSaving, setScheduleSaving] = useState(false);
@@ -626,6 +672,224 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     }
   }, []);
 
+  const loadAdminArrivalQr = useCallback(async () => {
+    if (!canManageAttendance && role !== "siswa") return false;
+    try {
+      const { data, error: resultError } = await supabase.rpc("get_active_attendance_arrival_broadcast");
+      if (resultError) throw resultError;
+      const value = Array.isArray(data) ? data[0] : data;
+      if (!value || typeof value !== "object" || typeof value.server_now !== "string") {
+        throw new Error("Respons waktu server QR Kedatangan tidak valid.");
+      }
+      const serverTimeOffset = Date.parse(value.server_now) - Date.now();
+      if (!Number.isFinite(serverTimeOffset)) throw new Error("Waktu server QR Kedatangan tidak valid.");
+      setServerClockOffsetMs(serverTimeOffset);
+      if (value.session_id === null) {
+        setAdminArrivalQr(null);
+        setArrivalQrError("");
+        return true;
+      }
+      if (typeof value !== "object"
+        || typeof value.session_id !== "string"
+        || typeof value.token !== "string"
+        || typeof value.expires_at !== "string") {
+        throw new Error("Respons QR kedatangan administrator tidak valid.");
+      }
+      setAdminArrivalQr({
+        session_id: value.session_id,
+        token: value.token,
+        expires_at: value.expires_at,
+      });
+      setArrivalQrError("");
+      return true;
+    } catch (loadError) {
+      setArrivalQrError(`QR Kedatangan Administrator gagal dimuat: ${errorMessage(loadError)}`);
+      return false;
+    }
+  }, [canManageAttendance, role]);
+
+  const loadAdminDepartureQr = useCallback(async () => {
+    if (!canManageAttendance && role !== "siswa") return false;
+    try {
+      const { data, error: resultError } = await supabase.rpc("get_active_attendance_departure_broadcast");
+      if (resultError) throw resultError;
+      const value = Array.isArray(data) ? data[0] : data;
+      if (!value || typeof value !== "object" || typeof value.server_now !== "string") {
+        throw new Error("Respons waktu server QR Kepulangan tidak valid.");
+      }
+      const serverTimeOffset = Date.parse(value.server_now) - Date.now();
+      if (!Number.isFinite(serverTimeOffset)) throw new Error("Waktu server QR Kepulangan tidak valid.");
+      setServerClockOffsetMs(serverTimeOffset);
+      if (value.session_id === null) {
+        setAdminDepartureQr(null);
+        setDepartureQrError("");
+        return true;
+      }
+      if (typeof value.session_id !== "string"
+        || typeof value.token !== "string"
+        || typeof value.expires_at !== "string") {
+        throw new Error("Respons QR Kepulangan administrator tidak valid.");
+      }
+      setAdminDepartureQr({
+        session_id: value.session_id,
+        token: value.token,
+        expires_at: value.expires_at,
+      });
+      setDepartureQrError("");
+      return true;
+    } catch (loadError) {
+      setDepartureQrError(`QR Kepulangan Administrator gagal dimuat: ${errorMessage(loadError)}`);
+      return false;
+    }
+  }, [canManageAttendance, role]);
+
+  useEffect(() => {
+    if (!canManageAttendance && role !== "siswa") return;
+    const initialTimer = window.setTimeout(() => {
+      void loadAdminArrivalQr();
+      void loadAdminDepartureQr();
+    }, 0);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadAdminArrivalQr();
+        void loadAdminDepartureQr();
+      }
+    }, 30_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [loadAdminArrivalQr, loadAdminDepartureQr, role, canManageAttendance]);
+
+  const createAdminArrivalQr = async () => {
+    if (!Number.isInteger(arrivalQrDuration) || arrivalQrDuration < 1 || arrivalQrDuration > 480) {
+      setArrivalQrError("Durasi QR harus 1–480 menit.");
+      return;
+    }
+    setArrivalQrLoading(true);
+    setArrivalQrError("");
+    setArrivalQrNotice("");
+    try {
+      const { data, error: createError } = await supabase.rpc("create_attendance_arrival_broadcast", {
+        p_duration_minutes: arrivalQrDuration,
+      });
+      if (createError) throw createError;
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created || typeof created.session_id !== "string"
+        || typeof created.token !== "string"
+        || typeof created.expires_at !== "string") {
+        throw new Error("Respons aktivasi QR Kedatangan tidak valid.");
+      }
+      if (await loadAdminArrivalQr()) {
+        setArrivalQrNotice("QR Kedatangan telah diaktifkan untuk akun siswa.");
+      } else {
+        setArrivalQrNotice("QR Kedatangan berhasil dibuat di server, tetapi tampilannya gagal dimuat. Muat ulang halaman untuk menampilkan QR.");
+      }
+    } catch (createError) {
+      setArrivalQrError(`QR Kedatangan gagal diaktifkan: ${errorMessage(createError)}`);
+    } finally {
+      setArrivalQrLoading(false);
+    }
+  };
+
+  const closeAdminArrivalQr = async () => {
+    if (!adminArrivalQr) return;
+    setArrivalQrLoading(true);
+    setArrivalQrError("");
+    setArrivalQrNotice("");
+    try {
+      const { error: closeError } = await supabase.rpc("close_attendance_arrival_broadcast", {
+        p_session_id: adminArrivalQr.session_id,
+      });
+      if (closeError) throw closeError;
+      setAdminArrivalQr(null);
+      setArrivalQrNotice("QR Kedatangan telah diakhiri.");
+    } catch (closeError) {
+      setArrivalQrError(`QR Kedatangan gagal diakhiri: ${errorMessage(closeError)}`);
+    } finally {
+      setArrivalQrLoading(false);
+    }
+  };
+
+  const createAdminDepartureQr = async () => {
+    if (!Number.isInteger(departureQrDuration) || departureQrDuration < 1 || departureQrDuration > 480) {
+      setDepartureQrError("Durasi QR harus 1–480 menit.");
+      return;
+    }
+    setDepartureQrLoading(true);
+    setDepartureQrError("");
+    setDepartureQrNotice("");
+    try {
+      const { data, error: createError } = await supabase.rpc("create_attendance_departure_broadcast", {
+        p_duration_minutes: departureQrDuration,
+      });
+      if (createError) throw createError;
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created || typeof created.session_id !== "string"
+        || typeof created.token !== "string"
+        || typeof created.expires_at !== "string") {
+        throw new Error("Respons aktivasi QR Kepulangan tidak valid.");
+      }
+      if (await loadAdminDepartureQr()) {
+        setDepartureQrNotice("QR Kepulangan telah diaktifkan untuk akun siswa.");
+      } else {
+        setDepartureQrNotice("QR Kepulangan berhasil dibuat di server, tetapi tampilannya gagal dimuat. Muat ulang halaman untuk menampilkan QR.");
+      }
+    } catch (createError) {
+      setDepartureQrError(`QR Kepulangan gagal diaktifkan: ${errorMessage(createError)}`);
+    } finally {
+      setDepartureQrLoading(false);
+    }
+  };
+
+  const closeAdminDepartureQr = async () => {
+    if (!adminDepartureQr) return;
+    setDepartureQrLoading(true);
+    setDepartureQrError("");
+    setDepartureQrNotice("");
+    try {
+      const { error: closeError } = await supabase.rpc("close_attendance_departure_broadcast", {
+        p_session_id: adminDepartureQr.session_id,
+      });
+      if (closeError) throw closeError;
+      setAdminDepartureQr(null);
+      setDepartureQrNotice("QR Kepulangan telah diakhiri.");
+    } catch (closeError) {
+      setDepartureQrError(`QR Kepulangan gagal diakhiri: ${errorMessage(closeError)}`);
+    } finally {
+      setDepartureQrLoading(false);
+    }
+  };
+
+  const copyText = async (
+    value: string,
+    copiedValue: string,
+    onError: (message: string) => void = setArrivalQrError,
+  ) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const input = document.createElement("textarea");
+        input.value = value;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        const copied = document.execCommand("copy");
+        input.remove();
+        if (!copied) throw new Error("Browser menolak penyalinan kode.");
+      }
+      setCopiedQrToken(copiedValue);
+      setQrError("");
+      setArrivalQrError("");
+      setDepartureQrError("");
+    } catch (copyError) {
+      onError(`Kode QR tidak dapat disalin: ${errorMessage(copyError)}. Pilih kode dan salin secara manual.`);
+    }
+  };
+
   useEffect(() => {
     if (!canManageAttendance) return;
     const timer = window.setTimeout(() => { void loadAttendanceSchedule(); }, 0);
@@ -670,11 +934,14 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
 
   useEffect(() => {
     const updateClock = () => {
-      const now = Date.now();
+      const now = Date.now() + serverClockOffsetMs;
       setClockNow(now);
       if (qrSession?.expires_at && Date.parse(qrSession.expires_at) <= now) {
         setQrSession(null);
         setQrError("Sesi QR berakhir. Buat sesi baru untuk melanjutkan.");
+      }
+      if (adminArrivalQr && Date.parse(adminArrivalQr.expires_at) <= now) {
+        setAdminArrivalQr(null);
       }
       setMyStudentQrs((current) => {
         const valid = current.filter((qr) => Date.parse(qr.expires_at) > now);
@@ -684,7 +951,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     updateClock();
     const timer = window.setInterval(updateClock, 1000);
     return () => window.clearInterval(timer);
-  }, [myStudentQrs.length, qrSession]);
+  }, [adminArrivalQr, myStudentQrs.length, qrSession, serverClockOffsetMs]);
 
   useEffect(() => {
     if (!isHomeroomTeacher || !currentUser) return;
@@ -694,7 +961,8 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       setHomeroomError("");
       try {
         const { data, error: homeroomErrorResult } = await supabase.rpc(
-          "get_my_homeroom_weekly_attendance",
+          "get_my_attendance_weekly_report",
+          { p_week_start: weeklyStartDate },
         );
         if (homeroomErrorResult) throw homeroomErrorResult;
         if (!Array.isArray(data)) {
@@ -710,8 +978,11 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           && typeof row.student_id === "string"
           && typeof row.person_identifier === "string"
           && typeof row.person_name === "string"
+          && (row.gender === null || row.gender === "L" || row.gender === "P")
           && (row.status === "hadir" || row.status === "terlambat" || row.status === "sakit" || row.status === "izin" || row.status === "alpa" || row.status === "pulang" || row.status === "belum_tercatat")
-          && (row.note === null || typeof row.note === "string"),
+          && (row.note === null || typeof row.note === "string")
+          && (row.recorded_at === null || typeof row.recorded_at === "string")
+          && typeof row.is_effective_day === "boolean",
         );
         if (validRows.length !== data.length) {
           throw new Error("Sebagian data rekap wali kelas memiliki format yang tidak valid.");
@@ -726,7 +997,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
 
     void loadHomeroomAttendance();
     return () => { active = false; };
-  }, [currentUser, isHomeroomTeacher]);
+  }, [currentUser, isHomeroomTeacher, weeklyStartDate]);
 
   useEffect(() => {
     if (!canManageAttendance && !isHomeroomTeacher) return;
@@ -1029,11 +1300,13 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     setMessage("");
     setSaving(true);
     try {
+      const isAdminArrivalToken = role === "siswa" && adminArrivalQr?.token === token;
+      const isAdminDepartureToken = role === "siswa" && adminDepartureQr?.token === token;
       const { data, error: submitError } = await supabase
-      .rpc("submit_attendance_qr", {
+      .rpc(isAdminArrivalToken ? "submit_attendance_arrival_broadcast" : "submit_attendance_qr", {
         p_token: token,
-        p_status: qrAttendanceStatus,
-        p_note: qrAttendanceNote.trim() || null,
+        p_status: isAdminArrivalToken || isAdminDepartureToken ? "hadir" : qrAttendanceStatus,
+        p_note: isAdminArrivalToken || isAdminDepartureToken ? null : qrAttendanceNote.trim() || null,
       })
         .maybeSingle();
       if (submitError) throw submitError;
@@ -1066,7 +1339,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     } finally {
       setSaving(false);
     }
-  }, [identity, loadRows, notifyAttendanceQrSubmission, qrAttendanceNote, qrAttendanceStatus]);
+  }, [adminArrivalQr, adminDepartureQr, identity, loadRows, notifyAttendanceQrSubmission, qrAttendanceNote, qrAttendanceStatus, role]);
 
   const stopCamera = useCallback(() => {
     if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
@@ -1347,6 +1620,92 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     }
     return [...reports.entries()].map(([classId, report]) => ({ classId, ...report }));
   }, [homeroomRows]);
+  const weeklyDays = useMemo(() => Array.from({ length: 5 }, (_, index) => {
+    const [year, monthValue, dayValue] = weeklyStartDate.split("-").map(Number);
+    const dateValue = new Date(Date.UTC(year, monthValue - 1, dayValue + index));
+    return dateValue.toISOString().slice(0, 10);
+  }), [weeklyStartDate]);
+  const weeklyReportData = useMemo(() => homeroomReports.map((report) => {
+    const students = new Map<string, {
+      studentId: string;
+      identifier: string;
+      name: string;
+      gender: "L" | "P" | null;
+      days: Map<string, HomeroomWeeklyAttendanceRow>;
+    }>();
+    for (const row of report.rows) {
+      const student = students.get(row.student_id) ?? {
+        studentId: row.student_id,
+        identifier: row.person_identifier,
+        name: row.person_name,
+        gender: row.gender,
+        days: new Map<string, HomeroomWeeklyAttendanceRow>(),
+      };
+      student.days.set(row.attendance_date, row);
+      students.set(row.student_id, student);
+    }
+    const orderedStudents = [...students.values()].sort((a, b) =>
+      a.name.localeCompare(b.name, "id-ID") || a.identifier.localeCompare(b.identifier));
+    const effectiveDayCount = new Set(report.rows
+      .filter((row) => row.is_effective_day)
+      .map((row) => row.attendance_date)).size;
+    return {
+      ...report,
+      effectiveDayCount,
+      students: orderedStudents.map((student) => {
+        const counts = { H: 0, T: 0, S: 0, I: 0, A: 0 };
+        const events: string[] = [];
+        for (const day of weeklyDays) {
+          const row = student.days.get(day);
+          const code = row ? weeklyStatusCode[row.status] : undefined;
+          if (code) {
+            counts[code] += 1;
+            if (code !== "H") {
+              const label = new Intl.DateTimeFormat("id-ID", {
+                weekday: "long",
+                timeZone: "UTC",
+              }).format(new Date(`${day}T00:00:00Z`));
+              events.push(`${code}:${label}`);
+            }
+          }
+        }
+        const percentage = effectiveDayCount > 0
+          ? Math.round(((counts.H + counts.T) / effectiveDayCount) * 100)
+          : null;
+        const notes = student.days;
+        const remarks: string[] = [];
+        const eventDays = (code: string) => events
+          .filter((event) => event.startsWith(`${code}:`))
+          .map((event) => event.slice(2))
+          .join(", ");
+        if (counts.T) remarks.push(`Terlambat ${counts.T}x (${eventDays("T")})`);
+        if (counts.S) {
+          const noteText = [...notes.values()].filter((row) => row.status === "sakit" && row.note)
+            .map((row) => row.note).join("; ");
+          remarks.push(`Sakit ${counts.S}x (${eventDays("S")})${noteText ? ` / ${noteText}` : " / Surat dokter terlampir"}`);
+        }
+        if (counts.I) {
+          const noteText = [...notes.values()].filter((row) => row.status === "izin" && row.note)
+            .map((row) => row.note).join("; ");
+          remarks.push(`Izin ${counts.I}x (${eventDays("I")})${noteText ? ` / ${noteText}` : ""}`);
+        }
+        if (counts.A || (percentage !== null && percentage < 80)) {
+          const noteText = [...notes.values()].filter((row) => row.status === "alpa" && row.note)
+            .map((row) => row.note).join("; ");
+          remarks.push(`Alpa ${counts.A}x${counts.A ? ` (${eventDays("A")})` : ""}${noteText ? ` / ${noteText}` : " / Perlu konfirmasi orang tua"}`);
+        }
+        if (remarks.length === 0 && effectiveDayCount > 0 && counts.H === effectiveDayCount) {
+          remarks.push("Hadir penuh / Tertib");
+        }
+        return {
+          ...student,
+          counts,
+          percentage,
+          remarks: remarks.length ? remarks.join("; ") : "—",
+        };
+      }),
+    };
+  }), [homeroomReports, weeklyDays]);
 
   const handleWeeklyTemplateFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1413,38 +1772,93 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     }
   };
 
-  const createWeeklyReportHtml = (report: (typeof homeroomReports)[number]) => {
-    const periodStart = new Date(clockNow - attendanceHistoryWindowMs);
-    const periodEnd = new Date(clockNow);
-    const formatDate = (value: Date) => new Intl.DateTimeFormat("id-ID", {
-      dateStyle: "long",
-      timeZone: attendanceTimezone,
-    }).format(value);
-    const tableRows = report.rows.map((row) => `<tr>
-      <td>${escapeAttendanceHtml(formatDate(new Date(`${row.attendance_date}T00:00:00`)))}</td>
-      <td>${escapeAttendanceHtml(row.person_identifier)}</td>
-      <td>${escapeAttendanceHtml(row.person_name)}</td>
-      <td>${escapeAttendanceHtml(statusLabel(row.status))}</td>
-      <td>${escapeAttendanceHtml(row.note ?? "")}</td>
-    </tr>`).join("");
-    const attendanceTable = `<table><thead><tr><th>Tanggal</th><th>NISN</th><th>Nama siswa</th><th>Status</th><th>Keterangan</th></tr></thead><tbody>${tableRows}</tbody></table>`;
+  const createWeeklyReportHtml = (report: (typeof weeklyReportData)[number]) => {
+    const formatDate = (dateValue: string, options: Intl.DateTimeFormatOptions = { day: "2-digit", month: "2-digit" }) =>
+      new Intl.DateTimeFormat("id-ID", { ...options, timeZone: "UTC" })
+        .format(new Date(`${dateValue}T00:00:00Z`));
+    const start = new Date(`${weeklyStartDate}T00:00:00Z`);
+    const end = new Date(`${weeklyDays[4]}T00:00:00Z`);
+    const rangeLabel = `${formatDate(weeklyStartDate, { day: "numeric" })} s.d. ${formatDate(weeklyDays[4], { day: "numeric", month: "long" })} ${end.getUTCFullYear()} (Minggu ke-${Math.ceil(start.getUTCDate() / 7)})`;
+    const dayNames = ["Senin", "Selasa", "Rabu", "Kamis", "Jum'at"];
+    const dayHeaders = dayNames.map((day) => `<th class="day-heading">${day}</th>`).join("");
+    const subHeaders = `${weeklyDays.map((day) => `<th>(${escapeAttendanceHtml(formatDate(day))})</th>`).join("")}<th>H</th><th>T</th><th>S</th><th>I</th><th>A</th>`;
+    const tableRows = report.students.map((student, index) => {
+      const dayCells = weeklyDays.map((day) => {
+        const row = student.days.get(day);
+        const code = row ? weeklyStatusCode[row.status] : undefined;
+        const time = row?.recorded_at ? `<small>${escapeAttendanceHtml(formatWitaTime(row.recorded_at))}</small>` : "";
+        const noteText = row?.note ? `<small>${escapeAttendanceHtml(row.note)}</small>` : "";
+        return `<td class="day-cell">${code ?? (day > today() ? "—" : row?.is_effective_day ? "—" : "Libur")}${time}${noteText}</td>`;
+      }).join("");
+      return `<tr><td>${index + 1}</td><td>${escapeAttendanceHtml(student.identifier || "—")}</td><td>${escapeAttendanceHtml(student.name)}</td><td>${student.gender ?? "—"}</td>${dayCells}<td>${student.counts.H}</td><td>${student.counts.T}</td><td>${student.counts.S}</td><td>${student.counts.I}</td><td>${student.counts.A}</td><td>${student.percentage === null ? "—" : `${student.percentage}%`}</td><td class="remarks">${escapeAttendanceHtml(student.remarks)}</td></tr>`;
+    }).join("");
+    const attendanceTable = `<table class="weekly-attendance"><thead>
+      <tr><th rowspan="2">No.</th><th rowspan="2">NISN</th><th rowspan="2">Nama Siswa</th><th rowspan="2">JK</th>${dayHeaders}<th colspan="5">Rekapitulasi</th><th rowspan="2">Persentase Hadir</th><th rowspan="2">Keterangan/Tindak Lanjut</th></tr>
+      <tr>${subHeaders}</tr></thead><tbody>${tableRows}</tbody></table>`;
+    const letterhead = getSchoolLetterhead(schoolSettings, letterheadSlot);
+    const safeImage = (url: string) => /^(?:https?:\/\/|\/(?!\/))/i.test(url) ? escapeAttendanceHtml(url) : "";
+    const kopSurat = `<div class="report-letterhead kop-${letterhead.layout}">
+      <img class="province-logo" src="${safeImage(letterhead.province_logo_url)}" alt="">
+      <div class="letterhead-copy"><p>PEMERINTAH PROVINSI SULAWESI SELATAN</p><p>DINAS PENDIDIKAN</p><h2>${escapeAttendanceHtml(letterhead.school_name)}</h2><p>${escapeAttendanceHtml(letterhead.letterhead)}</p></div>
+      ${letterhead.layout === "2" ? `<img class="school-logo" src="${safeImage(letterhead.school_logo_url)}" alt="">` : ""}
+    </div><div class="letterhead-rule"></div>`;
+    const teacherLabel = role === "guru_bk" ? "Guru BK" : "Wali Kelas / Guru Pengampu";
+    const coreMarkup = `${kopSurat}<h1>REKAPITULASI KEHADIRAN MINGGUAN PESERTA DIDIK (ABSENSI DIGITAL)</h1>
+      <div class="metadata"><div><strong>Kelas / Rombel:</strong> ${escapeAttendanceHtml(report.className)}</div><div><strong>Periode Tanggal:</strong> ${escapeAttendanceHtml(rangeLabel)}</div><div><strong>${teacherLabel}:</strong> ${escapeAttendanceHtml(currentUser?.full_name ?? "—")}</div></div>
+      ${attendanceTable}<p class="codes"><strong>Keterangan Kode:</strong> H = Hadir, T = Terlambat, S = Sakit, I = Izin, A = Alpa.</p>`;
     const variables: Record<string, string> = {
       nama_kelas: escapeAttendanceHtml(report.className),
       wali_kelas: escapeAttendanceHtml(currentUser?.full_name ?? "—"),
       nip_wali_kelas: escapeAttendanceHtml(currentUser?.nip_or_nisn ?? "—"),
-      periode_minggu: escapeAttendanceHtml(`${formatDate(periodStart)} – ${formatDate(periodEnd)}`),
-      tanggal_unduh: escapeAttendanceHtml(formatDate(new Date())),
+      periode_minggu: escapeAttendanceHtml(rangeLabel),
+      label_penanggung_jawab: escapeAttendanceHtml(teacherLabel),
+      tanggal_unduh: escapeAttendanceHtml(new Intl.DateTimeFormat("id-ID", { dateStyle: "long", timeZone: attendanceTimezone }).format(new Date())),
       tabel_kehadiran: attendanceTable,
+      kop_surat: kopSurat,
+      baris_siswa: attendanceTable,
     };
-    const html = sanitizeAttendanceTemplateHtml(weeklyTemplate);
-    const body = html.replace(/\{\{(nama_kelas|wali_kelas|nip_wali_kelas|periode_minggu|tanggal_unduh|tabel_kehadiran)\}\}/g,
-      (_placeholder, key: string) => variables[key] ?? "");
+    ["tgl_senin", "tgl_selasa", "tgl_rabu", "tgl_kamis", "tgl_jumat"].forEach((key, index) => {
+      variables[key] = escapeAttendanceHtml(formatDate(weeklyDays[index]));
+    });
+    const template = sanitizeAttendanceTemplateHtml(weeklyTemplate);
+    const hasReportTablePlaceholder = template.includes("{{baris_siswa}}") || template.includes("{{tabel_kehadiran}}");
+    const attendanceGridTable = /<table\b[^>]*class=["'][^"']*\battendance-grid\b[^"']*["'][^>]*>[\s\S]*?<\/table>/i;
+    const legacyTableTemplate = hasReportTablePlaceholder && attendanceGridTable.test(template);
+    const rowsPlaceholderInBody = /<tbody\b[^>]*>[\s\S]*?\{\{baris_siswa\}\}[\s\S]*?<\/tbody>/i.test(template);
+    variables.baris_siswa = rowsPlaceholderInBody ? tableRows : attendanceTable;
+    const tableTemplate = legacyTableTemplate
+      ? template
+        .replace(/\{\{(tabel_kehadiran|baris_siswa)\}\}/g, "")
+        .replace(attendanceGridTable, attendanceTable)
+      : template;
+    const body = hasReportTablePlaceholder
+      ? tableTemplate.replace(/\{\{(nama_kelas|wali_kelas|nip_wali_kelas|periode_minggu|tanggal_unduh|label_penanggung_jawab|tgl_senin|tgl_selasa|tgl_rabu|tgl_kamis|tgl_jumat|tabel_kehadiran|kop_surat|baris_siswa)\}\}/g,
+        (_placeholder, key: string) => legacyTableTemplate && (key === "baris_siswa" || key === "tabel_kehadiran") ? "" : variables[key] ?? "")
+      : coreMarkup;
+    const finalBody = /\bclass=["'][^"']*\breport-letterhead\b[^"']*["']/i.test(body) ? body : `${kopSurat}${body}`;
     return `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Rekap ${escapeAttendanceHtml(report.className)}</title>
-      <style>body{font:12px Arial,sans-serif;color:#111;margin:24px}h1{text-align:center}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border:1px solid #444;padding:6px;text-align:left}th{background:#eee}@media print{body{margin:12mm}}</style>
-      </head><body>${body}</body></html>`;
+      <style>
+        @page{size:A4 landscape;margin:10mm}
+        *{box-sizing:border-box}body{font:9px Arial,sans-serif;color:#111;margin:0}
+        .report-letterhead{display:grid;grid-template-columns:86px 1fr 86px;align-items:center;gap:12px;text-align:center;min-height:76px}
+        .report-letterhead.kop-1,.report-letterhead.kop-3{grid-template-columns:86px 1fr}
+        .report-letterhead img{max-width:76px;max-height:76px;object-fit:contain}
+        .letterhead-copy p{margin:1px 0;font-size:9px}.letterhead-copy h2{margin:2px 0;font-size:15px}
+        .letterhead-rule{border-top:3px double #111;margin:4px 0 10px}
+        h1{text-align:center;font-size:14px;margin:6px 0 10px}
+        .metadata{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:6px;margin:7px 0}
+        .weekly-attendance{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:7px}
+        .weekly-attendance th,.weekly-attendance td{border:1px solid #111;padding:3px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}
+        .weekly-attendance th{background:#67d4f5;font-weight:700}
+        .weekly-attendance th:nth-child(3),.weekly-attendance td:nth-child(3){width:14%;text-align:left}
+        .weekly-attendance th:last-child,.weekly-attendance td:last-child{width:16%}
+        .weekly-attendance .day-cell{font-size:9px}.weekly-attendance small{display:block;font-size:7px;margin-top:1px}
+        .weekly-attendance .remarks{text-align:left}.codes{margin-top:7px}
+        @media print{body{margin:0}}
+      </style></head><body>${finalBody}</body></html>`;
   };
 
-  const printWeeklyReport = (report: (typeof homeroomReports)[number]) => {
+  const printWeeklyReport = (report: (typeof weeklyReportData)[number]) => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       setHomeroomError("Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.");
@@ -1457,15 +1871,53 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     window.setTimeout(() => printWindow.print(), 250);
   };
 
-  const exportWeeklyReport = (report: (typeof homeroomReports)[number]) => {
+  const exportWeeklyReport = (report: (typeof weeklyReportData)[number]) => {
     const workbook = XLSX.utils.book_new();
-    const sheet = XLSX.utils.json_to_sheet(report.rows.map((row) => ({
-      Tanggal: row.attendance_date,
-      NISN: row.person_identifier,
-      "Nama siswa": row.person_name,
-      Status: statusLabel(row.status),
-      Keterangan: row.note ?? "",
-    })));
+    const dayNames = ["Senin", "Selasa", "Rabu", "Kamis", "Jum'at"];
+    const headers = [
+      "No.", "NISN", "Nama Siswa", "JK",
+      ...dayNames.map((day, index) => `${day} (${new Intl.DateTimeFormat("id-ID", { day: "2-digit", month: "2-digit", timeZone: "UTC" }).format(new Date(`${weeklyDays[index]}T00:00:00Z`))})`),
+      "H", "T", "S", "I", "A", "Persentase Hadir", "Keterangan/Tindak Lanjut",
+    ];
+    const values = report.students.map((student, index) => [
+      index + 1,
+      student.identifier || "—",
+      student.name,
+      student.gender ?? "—",
+      ...weeklyDays.map((day) => {
+        const row = student.days.get(day);
+        if (!row) return "—";
+        const code = weeklyStatusCode[row.status] ?? "—";
+        const time = row.recorded_at ? ` ${formatWitaTime(row.recorded_at)}` : "";
+        const dayLabel = row.is_effective_day || day > today() ? code : "Libur";
+        return `${dayLabel}${time}${row.note ? `\n${row.note}` : ""}`;
+      }),
+      student.counts.H,
+      student.counts.T,
+      student.counts.S,
+      student.counts.I,
+      student.counts.A,
+      student.percentage === null ? "—" : `${student.percentage}%`,
+      student.remarks,
+    ]);
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ["REKAPITULASI KEHADIRAN MINGGUAN PESERTA DIDIK (ABSENSI DIGITAL)"],
+      [`Kelas / Rombel: ${report.className}`],
+      [`Periode Tanggal: ${weeklyStartDate} s.d. ${weeklyDays[4]}`],
+      [`Wali Kelas / Guru Pengampu: ${currentUser?.full_name ?? "—"}`],
+      headers,
+      ...values,
+      [],
+      ["Keterangan Kode: H = Hadir, T = Terlambat, S = Sakit, I = Izin, A = Alpa"],
+    ]);
+    sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 15 } }];
+    sheet["!cols"] = [
+      { wch: 5 }, { wch: 14 }, { wch: 28 }, { wch: 5 },
+      ...Array.from({ length: 5 }, () => ({ wch: 14 })),
+      ...Array.from({ length: 5 }, () => ({ wch: 5 })),
+      { wch: 14 }, { wch: 38 },
+    ];
+    sheet["!rows"] = values.map(() => ({ hpt: 30 }));
     XLSX.utils.book_append_sheet(workbook, sheet, "Rekap Mingguan");
     XLSX.writeFile(workbook, `Rekap-Mingguan-${report.className.replace(/[\\/:*?"<>|]/g, "-")}.xlsx`);
   };
@@ -1690,6 +2142,72 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         <p>Gunakan pemindai QR pada formulir Catat Kehadiran untuk memverifikasi QR pribadi siswa. QR sekolah bersama tidak digunakan.</p>
       </div>}
       {isTeacher && qrError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{qrError}</div>}
+      {canManageAttendance && <section className="attendance-admin-arrival-broadcast">
+        <div>
+          <strong>Kirim QR Kedatangan ke Seluruh Akun Siswa</strong>
+          <small>QR bersama berlaku sesuai durasi yang ditetapkan dan kedaluwarsa berdasarkan waktu server Supabase.</small>
+        </div>
+        {arrivalQrError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{arrivalQrError}</div>}
+        {arrivalQrNotice && <div className="attendance-alert success" role="status"><CheckCircle2 size={17}/>{arrivalQrNotice}</div>}
+        {adminArrivalQr && Date.parse(adminArrivalQr.expires_at) > clockNow ? <div className="attendance-qr-active">
+          <div className="attendance-qr-code"><QRCodeSVG value={`SMAN7ABSENSI|${adminArrivalQr.token}`} size={200} level="M" includeMargin/></div>
+          <div className="attendance-qr-session-info">
+            <strong>QR Kedatangan aktif untuk seluruh siswa</strong>
+            <span>Sisa waktu: {remainingTimeLabel(adminArrivalQr.expires_at, clockNow)}</span>
+            <span>Berakhir pukul {formatWitaTime(adminArrivalQr.expires_at)} WITA</span>
+            <div className="attendance-qr-manual-code">
+              <span>KODE QR KEDATANGAN</span>
+              <code>{adminArrivalQr.token}</code>
+              <button type="button" className="attendance-qr-copy" onClick={()=>void copyText(adminArrivalQr.token, `arrival-${adminArrivalQr.token}`)}>
+                <ClipboardCopy size={15}/>{copiedQrToken === `arrival-${adminArrivalQr.token}` ? "Kode tersalin" : "Salin Kode"}
+              </button>
+            </div>
+            <button type="button" className="attendance-qr-close" onClick={()=>void closeAdminArrivalQr()} disabled={arrivalQrLoading}>
+              {arrivalQrLoading ? "Mengakhiri..." : "Akhiri QR Kedatangan"}
+            </button>
+          </div>
+        </div> : <div className="attendance-broadcast-create">
+          <label>Durasi berlaku (menit)
+            <input type="number" min={1} max={480} step={1} value={arrivalQrDuration} onChange={event=>setArrivalQrDuration(Number(event.target.value))}/>
+          </label>
+          <button type="button" className="attendance-primary" onClick={()=>void createAdminArrivalQr()} disabled={arrivalQrLoading}>
+            {arrivalQrLoading ? "Mengaktifkan..." : "Aktifkan QR Kedatangan"}
+          </button>
+        </div>}
+      </section>}
+      {canManageAttendance && <section className="attendance-admin-arrival-broadcast">
+        <div>
+          <strong>Kirim QR Kepulangan ke Seluruh Akun Siswa</strong>
+          <small>Masa berlaku dihitung dari waktu server dan tetap mengikuti jadwal pemindaian kepulangan sekolah.</small>
+        </div>
+        {departureQrError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{departureQrError}</div>}
+        {departureQrNotice && <div className="attendance-alert success" role="status"><CheckCircle2 size={17}/>{departureQrNotice}</div>}
+        {adminDepartureQr && Date.parse(adminDepartureQr.expires_at) > clockNow ? <div className="attendance-qr-active">
+          <div className="attendance-qr-code"><QRCodeSVG value={`SMAN7ABSENSI|${adminDepartureQr.token}`} size={200} level="M" includeMargin/></div>
+          <div className="attendance-qr-session-info">
+            <strong>QR Kepulangan aktif untuk seluruh siswa</strong>
+            <span>Sisa waktu: {remainingTimeLabel(adminDepartureQr.expires_at, clockNow)}</span>
+            <span>Berakhir pukul {formatWitaTime(adminDepartureQr.expires_at)} WITA</span>
+            <div className="attendance-qr-manual-code">
+              <span>KODE QR KEPULANGAN</span>
+              <code>{adminDepartureQr.token}</code>
+              <button type="button" className="attendance-qr-copy" onClick={()=>void copyText(adminDepartureQr.token, `departure-${adminDepartureQr.token}`, setDepartureQrError)}>
+                <ClipboardCopy size={15}/>{copiedQrToken === `departure-${adminDepartureQr.token}` ? "Kode tersalin" : "Salin Kode"}
+              </button>
+            </div>
+            <button type="button" className="attendance-qr-close" onClick={()=>void closeAdminDepartureQr()} disabled={departureQrLoading}>
+              {departureQrLoading ? "Mengakhiri..." : "Akhiri QR Kepulangan"}
+            </button>
+          </div>
+        </div> : <div className="attendance-broadcast-create">
+          <label>Durasi berlaku (menit)
+            <input type="number" min={1} max={480} step={1} value={departureQrDuration} onChange={event=>setDepartureQrDuration(Number(event.target.value))}/>
+          </label>
+          <button type="button" className="attendance-primary" onClick={()=>void createAdminDepartureQr()} disabled={departureQrLoading}>
+            {departureQrLoading ? "Mengaktifkan..." : "Aktifkan QR Kepulangan"}
+          </button>
+        </div>}
+      </section>}
       {canManageAttendance && <details className="attendance-schedule-settings">
         <summary>Pengaturan jadwal absensi dan kalender sekolah</summary>
         {scheduleError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{scheduleError}</div>}
@@ -1755,6 +2273,25 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           {identityError && <div className="attendance-alert error"><XCircle size={17}/>{identityError}</div>}
           <div className="attendance-self-date"><CalendarDays size={16}/><span>Tanggal absensi</span><strong>{role === "siswa" ? "6 hari terakhir" : date}</strong></div>
           {role === "siswa" && <section className="attendance-student-qr-list">
+            {arrivalQrError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{arrivalQrError}</div>}
+            {adminArrivalQr && Date.parse(adminArrivalQr.expires_at) > clockNow && <div className="attendance-admin-arrival-card">
+              <strong>QR Kedatangan dari Administrator</strong>
+              <QRCodeSVG value={`SMAN7ABSENSI|${adminArrivalQr.token}`} size={180} level="M" includeMargin/>
+              <code>{adminArrivalQr.token}</code>
+              <span>Sisa waktu {remainingTimeLabel(adminArrivalQr.expires_at, clockNow)} · berakhir pukul {formatWitaTime(adminArrivalQr.expires_at)} WITA</span>
+              <button type="button" className="attendance-qr-copy" onClick={()=>void copyText(adminArrivalQr.token, `arrival-${adminArrivalQr.token}`)}>
+                <ClipboardCopy size={15}/>{copiedQrToken === `arrival-${adminArrivalQr.token}` ? "Kode tersalin" : "Salin Kode QR"}
+              </button>
+            </div>}
+            {adminDepartureQr && Date.parse(adminDepartureQr.expires_at) > clockNow && <div className="attendance-admin-arrival-card">
+              <strong>QR Kepulangan dari Administrator</strong>
+              <QRCodeSVG value={`SMAN7ABSENSI|${adminDepartureQr.token}`} size={180} level="M" includeMargin/>
+              <code>{adminDepartureQr.token}</code>
+              <span>Sisa waktu {remainingTimeLabel(adminDepartureQr.expires_at, clockNow)} · berakhir pukul {formatWitaTime(adminDepartureQr.expires_at)} WITA</span>
+              <button type="button" className="attendance-qr-copy" onClick={()=>void copyText(adminDepartureQr.token, `departure-${adminDepartureQr.token}`, setDepartureQrError)}>
+                <ClipboardCopy size={15}/>{copiedQrToken === `departure-${adminDepartureQr.token}` ? "Kode tersalin" : "Salin Kode QR"}
+              </button>
+            </div>}
             <div className="attendance-student-qr-heading">
               <strong>QR sekolah pribadi</strong>
               <small>Tunjukkan QR ini kepada petugas untuk dipindai. QR tidak dapat digunakan siswa untuk mencatat absensi sendiri.</small>
@@ -1852,7 +2389,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     </div>
     {canManageAttendance && <section className="attendance-panel attendance-weekly-template">
       <div className="attendance-panel-title">
-        <div><h2>Format Rekap Mingguan</h2><p>Unggah .docx/.html atau edit HTML. Variabel: {"{{nama_kelas}}"}, {"{{wali_kelas}}"}, {"{{nip_wali_kelas}}"}, {"{{periode_minggu}}"}, {"{{tabel_kehadiran}}"}, {"{{tanggal_unduh}}"}.</p></div>
+        <div><h2>Format Rekap Mingguan</h2><p>Unggah .docx/.html atau edit HTML. Placeholder kop dan tabel siswa: {"{{kop_surat}}"} dan {"{{baris_siswa}}"}.</p></div>
         <FileSpreadsheet size={22}/>
       </div>
       <input
@@ -1880,28 +2417,49 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     </section>}
     {isHomeroomTeacher && <section className="attendance-panel attendance-homeroom-weekly">
       <div className="attendance-panel-title">
-        <div><h2>Rekap Mingguan Kelas Perwalian</h2><p>Data wali kelas diambil dari relasi Data Induk dan dibatasi pada rentang 6×24 jam terakhir.</p></div>
+        <div><h2>Rekapitulasi Kehadiran Mingguan</h2><p>Daftar kelas mengikuti relasi wali kelas, penugasan mata pelajaran, atau binaan Guru BK.</p></div>
         <FileSpreadsheet size={22}/>
       </div>
+      <div className="attendance-weekly-controls">
+        <label>Minggu dimulai (Senin)
+          <input type="date" value={weeklyStartDate} onChange={event=>event.target.value && setWeeklyStartDate(mondayOfWeek(event.target.value))}/>
+        </label>
+        <SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot}/>
+      </div>
       {homeroomError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{homeroomError}</div>}
-      {homeroomLoading && <p className="attendance-hint">Memuat daftar kelas dan absensi perwalian...</p>}
-      {!homeroomLoading && homeroomReports.length === 0 && !homeroomError
-        && <p className="attendance-hint">Akun ini belum terhubung sebagai wali kelas pada Data Induk.</p>}
-      {homeroomReports.map(report => (
+      {homeroomLoading && <p className="attendance-hint">Memuat kelas dan seluruh siswa aktif...</p>}
+      {!homeroomLoading && weeklyReportData.length === 0 && !homeroomError
+        && <p className="attendance-hint">Belum ada kelas yang terhubung melalui wali kelas, penugasan mapel, atau assignment BK.</p>}
+      {weeklyReportData.map(report => (
         <section className="attendance-homeroom-class" key={report.classId}>
           <div className="attendance-homeroom-heading">
-            <div><h3>Rekap Mingguan Kelas Perwalian ({report.className})</h3><span>Tingkat {report.gradeLevel} · {new Set(report.rows.map(row=>row.student_id)).size} siswa</span></div>
+            <div><h3>Rekap Kelas / Rombel ({report.className})</h3><span>Tingkat {report.gradeLevel} · {report.students.length} siswa · {report.effectiveDayCount} hari efektif</span></div>
             <div className="attendance-homeroom-actions">
               <button type="button" className="attendance-secondary" onClick={()=>printWeeklyReport(report)} disabled={weeklyTemplateLoading}><Download size={15}/>Cetak / PDF</button>
               <button type="button" className="attendance-secondary" onClick={()=>exportWeeklyReport(report)}><FileSpreadsheet size={15}/>Excel</button>
             </div>
           </div>
           <div className="attendance-table-wrap attendance-homeroom-table">
-            <table><thead><tr><th>Tanggal</th><th>NISN</th><th>Nama siswa</th><th>Status</th><th>Keterangan</th></tr></thead><tbody>
-              {report.rows.map((row,index)=><tr key={`${row.student_id}-${row.attendance_date}-${index}`}>
-                <td>{row.attendance_date}</td><td>{row.person_identifier}</td><td>{row.person_name}</td>
-                <td><span className={`attendance-status status-${row.status}`}>{statusLabel(row.status)}</span></td>
-                <td>{row.note ?? "—"}</td>
+            <table className="attendance-weekly-report-table"><thead>
+              <tr><th rowSpan={2}>No.</th><th rowSpan={2}>NISN</th><th rowSpan={2}>Nama Siswa</th><th rowSpan={2}>JK</th>
+                {["Senin", "Selasa", "Rabu", "Kamis", "Jum'at"].map(day=><th key={day}>{day}</th>)}
+                <th colSpan={5}>Rekapitulasi</th><th rowSpan={2}>Persentase Hadir</th><th rowSpan={2}>Keterangan / Tindak Lanjut</th>
+              </tr>
+              <tr>{weeklyDays.map(day=><th key={`date-${day}`}>({new Intl.DateTimeFormat("id-ID",{day:"2-digit",month:"2-digit",timeZone:"UTC"}).format(new Date(`${day}T00:00:00Z`))})</th>)}
+                {["H", "T", "S", "I", "A"].map(code=><th key={code}>{code}</th>)}
+              </tr></thead><tbody>
+              {report.students.map((student,index)=><tr key={student.studentId}>
+                <td>{index+1}</td><td>{student.identifier || "—"}</td><td>{student.name}</td><td>{student.gender ?? "—"}</td>
+                {weeklyDays.map(day=>{
+                  const record=student.days.get(day);
+                  const code=record ? weeklyStatusCode[record.status] : undefined;
+                  return <td key={day}>{code ?? (day > today() || record?.is_effective_day ? "—" : "Libur")}
+                    {record?.recorded_at && <small>{formatWitaTime(record.recorded_at)}</small>}
+                    {record?.note && <small>{record.note}</small>}
+                  </td>;
+                })}
+                <td>{student.counts.H}</td><td>{student.counts.T}</td><td>{student.counts.S}</td><td>{student.counts.I}</td><td>{student.counts.A}</td>
+                <td>{student.percentage === null ? "—" : `${student.percentage}%`}</td><td>{student.remarks}</td>
               </tr>)}
             </tbody></table>
           </div>
