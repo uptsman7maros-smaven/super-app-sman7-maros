@@ -13,6 +13,7 @@ Jalankan di project Supabase pengembangan terlebih dahulu. Tinjau seluruh SQL, k
 - `supabase/001_persuratan.sql` — skema, fungsi, trigger, RLS, Storage policies.
 - `supabase/002_persuratan_table_grants.sql` — privilege tabel untuk instalasi lama bila diperlukan.
 - `supabase/003_superapp_role_access.sql` — pemetaan role langsung dari profil SUPER APP, kebijakan RLS, dan grant.
+- `../../supabase/migrations/20261123130000_persuratan_template_access_and_staff_workflow.sql` — izin template Guru/Staf, dokumen tanpa identitas pengaju, akses administrator, serta alur Kepala/Staf TU.
 - `src/` — antarmuka React responsif, Supabase client, workflow dasar, preview A4.
 - `.env.example` — variabel frontend.
 - `package.json` — dependensi.
@@ -44,23 +45,24 @@ Untuk instalasi lama, jalankan `supabase/003_superapp_role_access.sql`. Migrasi 
 | `super_admin` | `administrator` | Akses seluruh menu dan data; mengelola template/pengaturan; menyetujui dan menerbitkan surat. |
 | `operator` | `operator` | Melihat proses dan arsip, mengelola surat masuk/keluar dan disposisi; tidak menyetujui atau menerbitkan nomor. |
 | `kepala_tata_usaha` | `kepala_tu` | Memeriksa, merevisi, menyetujui/menolak, menerbitkan nomor, dan mengelola administrasi surat. |
-| `staff_tata_usaha` | `staf_tu` | Menangani surat masuk/keluar dan disposisi; tidak menyetujui atau menerbitkan nomor. |
+| `staff_tata_usaha` | `staf_tu` | Melihat semua format aktif, memproses pengajuan, menerbitkan nomor, serta menangani surat masuk/keluar. |
 | `kepala_sekolah` | `kepala_sekolah` | Melihat proses dan memberi persetujuan untuk template yang mensyaratkannya. |
 | `guru`, `tendik` | `guru_staf` | Membuat serta melacak pengajuan sendiri. |
 | `siswa` | `pemohon` | Membuat serta melacak pengajuan sendiri; tidak melihat data pengguna lain. |
 
 Penetapan role dilakukan di menu Pengguna SUPER APP. Tabel lama `letter_user_roles` tidak lagi dipakai untuk otorisasi.
 
-## Batasan implementasi awal
+## Pengaturan dan pratinjau
 
-- Template Builder dalam paket ini adalah editor HTML sederhana dengan variabel `{{nama_variabel}}`; belum merupakan editor DOCX/WYSIWYG penuh.
-- Import DOC/DOCX/PDF/gambar perlu alur konversi/penyuntingan terpisah. PDF/gambar menjadi referensi, bukan template dinamis otomatis.
-- PDF dibuat dari tampilan HTML A4 melalui browser print. Untuk PDF server-side yang konsisten lintas perangkat, tambahkan layanan backend/headless browser.
+- Administrator dapat menentukan apakah format tersedia untuk Guru/Staf dan apakah identitas pengaju disembunyikan dari dokumen.
+- Import DOCX membaca struktur dokumen, style, tabel, tab stop, dan metadata ukuran halaman; import PDF mempertahankan koordinat teks dan ukuran font sejauh tersedia pada PDF berbasis teks.
+- Pratinjau mendukung zoom dan ukuran A4/F4. Periksa hasil impor dan margin di editor sebelum format disimpan.
+- PDF final dirender dari HTML melalui browser. Untuk hasil server-side yang konsisten lintas perangkat, tambahkan layanan backend/headless browser.
 - QR verifikasi menggunakan URL publik dengan token acak; endpoint verifikasi perlu dipublikasikan melalui aplikasi.
 - Notifikasi tersimpan di tabel dan dapat dikembangkan menjadi Supabase Realtime.
 - Pengiriman email/WhatsApp tidak dikonfigurasi.
 - Tanda tangan gambar bukan tanda tangan elektronik tersertifikasi.
-- Excel export, impor DOCX, backup terjadwal, dan integrasi data profil SUPER APP merupakan tahap pengembangan lanjutan.
+- Excel export dan backup terjadwal merupakan tahap pengembangan lanjutan.
 
 ## Keamanan
 

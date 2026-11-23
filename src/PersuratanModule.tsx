@@ -10,6 +10,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { getValidSupabaseSession, isSupabaseRateLimitError, supabase } from './lib/supabase'
 import { isLetterInProgress } from './lib/letterMetrics'
+import JSZip from 'jszip'
 import { logAppActivity } from './services/activityLogService'
 import { useSchoolContext } from './context/useSchoolContext'
 import PersonPicker from './components/shared/PersonPicker'
@@ -23,7 +24,8 @@ type LetterRole = 'administrator' | 'operator' | 'guru_staf' | 'pemohon' | 'staf
 type LetterStatus = 'draft' | 'submitted' | 'in_review' | 'revision' | 'resubmitted' | 'approved' | 'awaiting_number' | 'issued' | 'rejected' | 'archived'
 type PaperSize = 'A4' | 'F4'
 type LogoPosition = 'left' | 'top' | 'none'
-type LetterDocumentMarkup = { html: string; header: string; paperSize: PaperSize; isDraft: boolean; title: string }
+type PageMarginsMm = { top: number; right: number; bottom: number; left: number }
+type LetterDocumentMarkup = { html: string; header: string; paperSize: PaperSize; marginsMm: PageMarginsMm; isDraft: boolean; title: string }
 type TemplateField = {
   name: string
   label: string
@@ -38,10 +40,12 @@ type LetterTemplate = {
   subject?: string | null
   html_content?: string
   source_file_path?: string | null
-  page_settings?: { size?: PaperSize; margin_mm?: number; logo_position?: LogoPosition }
+  page_settings?: { size?: PaperSize; margin_mm?: number; margins_mm?: PageMarginsMm; logo_position?: LogoPosition }
   requires_principal_approval?: boolean
   requires_number?: boolean
   is_active?: boolean
+  available_to_teacher?: boolean
+  hide_requester_identity?: boolean
   category?: { name: string; code?: string } | null
   fields_schema: TemplateField[]
 }
@@ -67,11 +71,14 @@ type LetterRequest = {
     category_id?: string | null
     requires_principal_approval?: boolean
     requires_number?: boolean
+    available_to_teacher?: boolean
+    hide_requester_identity?: boolean
     html_content?: string
     fields_schema?: TemplateField[]
     page_settings?: LetterTemplate['page_settings']
   } | null
   letter_issued?: ({
+    id?: string
     letter_number: string
     issue_date: string
     signer_name: string | null
@@ -79,6 +86,7 @@ type LetterRequest = {
     signer_nip: string | null
     html_snapshot?: string | null
   } | null)[] | {
+    id?: string
     letter_number: string
     issue_date: string
     signer_name: string | null
@@ -104,6 +112,16 @@ type IncomingLetter = {
   received_date: string
   follow_up_status: string
 }
+type OutgoingLetter = {
+  id: string
+  issued_id: string | null
+  external_number: string | null
+  recipient: string
+  subject: string
+  letter_date: string
+  delivery_status: string
+  attachment_path: string | null
+}
 type LetterCategory = { id: string; name: string; code: string }
 type LetterSignatory = { full_name: string; nip: string | null; employment_status: string | null }
 type LetterNotification = { id: string; title: string; body: string; created_at: string; is_read: boolean; letter_request_id?: string | null }
@@ -128,16 +146,21 @@ const BURSAR_TOKEN_NAMES = new Set(['nama_bendahara', 'nip_bendahara'])
 const TU_COMPLETABLE_TOKEN_NAMES = new Set(['hari_tanggal', 'tanggal_surat', 'tempat'])
 const GLOBAL_REQUEST_ROLES = new Set<LetterRole>(['administrator', 'operator', 'kepala_tu', 'staf_tu', 'kepala_sekolah'])
 const ALLOWED_TEMPLATE_TAGS = new Set([
-  'a', 'b', 'blockquote', 'br', 'caption', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'a', 'b', 'blockquote', 'br', 'caption', 'col', 'colgroup', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'hr', 'i', 'img', 'li', 'ol', 'p', 's', 'span', 'strong', 'sub', 'sup', 'table', 'tbody',
   'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul',
 ])
 const SAFE_TEMPLATE_STYLE_PROPERTIES = new Set([
-  'border', 'border-bottom', 'border-collapse', 'border-left', 'border-right', 'border-top',
-  'break-after', 'break-before',
-  'color', 'font-family', 'font-size', 'font-style', 'font-weight', 'line-height', 'margin',
-  'margin-bottom', 'margin-left', 'margin-right', 'margin-top', 'page-break-after', 'page-break-before',
-  'padding', 'text-align', 'text-decoration', 'text-indent', 'vertical-align', 'width',
+  'align-items', 'border', 'border-bottom', 'border-bottom-color', 'border-bottom-style', 'border-bottom-width',
+  'border-collapse', 'border-color', 'border-left', 'border-left-color', 'border-left-style', 'border-left-width',
+  'border-right', 'border-right-color', 'border-right-style', 'border-right-width', 'border-spacing',
+  'border-style', 'border-top', 'border-top-color', 'border-top-style', 'border-top-width', 'border-width',
+  'break-after', 'break-before', 'color', 'display', 'float', 'font-family', 'font-size', 'font-style',
+  'font-weight', 'gap', 'grid-template-columns', 'height', 'justify-content', 'line-height', 'list-style-type',
+  'margin', 'margin-bottom', 'margin-left', 'margin-right', 'margin-top', 'max-height', 'max-width', 'min-height',
+  'min-width', 'page-break-after', 'page-break-before', 'padding', 'padding-bottom', 'padding-left',
+  'padding-right', 'padding-top', 'position', 'right', 'tab-size', 'text-align', 'text-decoration',
+  'text-indent', 'top', 'transform', 'vertical-align', 'white-space', 'width',
 ])
 
 function escapeHtml(value: string) {
@@ -257,12 +280,15 @@ function sanitizeTemplateHtml(value: string): string {
           if (separator < 0) return ''
           const property = rule.slice(0, separator).trim().toLocaleLowerCase('en-US')
           const styleValue = rule.slice(separator + 1).trim()
-          return SAFE_TEMPLATE_STYLE_PROPERTIES.has(property) && !/(url|expression|javascript)/i.test(styleValue)
+          const safePosition = property !== 'position' || /^(static|relative|absolute)$/i.test(styleValue)
+          return SAFE_TEMPLATE_STYLE_PROPERTIES.has(property)
+            && safePosition
+            && !/(?:url\s*\(|expression\s*\(|javascript\s*:|vbscript\s*:|@import|-moz-binding|behavior\s*:)/i.test(styleValue)
             ? `${property}:${styleValue}`
             : ''
         }).filter(Boolean).join(';')
         if (safeStyles) attributes.push(`style="${escapeHtml(safeStyles)}"`)
-      } else if (['colspan', 'rowspan', 'scope', 'start', 'alt', 'width', 'height'].includes(name)) {
+      } else if (['colspan', 'rowspan', 'scope', 'start', 'alt', 'width', 'height', 'span'].includes(name)) {
         attributes.push(`${name}="${escapeHtml(content)}"`)
       } else if (name === 'data-page-break' && ['before', 'after'].includes(content.toLocaleLowerCase('en-US'))) {
         attributes.push(`${name}="${content.toLocaleLowerCase('en-US')}"`)
@@ -284,16 +310,26 @@ function renderTemplateContent(
   html: string,
   values: Record<string, unknown>,
   fields: TemplateField[] = [],
+  hideRequesterIdentity = false,
 ) {
   const valueByName = new Map(
     Object.entries(values).map(([name, value]) => [name.toLocaleLowerCase('id-ID'), value]),
   )
   const labelByName = new Map(fields.map(field => [field.name.toLocaleLowerCase('id-ID'), field.label]))
-  return sanitizeTemplateHtml(html).replace(
+  const requesterFields = new Set([
+    ...USER_TOKEN_NAMES,
+    ...fields.filter(field => field.type === 'auto_user').map(field => field.name.toLocaleLowerCase('id-ID')),
+  ])
+  const sanitizedHtml=sanitizeTemplateHtml(html)
+  const documentHtml=hideRequesterIdentity&&typeof DOMParser!=='undefined'
+    ?stripRequesterIdentityBlocks(sanitizedHtml)
+    :sanitizedHtml
+  return documentHtml.replace(
     TOKEN_PATTERN,
     (_token, doubleName: string | undefined, singleName: string | undefined) => {
       const name = doubleName ?? singleName ?? ''
       const normalized = name.toLocaleLowerCase('id-ID')
+      if (hideRequesterIdentity && requesterFields.has(normalized)) return ''
       const value = valueByName.get(normalized)
       if (value !== undefined && value !== null && String(value).trim()) return escapeHtml(String(value))
       if (normalized === 'nomor_surat') return '[Menunggu Nomor dari Kepala TU]'
@@ -301,6 +337,16 @@ function renderTemplateContent(
       return `[${labelByName.get(normalized) ?? name.replaceAll('_', ' ')}]`
     },
   )
+}
+
+function stripRequesterIdentityBlocks(html:string) {
+  const parsed=new DOMParser().parseFromString(html,'text/html')
+  parsed.body.querySelectorAll('p,li,tr').forEach(element=>{
+    if(/(?:identitas\s+pengaju|(?:nama|nip|jabatan)\s+pengaju|pengaju\s*[:：])/i.test(element.textContent||'')){
+      element.remove()
+    }
+  })
+  return [...parsed.body.childNodes].map(node=>node instanceof Element?node.outerHTML:escapeHtml(node.textContent||'')).join('')
 }
 
 function makeLetterheadHtml(settings: SchoolSettings | null, slot: LetterheadSlot, logoPosition: LogoPosition) {
@@ -443,6 +489,261 @@ function normalizePaperSize(value: unknown): PaperSize {
   return value === 'F4' ? 'F4' : 'A4'
 }
 
+function normalizePageMargins(value?: Partial<PageMarginsMm> | null): PageMarginsMm {
+  const normalize = (margin: number | undefined, fallback: number) =>
+    Number.isFinite(margin) ? Math.min(80, Math.max(0, margin!)) : fallback
+  return {
+    top: normalize(value?.top,18),
+    right: normalize(value?.right,17),
+    bottom: normalize(value?.bottom,18),
+    left: normalize(value?.left,17),
+  }
+}
+
+const WORD_NAMESPACE = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+function wordChild(parent: Element | Document | null, name: string) {
+  if (!parent) return null
+  return Array.from(parent.children).find(child => child.localName === name) ?? null
+}
+
+function wordChildren(parent: Element, name: string) {
+  return Array.from(parent.children).filter(child => child.localName === name)
+}
+
+function wordValue(element: Element | null, name: string) {
+  return element?.getAttributeNS(WORD_NAMESPACE, name)
+    || element?.getAttribute(`w:${name}`)
+    || ''
+}
+
+function wordTwips(value: string) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? `${parsed / 20}pt` : ''
+}
+
+function wordHasEnabledProperty(element: Element | null, localName: string) {
+  const property = wordChild(element ?? document.createElement('span'), localName)
+  return Boolean(property) && !['0', 'false', 'off', 'none'].includes(wordValue(property, 'val').toLocaleLowerCase('en-US'))
+}
+
+function parseDocxTemplateXml(documentXml: string, stylesXml: string | null) {
+  const parsedDocument = new DOMParser().parseFromString(documentXml, 'application/xml')
+  if (parsedDocument.querySelector('parsererror')) throw new Error('Struktur XML DOCX tidak valid.')
+  const parsedStyles = stylesXml
+    ? new DOMParser().parseFromString(stylesXml, 'application/xml')
+    : null
+  if (parsedStyles?.querySelector('parsererror')) throw new Error('Struktur styles.xml DOCX tidak valid.')
+  const styles = new Map<string, Element>()
+  Array.from(parsedStyles?.getElementsByTagNameNS(WORD_NAMESPACE, 'style') ?? []).forEach(style => {
+    const id = wordValue(style, 'styleId')
+    if (id) styles.set(id, style)
+  })
+  const styleChain = (styleId: string, type: 'paragraph' | 'character') => {
+    const result: Element[] = []
+    const visited = new Set<string>()
+    let current = styleId
+    while (current && !visited.has(current)) {
+      visited.add(current)
+      const style = styles.get(current)
+      if (!style || wordValue(style, 'type') !== type) break
+      result.unshift(style)
+      current = wordValue(wordChild(style, 'basedOn'), 'val')
+    }
+    return result
+  }
+  const chainProperties = (chain: Element[], name: string) =>
+    chain.map(style => wordChild(style, name)).filter((item): item is Element => Boolean(item))
+  const body = parsedDocument.getElementsByTagNameNS(WORD_NAMESPACE, 'body')[0]
+  if (!body) throw new Error('DOCX tidak memiliki elemen body.')
+  const sectionList = parsedDocument.getElementsByTagNameNS(WORD_NAMESPACE, 'sectPr')
+  const bodySection = sectionList.length ? sectionList[sectionList.length - 1] : wordChild(body, 'sectPr')
+  const pageSize = wordChild(bodySection, 'pgSz')
+  const pageMargins = wordChild(bodySection, 'pgMar')
+  const pageWidthMm = Number(wordValue(pageSize, 'w')) / 1440 * 25.4
+  const pageHeightMm = Number(wordValue(pageSize, 'h')) / 1440 * 25.4
+  const marginsMm = normalizePageMargins({
+    top: wordValue(pageMargins, 'top') ? Number(wordValue(pageMargins, 'top')) / 1440 * 25.4 : undefined,
+    right: wordValue(pageMargins, 'right') ? Number(wordValue(pageMargins, 'right')) / 1440 * 25.4 : undefined,
+    bottom: wordValue(pageMargins, 'bottom') ? Number(wordValue(pageMargins, 'bottom')) / 1440 * 25.4 : undefined,
+    left: wordValue(pageMargins, 'left') ? Number(wordValue(pageMargins, 'left')) / 1440 * 25.4 : undefined,
+  })
+  const isF4 = Math.abs(pageWidthMm - 215) < 3 && Math.abs(pageHeightMm - 330) < 4
+    || Math.abs(pageHeightMm - 215) < 3 && Math.abs(pageWidthMm - 330) < 4
+  const paperSize: PaperSize = isF4 ? 'F4' : 'A4'
+
+  const paragraphStyle = (paragraph: Element, properties: Element[], tabs: number[]) => {
+    const pPr = wordChild(paragraph, 'pPr')
+    const styleId = wordValue(wordChild(pPr, 'pStyle'), 'val')
+    const inherited = chainProperties(styleChain(styleId, 'paragraph'), 'pPr')
+    const lookup = (localName: string, attribute: string) => {
+      const direct = wordValue(wordChild(pPr, localName), attribute)
+      if (direct) return direct
+      for (let index = inherited.length - 1; index >= 0; index -= 1) {
+        const value = wordValue(wordChild(inherited[index], localName), attribute)
+        if (value) return value
+      }
+      return ''
+    }
+    const style: string[] = []
+    const alignment = lookup('jc', 'val')
+    const alignments: Record<string, string> = { both: 'justify', distribute: 'justify', start: 'left', end: 'right' }
+    if (alignment) style.push(`text-align:${alignments[alignment] || alignment}`)
+    for (const [attribute, property] of [['left', 'margin-left'], ['right', 'margin-right']] as const) {
+      const value = lookup('ind', attribute)
+      if (value) style.push(`${property}:${wordTwips(value)}`)
+    }
+    const firstLine = lookup('ind', 'firstLine')
+    const hanging = lookup('ind', 'hanging')
+    if (firstLine) style.push(`text-indent:${wordTwips(firstLine)}`)
+    if (hanging) style.push(`text-indent:-${wordTwips(hanging)}`)
+    const spacing = wordChild(pPr, 'spacing')
+    const before = wordValue(spacing, 'before') || lookup('spacing', 'before')
+    const after = wordValue(spacing, 'after') || lookup('spacing', 'after')
+    const line = wordValue(spacing, 'line') || lookup('spacing', 'line')
+    if (before) style.push(`margin-top:${wordTwips(before)}`)
+    if (after) style.push(`margin-bottom:${wordTwips(after)}`)
+    if (line) {
+      const lineValue = Number(line)
+      const rule = wordValue(spacing, 'lineRule') || lookup('spacing', 'lineRule')
+      if (Number.isFinite(lineValue)) style.push(`line-height:${rule === 'exact' ? `${lineValue / 20}pt` : String(lineValue / 240)}`)
+    }
+    const tabProperties = wordChild(pPr, 'tabs')
+    const positions = wordChildren(tabProperties ?? document.createElement('span'), 'tab')
+      .map(tab => Number(wordValue(tab, 'pos')))
+      .filter(position => Number.isFinite(position) && position > 0)
+      .sort((first, second) => first - second)
+    tabs.splice(0, tabs.length, ...positions)
+    if (tabs.length) style.push(`tab-size:${Math.max(1, Math.round(tabs[0] / 360))}`)
+    const spacingStyle = properties.map(property => property.getAttribute('style') || '').filter(Boolean)
+    style.push(...spacingStyle)
+    return style.join(';')
+  }
+
+  const runStyle = (run: Element, paragraphStyleId: string) => {
+    const rPr = wordChild(run, 'rPr')
+    const runStyleId = wordValue(wordChild(rPr, 'rStyle'), 'val')
+    const inherited = [
+      ...chainProperties(styleChain(paragraphStyleId, 'paragraph'), 'rPr'),
+      ...chainProperties(styleChain(runStyleId, 'character'), 'rPr'),
+    ]
+    const style: string[] = []
+    const values = (name: string, attribute: string) => {
+      const direct = wordValue(wordChild(rPr, name), attribute)
+      if (direct) return direct
+      for (let index = inherited.length - 1; index >= 0; index -= 1) {
+        const value = wordValue(wordChild(inherited[index], name), attribute)
+        if (value) return value
+      }
+      return ''
+    }
+    const size = values('sz', 'val')
+    if (size && Number.isFinite(Number(size))) style.push(`font-size:${Number(size) / 2}pt`)
+    const font = values('rFonts', 'ascii') || values('rFonts', 'hAnsi')
+    if (font) style.push(`font-family:${font.replace(/[^a-zA-Z0-9 ,_-]/g, '')}`)
+    const color = values('color', 'val')
+    if (/^[0-9a-f]{6}$/i.test(color)) style.push(`color:#${color}`)
+    if (wordChild(rPr, 'b')
+      ? wordHasEnabledProperty(rPr, 'b')
+      : inherited.some(item => wordHasEnabledProperty(item, 'b'))) style.push('font-weight:bold')
+    if (wordChild(rPr, 'i')
+      ? wordHasEnabledProperty(rPr, 'i')
+      : inherited.some(item => wordHasEnabledProperty(item, 'i'))) style.push('font-style:italic')
+    const underline = values('u', 'val')
+    if (wordChild(rPr, 'u') && underline !== 'none') style.push('text-decoration:underline')
+    if (wordHasEnabledProperty(rPr, 'strike')) style.push('text-decoration:line-through')
+    return style.join(';')
+  }
+
+  const renderParagraph = (paragraph: Element) => {
+    const pPr = wordChild(paragraph, 'pPr')
+    const styleId = wordValue(wordChild(pPr, 'pStyle'), 'val')
+    const tabs: number[] = []
+    const style = paragraphStyle(paragraph, [], tabs)
+    const segments = ['']
+    const visit = (node: Element) => {
+      if (node.localName === 'r') {
+        Array.from(node.children).forEach(child => {
+          if (child.localName === 'tab') segments.push('')
+          else if (child.localName === 't' || child.localName === 'delText') {
+            const text = escapeHtml(child.textContent ?? '')
+            segments[segments.length - 1] += `<span${runStyle(node, styleId) ? ` style="${escapeHtml(runStyle(node, styleId))}"` : ''}>${text}</span>`
+          } else if (child.localName === 'br' || child.localName === 'cr') {
+            segments[segments.length - 1] += wordValue(child, 'type') === 'page' ? '<br data-page-break="after">' : '<br>'
+          }
+        })
+        return
+      }
+      if (node.localName === 'hyperlink' || node.localName === 'smartTag' || node.localName === 'sdt') {
+        Array.from(node.children).forEach(visit)
+      }
+    }
+    Array.from(paragraph.children).forEach(visit)
+    if (segments.length === 1) return `<p${style ? ` style="${escapeHtml(style)}"` : ''}>${segments[0] || '<br>'}</p>`
+    const columns = segments.map((_, index) => {
+      const position = tabs[index]
+      return position ? `${position / 20}pt` : '1fr'
+    }).join(' ')
+    const cells = segments.map(segment => `<div>${segment}</div>`).join('')
+    return `<div style="display:grid;grid-template-columns:${columns};${style}">${cells}</div>`
+  }
+
+  const renderTable = (table: Element): string => {
+    const tableProperties = wordChild(table, 'tblPr')
+    const width = wordChild(tableProperties, 'tblW')
+    const widthValue = Number(wordValue(width, 'w'))
+    const widthType = wordValue(width, 'type')
+    const tableWidth = widthType === 'pct' && Number.isFinite(widthValue)
+      ? `${widthValue / 50}%`
+      : widthType === 'dxa' && Number.isFinite(widthValue) ? wordTwips(String(widthValue)) : '100%'
+    const gridWidths = wordChildren(wordChild(table, 'tblGrid') ?? document.createElement('span'), 'gridCol')
+      .map(column => Number(wordValue(column, 'w')))
+    const borderProperties = wordChild(tableProperties, 'tblBorders')
+    const hasBorders = borderProperties && wordChildren(borderProperties, 'top').concat(
+      wordChildren(borderProperties, 'bottom'), wordChildren(borderProperties, 'left'),
+      wordChildren(borderProperties, 'right'), wordChildren(borderProperties, 'insideH'),
+      wordChildren(borderProperties, 'insideV'),
+    ).some(border => wordValue(border, 'val') !== 'nil' && wordValue(border, 'val') !== 'none')
+    const columns = gridWidths.length
+      ? `<colgroup>${gridWidths.map(column => `<col style="width:${wordTwips(String(column))}">`).join('')}</colgroup>`
+      : ''
+    const rows = wordChildren(table, 'tr').map(row => {
+      const cells = wordChildren(row, 'tc').map(cell => {
+        const cellProperties = wordChild(cell, 'tcPr')
+        const cellWidth = wordChild(cellProperties, 'tcW')
+        const cellWidthValue = Number(wordValue(cellWidth, 'w'))
+        const cellSpan = Number(wordValue(wordChild(cellProperties, 'gridSpan'), 'val'))
+        const cellStyle = [
+          cellWidthValue > 0 ? `width:${wordTwips(String(cellWidthValue))}` : '',
+          'vertical-align:top',
+          `border:${hasBorders ? '1px solid #000' : '0'}`
+        ].filter(Boolean).join(';')
+        const content = Array.from(cell.children).map(child => child.localName === 'p'
+          ? renderParagraph(child)
+          : child.localName === 'tbl' ? renderTable(child) : '').join('')
+        return `<td${cellSpan > 1 ? ` colspan="${cellSpan}"` : ''}${cellStyle ? ` style="${cellStyle}"` : ''}>${content || '<p><br></p>'}</td>`
+      }).join('')
+      return `<tr>${cells}</tr>`
+    }).join('')
+    const tableIndent = wordValue(wordChild(tableProperties, 'tblInd'), 'w')
+    const tableStyle = [
+      `width:${tableWidth}`,
+      'table-layout:fixed',
+      'border-collapse:collapse',
+      tableIndent ? `margin-left:${wordTwips(tableIndent)}` : '',
+      `border:${hasBorders ? '1px solid #000' : '0'}`
+    ].filter(Boolean).join(';')
+    return `<table style="${tableStyle}">${columns}<tbody>${rows}</tbody></table>`
+  }
+
+  const content = Array.from(body.children).map(child => {
+    if (child.localName === 'p') return renderParagraph(child)
+    if (child.localName === 'tbl') return renderTable(child)
+    return ''
+  }).join('')
+  return { html: content, paperSize, marginsMm }
+}
+
 function isLetterRole(value: unknown): value is LetterRole {
   return typeof value === 'string' && Object.hasOwn(roleLabels, value)
 }
@@ -477,8 +778,8 @@ const roleLabels: Record<LetterRole, string> = { administrator:'Administrator Su
 const rolePageAccess: Record<LetterRole, Page[]> = {
   administrator:nav.map(item=>item.key),
   operator:['dashboard','create','requests','issued','archive','incoming','outgoing','dispositions','templates'],
-  kepala_tu:['dashboard','create','requests','approvals','issued','archive','incoming','outgoing','dispositions'],
-  staf_tu:['dashboard','create','requests','archive','incoming','outgoing','dispositions'],
+  kepala_tu:['dashboard','create','requests','approvals','issued','archive','incoming','outgoing','dispositions','templates'],
+  staf_tu:['dashboard','create','requests','approvals','issued','archive','incoming','outgoing','dispositions','templates'],
   kepala_sekolah:['dashboard','create','requests','approvals','issued','archive','dispositions'],
   guru_staf:['dashboard','create','requests','issued','archive'],
   pemohon:['dashboard','requests','issued','archive']
@@ -511,7 +812,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [loading,setLoading]=useState(true), [sessionReady,setSessionReady]=useState(false), [busy,setBusy]=useState(false), [error,setError]=useState('')
   const [expiryClock,setExpiryClock]=useState(()=>Date.now())
   const [pdfBusy,setPdfBusy]=useState(false), [printing,setPrinting]=useState(false)
-  const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([])
+  const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([]), [outgoing,setOutgoing]=useState<OutgoingLetter[]>([])
   const [categories,setCategories]=useState<LetterCategory[]>([])
   const [signatories,setSignatories]=useState<LetterSignatory[]>([])
   const [notifications,setNotifications]=useState<LetterNotification[]>([]), [search,setSearch]=useState(''), [toast,setToast]=useState('')
@@ -532,6 +833,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const templateHtmlRef=useRef<HTMLTextAreaElement>(null)
   const printPortalRef=useRef<HTMLDivElement>(null)
   const [selectedTemplate,setSelectedTemplate]=useState('')
+  const [requestScope,setRequestScope]=useState<'all'|'mine'>('all')
   const [requestData,setRequestData]=useState<LetterForm>({})
   const [personFields,setPersonFields]=useState<Record<string,PersonOption>>({})
   const [myName,setMyName]=useState('')
@@ -544,6 +846,8 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const isAdmin=role==='administrator'
   const canManageTemplates=isAdmin||role==='operator'
   const activeTemplates=templates.filter(template=>template.is_active!==false)
+  const canUseAllTemplates=role==='administrator'||role==='operator'||role==='kepala_tu'||role==='staf_tu'
+  const requestableTemplates=activeTemplates.filter(template=>canUseAllTemplates||template.available_to_teacher!==false)
   const rolePermissionError=/permission denied for table\s+letter_user_roles/i.test(error)
   const sessionRateLimitError=/\b429\b|rate limit|membatasi pembaruan sesi/i.test(error)
   const roleSourceMigrationError=/letter_current_role|could not find the function/i.test(error)
@@ -608,7 +912,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(loadedUserIdRef.current!==nextUserId){
       loadedUserIdRef.current=nextUserId
       loadRequestRef.current={userId:nextUserId,generation:loadRequestRef.current.generation+1,promise:null}
-      setRole(null);setRequests([]);setTemplates([]);setCategories([]);setSignatories([]);setIncoming([]);setNotifications([]);setError('')
+      setRole(null);setRequests([]);setTemplates([]);setCategories([]);setSignatories([]);setIncoming([]);setOutgoing([]);setNotifications([]);setError('')
       setProfileReady(false)
       setLoading(Boolean(nextUserId))
     }
@@ -643,20 +947,21 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       const {data:roleData,error:roleErr}=await supabase.rpc('letter_current_role')
       const requestRole=!roleErr&&isLetterRole(roleData)?roleData:null
       let requestsQuery=supabase.from('letter_requests')
-        .select('*, letter_templates(name, category_id, requires_principal_approval, requires_number, html_content, fields_schema, page_settings), letter_issued(letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot), letter_approvals(approver_role,decision)')
+        .select('*, letter_templates(name, category_id, requires_principal_approval, requires_number, available_to_teacher, hide_requester_identity, html_content, fields_schema, page_settings), letter_issued(id,letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot), letter_approvals(approver_role,decision)')
         .order('created_at',{ascending:false})
       if(!requestRole||!GLOBAL_REQUEST_ROLES.has(requestRole))requestsQuery=requestsQuery.eq('requester_id',uid)
-      const [{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr}] = await Promise.all([
+      const [{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:outData,error:outErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr}] = await Promise.all([
         requestsQuery,
         supabase.from('letter_templates').select('*, letter_categories(name,code)').order('name'),
         supabase.from('letter_incoming').select('*').order('received_date',{ascending:false}),
+        supabase.from('letter_outgoing').select('*').order('letter_date',{ascending:false}),
         supabase.from('letter_notifications').select('*').order('created_at',{ascending:false}).limit(30),
         supabase.from('letter_categories').select('id,name,code').eq('is_active',true).order('name'),
         supabase.rpc('letter_requester_identity').maybeSingle(),
         supabase.rpc('letter_get_signatories')
       ])
       if(loadRequestRef.current.generation!==generation)return
-      const loadError=roleErr||reqErr||tplErr||inErr||notifErr||categoryErr||identityErr||signatoryErr
+      const loadError=roleErr||reqErr||tplErr||inErr||outErr||notifErr||categoryErr||identityErr||signatoryErr
       setError(loadError?(isSupabaseRateLimitError(loadError)?`HTTP 429: ${loadError.message}`:loadError.message):'')
       if(!roleErr)setRole(isLetterRole(roleData)?roleData:null)
       if(!reqErr)setRequests(reqData||[])
@@ -666,6 +971,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         fields_schema:Array.isArray(t.fields_schema)?t.fields_schema.map(normalizeTemplateField):[],
       })))
       if(!inErr)setIncoming(inData||[])
+      if(!outErr)setOutgoing(outData||[])
       if(!notifErr)setNotifications(notifData||[])
       if(!categoryErr)setCategories(categoryData??[])
       if(!identityErr){
@@ -770,17 +1076,20 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     e.preventDefault()
     if(role==='pemohon'){notify('Akun siswa tidak dapat mengajukan surat.');return}
     if(!session){notify('Sesi login tidak tersedia. Masuk kembali untuk melanjutkan.');return}
-    if(!profileReady||!myName.trim()){notify('Identitas akun belum tersedia. Muat ulang data sebelum mengajukan surat.');return}
     const template=activeTemplates.find(item=>item.id===selectedTemplate)
       ||(requestDraftId?templates.find(item=>item.id===selectedTemplate):undefined)
     if(!template){notify('Pilih format surat aktif dari database.');return}
+    if(!profileReady||(!template.hide_requester_identity&&!myName.trim())){
+      notify('Identitas akun belum tersedia. Muat ulang data sebelum mengajukan surat.')
+      return
+    }
     const editingRequest=requestDraftId?requests.find(request=>request.id===requestDraftId):undefined
 
     setBusy(true)
     const payload={
       template_id:template.id,
       requester_id:session.user.id,
-      requester_name:myName.trim(),
+      requester_name:myName.trim()||'Pengaju internal',
       requester_nip:myNip.trim()||null,
       requester_position:myPosition.trim()||null,
       subject:form.subject?.trim()||template.subject||template.name,
@@ -908,6 +1217,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       requires_principal_approval:'false',
       requires_number:'true',
       is_active:'true',
+      available_to_teacher:'true',
+      hide_requester_identity:'false',
+      margin_top_mm:'18',
+      margin_right_mm:'17',
+      margin_bottom_mm:'18',
+      margin_left_mm:'17',
     })
     setTemplateFields(detectTemplateFields('<p>{nomor_surat} {lampiran} {perihal} {tujuan} {isi_surat}</p>'))
     setModal({type:'template'})
@@ -927,6 +1242,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       requires_principal_approval:String(Boolean(template.requires_principal_approval)),
       requires_number:String(template.requires_number!==false),
       is_active:String(template.is_active!==false),
+      available_to_teacher:String(template.available_to_teacher!==false),
+      hide_requester_identity:String(Boolean(template.hide_requester_identity)),
+      margin_top_mm:String(normalizePageMargins(template.page_settings?.margins_mm).top),
+      margin_right_mm:String(normalizePageMargins(template.page_settings?.margins_mm).right),
+      margin_bottom_mm:String(normalizePageMargins(template.page_settings?.margins_mm).bottom),
+      margin_left_mm:String(normalizePageMargins(template.page_settings?.margins_mm).left),
     })
     setModal({type:'template'})
   }
@@ -952,17 +1273,25 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const html=String(form.html_content||'').trim()
     if(!html){notify('Isi format surat wajib diisi.');setBusy(false);return}
     const fields=detectTemplateFields(html,templateFields)
+    const marginsMm=normalizePageMargins({
+      top:Number(form.margin_top_mm),
+      right:Number(form.margin_right_mm),
+      bottom:Number(form.margin_bottom_mm),
+      left:Number(form.margin_left_mm),
+    })
     const payload={
       name:String(form.name||'').trim(),
       description:String(form.description||'').trim()||null,
       category_id:String(form.category_id||'')||null,
       subject:String(form.subject||'').trim()||String(form.name||'').trim(),
       html_content:sanitizeTemplateHtml(html),
-      page_settings:{size:normalizePaperSize(form.paper_size),margin_mm:22,logo_position:logoPosition},
+      page_settings:{size:normalizePaperSize(form.paper_size),margin_mm:marginsMm.top,margins_mm:marginsMm,logo_position:logoPosition},
       fields_schema:fields,
       requires_principal_approval:form.requires_principal_approval==='true',
       requires_number:form.requires_number!=='false',
       is_active:form.is_active!=='false',
+      available_to_teacher:form.available_to_teacher!=='false',
+      hide_requester_identity:form.hide_requester_identity==='true',
       source_file_path:templateSourceFilePath||null,
       updated_by:session.user.id,
     }
@@ -987,10 +1316,17 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     setBusy(true)
     try{
       let html=''
+      let paperSize:PaperSize='A4'
+      let marginsMm=normalizePageMargins()
       if(extension==='docx'){
-        const mammoth=await import('mammoth')
-        const converted=await mammoth.convertToHtml({arrayBuffer:await file.arrayBuffer()})
-        html=converted.value
+        const archive=await JSZip.loadAsync(await file.arrayBuffer())
+        const documentXml=await archive.file('word/document.xml')?.async('string')
+        if(!documentXml)throw new Error('DOCX tidak memiliki word/document.xml.')
+        const stylesXml=await archive.file('word/styles.xml')?.async('string')??null
+        const converted=parseDocxTemplateXml(documentXml,stylesXml)
+        html=converted.html
+        paperSize=converted.paperSize
+        marginsMm=converted.marginsMm
       }else{
         const [pdfjsLib,pdfWorker]=await Promise.all([
           import('pdfjs-dist'),
@@ -999,21 +1335,45 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         pdfjsLib.GlobalWorkerOptions.workerSrc=pdfWorker.default
         const document=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise
         const paragraphs:string[]=[]
+        let detectedSize:PaperSize|null=null
         for(let pageNumber=1;pageNumber<=document.numPages;pageNumber+=1){
           const page=await document.getPage(pageNumber)
+          const viewport=page.getViewport({scale:1})
+          const pageWidthMm=viewport.width*25.4/72
+          const pageHeightMm=viewport.height*25.4/72
+          if(!detectedSize){
+            if(Math.abs(pageWidthMm-215)<3&&Math.abs(pageHeightMm-330)<4
+              ||Math.abs(pageHeightMm-215)<3&&Math.abs(pageWidthMm-330)<4)detectedSize='F4'
+            else detectedSize='A4'
+            paperSize=detectedSize
+          }
           const content=await page.getTextContent()
-          const lines=new Map<number,Array<{x:number;text:string}>>()
+          const pageItems:string[]=[]
           for(const item of content.items){
             if(!('str' in item)||!item.str.trim())continue
-            const y=Math.round(item.transform[5])
-            const line=lines.get(y)??[]
-            line.push({x:item.transform[4],text:item.str})
-            lines.set(y,line)
+            const [x, baselineY]=viewport.convertToViewportPoint(item.transform[4],item.transform[5])
+            const fontSize=Math.max(1,Math.hypot(item.transform[2],item.transform[3]))
+            const styleName=String(item.fontName||'')
+            const pdfStyle=content.styles[item.fontName]
+            const fontStyle=/italic|oblique/i.test(styleName)?'italic':'normal'
+            const fontWeight=/bold|black|demi|heavy/i.test(styleName)?'bold':'normal'
+            const fontFamily=(pdfStyle?.fontFamily||(/times|serif/i.test(styleName)?'serif':/courier|mono/i.test(styleName)?'monospace':'Arial,sans-serif'))
+              .replace(/[;<>]/g,'')
+            const rotation=Math.atan2(item.transform[1],item.transform[0])*180/Math.PI
+            const left=Math.max(0,Math.min(100,x/viewport.width*100))
+            const top=Math.max(0,Math.min(100,(baselineY-fontSize*.82)/viewport.height*100))
+            const pageWidthPoints=(paperSize==='F4'?215:210)*72/25.4
+            const scaleToPaper=pageWidthPoints/viewport.width
+            const scaledFontSize=fontSize*scaleToPaper
+            const scaledWidth=item.width*scaleToPaper
+            pageItems.push(`<span style="position:absolute;left:${left}%;top:${top}%;display:inline-block;width:${scaledWidth}pt;font-size:${scaledFontSize}pt;font-family:${fontFamily};font-style:${fontStyle};font-weight:${fontWeight};line-height:1;white-space:pre;transform:rotate(${rotation}deg)">${escapeHtml(item.str)}</span>`)
           }
-          paragraphs.push(...[...lines.entries()]
-            .sort(([first],[second])=>second-first)
-            .map(([,line])=>`<p>${escapeHtml(line.sort((first,second)=>first.x-second.x).map(item=>item.text).join(' ').trim())}</p>`))
+          const mappedPageWidthMm=paperSize==='F4'?215:210
+          const mappedPageHeightMm=paperSize==='F4'?330:297
+          const breakStyle=pageNumber>1?'margin:0 -17mm':'margin:-18mm -17mm 0'
+          paragraphs.push(`<div${pageNumber>1?' data-page-break="before"':''} style="position:relative;width:${mappedPageWidthMm}mm;height:${mappedPageHeightMm}mm;${breakStyle}">${pageItems.join('')}</div>`)
         }
+        paperSize=detectedSize||'A4'
         html=paragraphs.join('')
         if(!html.trim())throw new Error('PDF tidak memiliki teks yang dapat diekstrak. Gunakan PDF berbasis teks atau unggah file DOCX.')
       }
@@ -1026,7 +1386,15 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       })
       if(uploadError)throw uploadError
       setTemplateSourceFilePath(filePath)
-      setForm(previous=>({...previous,html_content:html}))
+      setForm(previous=>({
+        ...previous,
+        html_content:html,
+        paper_size:paperSize,
+        margin_top_mm:String(marginsMm.top),
+        margin_right_mm:String(marginsMm.right),
+        margin_bottom_mm:String(marginsMm.bottom),
+        margin_left_mm:String(marginsMm.left),
+      }))
       setTemplateFields(detectTemplateFields(html,templateFields))
       notify(`Dokumen ${extension.toUpperCase()} berhasil dibaca. Periksa pratinjau dan skema variabel.`)
     }catch(error){
@@ -1041,6 +1409,11 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const {error}=await supabase.from('letter_incoming').insert({...form,created_by:session.user.id})
     if(error)notify(error.message);else{notify('Surat masuk berhasil dicatat');setModal(null);setForm({});await loadAll(true)}
     setBusy(false)
+  }
+  async function downloadOutgoingAttachment(path:string){
+    const {data,error}=await supabase.storage.from('letter-files').createSignedUrl(path,60)
+    if(error){notify(`Lampiran surat keluar gagal dibuka: ${error.message}`);return}
+    window.open(data.signedUrl,'_blank','noopener,noreferrer')
   }
   async function markRequestDownloaded(request:LetterRequest):Promise<boolean>{
     if(!session||request.requester_id!==session.user.id||!isRequestExpiryEligible(request)||request.downloaded_at)return true
@@ -1058,9 +1431,15 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const fields=activeTemplate?.fields_schema||request.letter_templates?.fields_schema||[]
     if(!html)return null
     return {
-      html:renderTemplateContent(html,requestDocumentValues(request,schoolSettings,signatories),fields),
+      html:renderTemplateContent(
+        html,
+        requestDocumentValues(request,schoolSettings,signatories),
+        fields,
+        Boolean(activeTemplate?.hide_requester_identity||request.letter_templates?.hide_requester_identity),
+      ),
       header:makeLetterheadHtml(schoolSettings,letterheadSlot,activeTemplate?.page_settings?.logo_position||request.letter_templates?.page_settings?.logo_position||'top'),
       paperSize:normalizePaperSize(activeTemplate?.page_settings?.size||request.letter_templates?.page_settings?.size),
+      marginsMm:normalizePageMargins(activeTemplate?.page_settings?.margins_mm||request.letter_templates?.page_settings?.margins_mm),
       isDraft:!isRequestExpiryEligible(request),
       title:request.subject,
     }
@@ -1141,7 +1520,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       paper.className=`letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}`
       Object.assign(paper.style,{
         width:`${pageWidth}mm`,height:'auto',minHeight:`${pageHeight}mm`,maxWidth:'none',
-        margin:'0',padding:'18mm 17mm',boxShadow:'none',overflow:'visible',
+        margin:'0',
+        padding:`${documentMarkup.marginsMm.top}mm ${documentMarkup.marginsMm.right}mm ${documentMarkup.marginsMm.bottom}mm ${documentMarkup.marginsMm.left}mm`,
+        boxShadow:'none',overflow:'visible',
       })
       if(documentMarkup.isDraft){
         const watermark=document.createElement('span')
@@ -1267,7 +1648,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     nip_bendahara:schoolOfficerTokenValue('nip_bendahara',schoolSettings,signatories)||requestData.nip_bendahara||'',
   }
   const livePreviewHtml=selectedTemplateRecord
-    ?renderTemplateContent(selectedTemplateRecord.html_content||'',liveFormValues,selectedTemplateRecord.fields_schema)
+    ?renderTemplateContent(
+      selectedTemplateRecord.html_content||'',
+      liveFormValues,
+      selectedTemplateRecord.fields_schema,
+      Boolean(selectedTemplateRecord.hide_requester_identity),
+    )
     :''
   const previewDocument=previewRequest?getRequestTemplate(previewRequest):null
   function insertTemplateToken(name:string){
@@ -1343,10 +1729,11 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     /></label>
   }
   const stats=[
-    ['Total Pengajuan',ownRequests.length,Files],['Surat Diproses',ownRequests.filter(r=>isLetterInProgress(r.status)&&!isFinalNoNumberApproval(r)).length,ClipboardCheck],
-    ['Diterbitkan',ownRequests.filter(r=>r.status==='issued').length,Send],['Perlu Revisi',ownRequests.filter(r=>r.status==='revision').length,RefreshCw]
+    ['Total Pengajuan',(isAdmin?requests:ownRequests).length,Files],['Surat Diproses',(isAdmin?requests:ownRequests).filter(r=>isLetterInProgress(r.status)&&!isFinalNoNumberApproval(r)).length,ClipboardCheck],
+    ['Diterbitkan',(isAdmin?requests:ownRequests).filter(r=>r.status==='issued'||isFinalNoNumberApproval(r)).length,Send],['Perlu Revisi',(isAdmin?requests:ownRequests).filter(r=>r.status==='revision').length,RefreshCw]
   ] as const
-  const pendingDownloadCount=ownRequests.filter(request=>isRequestExpiryEligible(request)&&!request.downloaded_at).length
+  const dashboardRequests=isAdmin?requests:ownRequests
+  const pendingDownloadCount=dashboardRequests.filter(request=>isRequestExpiryEligible(request)&&!request.downloaded_at).length
   const roleScopedRequests=role==='pemohon'||role==='guru_staf'?ownVisibleRequests:visibleRequests
   if(!session) return <div className="letter-app"><div className="sso-state"><div className="sso-card"><div className="brand-mark">7</div><span className="eyebrow">SUPER APP · SMAN 7 MAROS</span><h1>{sessionReady?'Sesi masuk tidak ditemukan':'Memverifikasi sesi masuk'}</h1><p>{sessionReady?error||'Persuratan menggunakan sesi login dari Super App. Kembali ke halaman utama untuk masuk.':'Memeriksa sesi Super App…'}</p>{sessionReady&&onBack&&<button className="primary" onClick={onBack}><ChevronLeft size={17}/> Kembali ke Super App</button>}</div></div></div>
   return <><div className="letter-app"><div className="app-shell">
@@ -1373,14 +1760,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           </div>
         </div>:<>
         {error&&<div className="error" role="alert">{error}</div>}
-        {page==='dashboard'&&<><div className="welcome"><div><span className="eyebrow light">SUPER APP · {schoolSettings?.school_name||'SMAN 7 MAROS'}</span><h1>Persuratan Digital</h1><p>Pantau pengajuan, persetujuan, surat terbit, dan arsip administrasi sekolah dalam satu tempat.</p></div><div className="welcome-icon"><span className="welcome-art-icon"><Sparkles size={22}/></span><strong>Administrasi surat</strong><small>Terstruktur & terdokumentasi</small><span className="welcome-bars"><i/><i/><i/><i/><i/></span></div></div><div className="stat-grid">{stats.map(([label,value,Icon],i)=><div className="stat-card" style={{'--delay':`${i*70}ms`} as CSSProperties} key={label}><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={19}/></div></div><strong>{value}</strong><small>Ajuan milik Anda</small></div>)}</div>{pendingDownloadCount>0&&<div className="letter-expiry-alert" role="status"><Bell size={18}/><span><b>Segera unduh surat Anda</b>{pendingDownloadCount===1?' Ada 1 surat selesai yang belum diunduh.':' Ada '+pendingDownloadCount+' surat selesai yang belum diunduh.'} Surat dihapus otomatis 48 jam setelah diterbitkan/disetujui final.</span></div>}<div className="panel"><div className="panel-head"><div><h3>Pengajuan terbaru</h3><p>Aktivitas surat yang Anda ajukan</p></div><button className="text-btn" onClick={()=>setPage('requests')}>Lihat semua <ChevronRight size={16}/></button></div><RequestTable rows={ownRequests.slice(0,5)} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role} now={expiryClock}/></div></>}
+        {page==='dashboard'&&<><div className="welcome"><div><span className="eyebrow light">SUPER APP · {schoolSettings?.school_name||'SMAN 7 MAROS'}</span><h1>Persuratan Digital</h1><p>Pantau pengajuan, persetujuan, surat terbit, dan arsip administrasi sekolah dalam satu tempat.</p></div><div className="welcome-icon"><span className="welcome-art-icon"><Sparkles size={22}/></span><strong>Administrasi surat</strong><small>Terstruktur & terdokumentasi</small><span className="welcome-bars"><i/><i/><i/><i/><i/></span></div></div><div className="stat-grid">{stats.map(([label,value,Icon],i)=><div className="stat-card" style={{'--delay':`${i*70}ms`} as CSSProperties} key={label}><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={19}/></div></div><strong>{value}</strong><small>{isAdmin?'Seluruh pengguna':'Ajuan milik Anda'}</small></div>)}</div>{pendingDownloadCount>0&&<div className="letter-expiry-alert" role="status"><Bell size={18}/><span><b>{isAdmin?'Pantau surat selesai yang belum diunduh':'Segera unduh surat Anda'}</b>{pendingDownloadCount===1?' Ada 1 surat selesai yang belum diunduh.':' Ada '+pendingDownloadCount+' surat selesai yang belum diunduh.'} Surat dihapus otomatis 48 jam setelah diterbitkan/disetujui final.</span></div>}<div className="panel"><div className="panel-head"><div><h3>{isAdmin?'Pengajuan terbaru seluruh pengguna':'Pengajuan terbaru'}</h3><p>{isAdmin?'Aktivitas pengajuan surat dari seluruh pengguna':'Aktivitas surat yang Anda ajukan'}</p></div><button className="text-btn" onClick={()=>setPage('requests')}>Lihat semua <ChevronRight size={16}/></button></div><RequestTable rows={dashboardRequests.slice(0,5)} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role} now={expiryClock}/></div></>}
         {page==='create'&&role!=='pemohon'&&<div className="request-create-layout">
           <div className="panel form-panel">
             <div className="panel-head"><div><h3>{requestDraftId?'Perbarui pengajuan surat':'Buat pengajuan surat'}</h3><p>Pilih format dan lengkapi informasi yang dibutuhkan.</p></div><FilePlus2 className="panel-symbol"/></div>
             <form onSubmit={createRequest} className="form-grid request-form">
               <label className="span-2">Format surat
                 <select value={selectedTemplate} onChange={event=>{
-                  const nextTemplate=activeTemplates.find(template=>template.id===event.target.value)
+                  const nextTemplate=requestableTemplates.find(template=>template.id===event.target.value)
                   setSelectedTemplate(event.target.value)
                   setRequestData(Object.fromEntries((nextTemplate?.fields_schema||[])
                     .filter(field=>{
@@ -1399,16 +1786,19 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
                 }} required>
                   <option value="">Pilih format surat</option>
                   {requestDraftId&&selectedTemplateRecord?.is_active===false&&<option value={selectedTemplateRecord.id}>{selectedTemplateRecord.name} (format nonaktif - pengajuan lama)</option>}
-                  {activeTemplates.map(template=><option key={template.id} value={template.id}>{template.name}</option>)}
+                  {requestableTemplates.map(template=><option key={template.id} value={template.id}>{template.name}</option>)}
                 </select>
-                {!activeTemplates.length&&<small>Belum ada template aktif. Hubungi Administrator atau Operator Persuratan.</small>}
+                {!requestableTemplates.length&&<small>Belum ada template aktif yang diizinkan untuk peran Anda. Hubungi Administrator atau Operator Persuratan.</small>}
               </label>
-              <div className="requester-identity-card span-2">
+              {!selectedTemplateRecord?.hide_requester_identity&&<div className="requester-identity-card span-2">
                 <span className="requester-identity-icon"><UserRound size={18}/></span>
                 <div><small>IDENTITAS PENGAJU · OTOMATIS</small><strong>{myName||'Memuat identitas...'}</strong><span>{[myNip,myPosition].filter(Boolean).join(' · ')||'Data akun terhubung melalui Data Induk'}</span></div>
-              </div>
+              </div>}
               <label className="span-2">Perihal pengajuan<input value={form.subject||''} onChange={event=>setForm(previous=>({...previous,subject:event.target.value}))} placeholder="Perihal surat" required/></label>
-              {(selectedTemplateRecord?.fields_schema||[]).map(renderTemplateField)}
+              {(selectedTemplateRecord?.fields_schema||[])
+                .filter(field=>!selectedTemplateRecord?.hide_requester_identity
+                  ||(field.type!=='auto_user'&&!USER_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID'))))
+                .map(renderTemplateField)}
               {selectedTemplateRecord?.requires_principal_approval&&<p className="letter-approval-hint span-2">Format ini memerlukan persetujuan Kepala Sekolah setelah pemeriksaan Kepala Tata Usaha.</p>}
               <div className="span-2 form-actions">
                 <button type="button" className="secondary" onClick={()=>setPage('requests')}>Batal</button>
@@ -1421,13 +1811,20 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
             <div className="panel-head"><div><h3>Pratinjau surat</h3><p>Berubah langsung mengikuti isian.</p></div><span className="live-preview-badge"><i/> LIVE</span></div>
             {selectedTemplateRecord?<FitLetterPreview
               paperSize={normalizePaperSize(selectedTemplateRecord.page_settings?.size)}
+              marginsMm={normalizePageMargins(selectedTemplateRecord.page_settings?.margins_mm)}
               watermark="KONSEP / BELUM BERNOMOR"
               html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,selectedTemplateRecord.page_settings?.logo_position||'top')}<article class="letter-template-body">${livePreviewHtml}</article>`}
               className="request-fit-preview"
             />:<div className="letter-preview-empty"><FileText size={28}/><strong>Pilih format surat</strong><span>Pratinjau dokumen akan muncul di sini.</span></div>}
           </aside>
         </div>}
-        {page==='requests'&&<DataPanel title="Daftar pengajuan surat" subtitle="Pantau status dan riwayat pengajuan surat milik Anda." search={search} setSearch={setSearch} action={role!=='pemohon'?()=>setPage('create'):undefined} actionLabel="Ajukan surat"><RequestTable rows={ownVisibleRequests} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
+        {page==='requests'&&<DataPanel title="Daftar pengajuan surat" subtitle={role==='administrator'?'Pantau seluruh pengajuan atau batasi ke ajuan milik Anda.':'Pantau status dan riwayat pengajuan surat.'} search={search} setSearch={setSearch} action={role!=='pemohon'?()=>setPage('create'):undefined} actionLabel="Ajukan surat">
+          {role==='administrator'&&<div className="request-scope-tabs" role="group" aria-label="Filter pengajuan">
+            <button type="button" className={requestScope==='all'?'active':''} onClick={()=>setRequestScope('all')}>Semua Pengajuan</button>
+            <button type="button" className={requestScope==='mine'?'active':''} onClick={()=>setRequestScope('mine')}>Ajuan Saya</button>
+          </div>}
+          <RequestTable rows={role==='administrator'&&requestScope==='mine'?ownVisibleRequests:role==='pemohon'||role==='guru_staf'?ownVisibleRequests:visibleRequests} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} onEdit={editRequest} ownerId={session.user.id} role={role} now={expiryClock}/>
+        </DataPanel>}
         {page==='approvals'&&<DataPanel title="Pemeriksaan dan persetujuan" subtitle="Tinjau pengajuan yang menunggu keputusan administratif." search={search} setSearch={setSearch}><RequestTable rows={visibleRequests.filter(request=>{
           if(!['submitted','resubmitted','in_review','approved'].includes(request.status)||isFinalNoNumberApproval(request))return false
           if(role!=='kepala_sekolah'||request.status!=='approved')return true
@@ -1436,9 +1833,27 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         })} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPreview={openPreview} onPrint={printLetter} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
         {page==='issued'&&<DataPanel title="Surat terbit" subtitle="Dokumen yang telah memperoleh nomor atau disetujui tanpa nomor." search={search} setSearch={setSearch}><RequestTable rows={roleScopedRequests.filter(r=>r.status==='issued'||isFinalNoNumberApproval(r))} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
         {page==='archive'&&<DataPanel title="Arsip digital" subtitle="Arsip surat terbit dan dokumen administrasi." search={search} setSearch={setSearch}><RequestTable rows={roleScopedRequests.filter(r=>['issued','archived'].includes(r.status)||isFinalNoNumberApproval(r))} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role} now={expiryClock}/></DataPanel>}
-        {page==='templates'&&<div className="panel"><div className="panel-head"><div><h3>{canManageTemplates?'Manajemen format surat':'Format surat tersedia'}</h3><p>{canManageTemplates?'Kelola, impor, dan atur template dinamis yang digunakan pada pengajuan.':'Format aktif yang dapat dipilih saat membuat pengajuan.'}</p></div>{canManageTemplates&&<button className="primary" onClick={openNewTemplate}><Upload size={17}/> Upload & Buat Format Surat</button>}</div><div className="template-grid">{(canManageTemplates?templates:activeTemplates).map(template=><div className={`template-card${template.is_active===false?' is-inactive':''}`} key={template.id}><div className="template-icon"><FileText/></div><h4>{template.name}</h4><p>{template.description||'Format surat sekolah'}</p><span className="soft-tag">{template.category?.name||'Umum'}</span>{canManageTemplates&&<div className="template-actions"><button type="button" className="secondary" onClick={()=>editTemplate(template)}><Pencil size={14}/> Edit</button><button type="button" className="secondary" onClick={()=>duplicateTemplate(template)}><Copy size={14}/> Duplikat</button>{template.is_active!==false?<button type="button" className="template-disable" onClick={()=>void deactivateTemplate(template)}><Trash2 size={14}/> Nonaktifkan</button>:<button type="button" className="secondary" onClick={()=>void activateTemplate(template)}><Check size={14}/> Aktifkan</button>}</div>}</div>)}</div>{!templates.length&&<div className="table-empty"><FileText size={25}/><b>Belum ada template di database</b><span>Administrator atau Operator dapat mengunggah format DOCX/PDF.</span></div>}</div>}
+        {page==='templates'&&<div className="panel"><div className="panel-head"><div><h3>{canManageTemplates?'Manajemen format surat':'Format surat tersedia'}</h3><p>{canManageTemplates?'Kelola, impor, dan atur template dinamis yang digunakan pada pengajuan.':'Format aktif yang dapat dipilih saat membuat pengajuan.'}</p></div>{canManageTemplates&&<button className="primary" onClick={openNewTemplate}><Upload size={17}/> Upload & Buat Format Surat</button>}</div><div className="template-grid">{(canManageTemplates?templates:activeTemplates.filter(template=>canUseAllTemplates||template.available_to_teacher!==false)).map(template=><div className={`template-card${template.is_active===false?' is-inactive':''}`} key={template.id}><div className="template-icon"><FileText/></div><h4>{template.name}</h4><p>{template.description||'Format surat sekolah'}</p><span className="soft-tag">{template.category?.name||'Umum'}</span><div className="template-access-tags"><span className={`soft-tag${template.available_to_teacher===false?' is-restricted':''}`}>{template.available_to_teacher===false?'Khusus TU & Administrator':'Guru / Staf diizinkan'}</span>{template.hide_requester_identity&&<span className="soft-tag">Tanpa identitas pengaju</span>}</div>{canManageTemplates&&<div className="template-actions"><button type="button" className="secondary" onClick={()=>editTemplate(template)}><Pencil size={14}/> Edit</button><button type="button" className="secondary" onClick={()=>duplicateTemplate(template)}><Copy size={14}/> Duplikat</button>{template.is_active!==false?<button type="button" className="template-disable" onClick={()=>void deactivateTemplate(template)}><Trash2 size={14}/> Nonaktifkan</button>:<button type="button" className="secondary" onClick={()=>void activateTemplate(template)}><Check size={14}/> Aktifkan</button>}</div>}</div>)}</div>{!templates.length&&<div className="table-empty"><FileText size={25}/><b>Belum ada template di database</b><span>Administrator atau Operator dapat mengunggah format DOCX/PDF.</span></div>}</div>}
         {page==='incoming'&&<DataPanel title="Surat masuk" subtitle="Catat surat yang diterima sekolah." search={search} setSearch={setSearch} action={()=>{setForm({});setModal({type:'incoming'})}} actionLabel="Catat surat masuk"><div className="simple-list">{incoming.filter(x=>!search||`${x.external_number} ${x.sender} ${x.subject}`.toLowerCase().includes(search.toLowerCase())).map(x=><div className="simple-row" key={x.id}><div className="template-icon"><Inbox/></div><div className="grow"><b>{x.subject}</b><small>{x.external_number} · {x.sender} · {x.received_date}</small></div><span className="soft-tag">{x.follow_up_status}</span></div>)}</div></DataPanel>}
-        {page==='outgoing'&&<div className="empty-state"><Mail size={36}/><h3>Surat keluar</h3><p>Surat yang diterbitkan melalui alur pengajuan otomatis tercatat pada Surat Terbit dan Arsip. Pencatatan surat keluar eksternal tersedia pada pengembangan berikutnya.</p></div>}
+        {page==='outgoing'&&<DataPanel title="Surat keluar resmi" subtitle="Surat terbit dari alur pengajuan dan pencatatan surat keluar." search={search} setSearch={setSearch}>
+          <h4 className="outgoing-section-title">Surat dari pengajuan</h4>
+          <RequestTable rows={roleScopedRequests.filter(request=>
+            (request.status==='issued'||isFinalNoNumberApproval(request))
+            &&(!search||`${request.request_code} ${request.subject} ${request.requester_name} ${request.status}`.toLowerCase().includes(search.toLowerCase()))
+          )} onSubmit={submitRequest} onReview={review} onIssue={openIssue} onPrint={printLetter} onPreview={openPreview} ownerId={session.user.id} role={role} now={expiryClock}/>
+          <h4 className="outgoing-section-title">Pencatatan surat keluar</h4>
+          <div className="simple-list">{outgoing.filter(item=>{
+            const query=search.toLocaleLowerCase('id-ID')
+            return !query||`${item.external_number||''} ${item.recipient} ${item.subject} ${item.delivery_status}`.toLocaleLowerCase('id-ID').includes(query)
+          }).map(item=>{
+            const linkedRequest=requests.find(request=>{
+              const issued=Array.isArray(request.letter_issued)?request.letter_issued[0]:request.letter_issued
+              return issued?.id===item.issued_id
+            })
+            return <div className="simple-row" key={item.id}><div className="template-icon"><Mail/></div><div className="grow"><b>{item.subject}</b><small>{item.external_number||'Tanpa nomor'} · {item.recipient} · {item.letter_date}</small></div><span className="soft-tag">{item.delivery_status}</span><div className="row-actions">{linkedRequest&&<><button type="button" title="Pratinjau surat keluar" aria-label="Pratinjau surat keluar" onClick={()=>openPreview(linkedRequest)}><Eye size={16}/></button>{isRequestExpiryEligible(linkedRequest)&&<button type="button" title="Cetak surat keluar" aria-label="Cetak surat keluar" onClick={()=>printLetter(linkedRequest)}><Printer size={16}/></button>}</>}{item.attachment_path&&<button type="button" title="Buka lampiran" aria-label="Buka lampiran" onClick={()=>void downloadOutgoingAttachment(item.attachment_path!)}><Download size={16}/></button>}</div></div>
+          })}</div>
+          {!outgoing.length&&<p className="muted">Belum ada pencatatan surat keluar terpisah.</p>}
+        </DataPanel>}
         {page==='dispositions'&&<div className="empty-state"><BookOpen size={36}/><h3>Disposisi surat</h3><p>Struktur data disposisi telah disiapkan. Antarmuka penugasan dan tindak lanjut perlu diaktifkan pada tahap integrasi lanjutan.</p></div>}
         </>}
       </section>
@@ -1452,7 +1867,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           <label>Kategori<select value={form.category_id||''} onChange={event=>setForm(previous=>({...previous,category_id:event.target.value}))}><option value="">Umum</option>{categories.map(category=><option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
           <label className="template-approval-toggle"><input type="checkbox" checked={form.requires_principal_approval==='true'} onChange={event=>setForm(previous=>({...previous,requires_principal_approval:String(event.target.checked)}))}/> Memerlukan persetujuan Kepala Sekolah</label>
           <label className="template-approval-toggle"><input type="checkbox" checked={form.requires_number!=='false'} onChange={event=>setForm(previous=>({...previous,requires_number:String(event.target.checked)}))}/> Memerlukan penerbitan nomor surat</label>
-          <label className="template-approval-toggle"><input type="checkbox" checked={form.is_active!=='false'} onChange={event=>setForm(previous=>({...previous,is_active:String(event.target.checked)}))}/> Format aktif dan tersedia untuk pengajuan</label>
+          <label className="template-approval-toggle"><input type="checkbox" checked={form.is_active!=='false'} onChange={event=>setForm(previous=>({...previous,is_active:String(event.target.checked)}))}/> Format aktif</label>
+          <label className="template-approval-toggle"><input type="checkbox" checked={form.available_to_teacher!=='false'} onChange={event=>setForm(previous=>({...previous,available_to_teacher:String(event.target.checked)}))}/> Tersedia untuk Guru / Staf</label>
+          <label className="template-approval-toggle"><input type="checkbox" checked={form.hide_requester_identity==='true'} onChange={event=>setForm(previous=>({...previous,hide_requester_identity:String(event.target.checked)}))}/> Tanpa identitas pengaju (dokumen kelembagaan / SK)</label>
+          <label>Margin atas (mm)<input type="number" min="0" max="80" step="0.5" value={form.margin_top_mm||'18'} onChange={event=>setForm(previous=>({...previous,margin_top_mm:event.target.value}))}/></label>
+          <label>Margin kanan (mm)<input type="number" min="0" max="80" step="0.5" value={form.margin_right_mm||'17'} onChange={event=>setForm(previous=>({...previous,margin_right_mm:event.target.value}))}/></label>
+          <label>Margin bawah (mm)<input type="number" min="0" max="80" step="0.5" value={form.margin_bottom_mm||'18'} onChange={event=>setForm(previous=>({...previous,margin_bottom_mm:event.target.value}))}/></label>
+          <label>Margin kiri (mm)<input type="number" min="0" max="80" step="0.5" value={form.margin_left_mm||'17'} onChange={event=>setForm(previous=>({...previous,margin_left_mm:event.target.value}))}/></label>
           <label className="template-file-upload"><Upload size={17}/><span>Unggah format DOCX / PDF</span><input type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" disabled={busy} onChange={event=>{void importTemplateFile(event.target.files?.[0]??null);event.target.value=''}}/></label>
           {templateSourceFilePath&&<small className="template-source-path">File sumber tersimpan: {templateSourceFilePath.split('/').pop()}</small>}
         </div>
@@ -1483,12 +1904,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
               <label><span>Kop surat</span><select aria-label="Pilih kop surat untuk pratinjau" value={letterheadSlot} onChange={event=>setLetterheadSlot(event.target.value as LetterheadSlot)}><option value="1">Kop Surat 1</option><option value="2">Kop Surat 2</option><option value="3">Kop Surat 3</option></select></label>
               <label><span>Tampilan kop{letterheadSlot==='2'&&logoPosition!=='none'?' · Kop 2 tetap kiri-kanan':''}</span><select aria-label="Pilih tampilan kop surat" value={logoPosition} title={letterheadSlot==='2'?'Kop Surat 2 menggunakan susunan dua logo kiri-kanan.':''} onChange={event=>setLogoPosition(event.target.value as LogoPosition)}><option value="top" disabled={letterheadSlot==='2'}>Kop · logo di atas</option><option value="left" disabled={letterheadSlot==='2'}>Kop · logo di kiri</option><option value="none">Tanpa kop surat</option></select></label>
             </div>
-            <FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,logoPosition)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{
+            <FitLetterPreview paperSize={normalizePaperSize(form.paper_size)} marginsMm={normalizePageMargins({
+              top:Number(form.margin_top_mm),right:Number(form.margin_right_mm),bottom:Number(form.margin_bottom_mm),left:Number(form.margin_left_mm),
+            })} html={`${makeLetterheadHtml(schoolSettings,letterheadSlot,logoPosition)}<article class="letter-template-body">${renderTemplateContent(form.html_content||'',{
               nama_kepala_sekolah:schoolOfficerTokenValue('nama_kepala_sekolah',schoolSettings,signatories),
               nip_kepala_sekolah:schoolOfficerTokenValue('nip_kepala_sekolah',schoolSettings,signatories),
               nama_bendahara:schoolOfficerTokenValue('nama_bendahara',schoolSettings,signatories),
               nip_bendahara:schoolOfficerTokenValue('nip_bendahara',schoolSettings,signatories),
-            },templateFields)}</article>`} className="template-studio-preview"/>
+            },templateFields,form.hide_requester_identity==='true')}</article>`} className="template-studio-preview"/>
           </div>
         </div>
         <div className="form-actions"><button type="button" className="secondary" onClick={()=>setModal(null)}>Batal</button><button type="submit" className="primary" disabled={busy||!canManageTemplates}>{busy?'Menyimpan...':'Simpan Format Surat'}</button></div>
@@ -1496,7 +1919,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     </Modal>}
     {modal?.type==='incoming'&&<Modal title="Catat surat masuk" close={()=>setModal(null)}><form className="modal-form" onSubmit={createIncoming}><label>Nomor surat<input required value={form.external_number||''} onChange={e=>setForm({...form,external_number:e.target.value})}/></label><label>Asal surat<input required value={form.sender||''} onChange={e=>setForm({...form,sender:e.target.value})}/></label><label>Perihal<input required value={form.subject||''} onChange={e=>setForm({...form,subject:e.target.value})}/></label><label>Tanggal surat<input type="date" value={form.letter_date||''} onChange={e=>setForm({...form,letter_date:e.target.value})}/></label><label>Ringkasan<textarea rows={3} value={form.summary||''} onChange={e=>setForm({...form,summary:e.target.value})}/></label><button className="primary" disabled={busy}>Simpan surat masuk</button></form></Modal>}
     {modal?.type==='review'&&reviewRequest&&<Modal title="Review & Tindakan Surat" className="letter-action-modal" close={()=>setModal(null)}>
-      <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
+      <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
       <form className="modal-form" onSubmit={submitReview}>
         <label>Tindakan
           <select value={reviewDecision} onChange={event=>setReviewDecision(event.target.value as 'approved'|'revision'|'rejected')}>
@@ -1508,7 +1931,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       </form>
     </Modal>}
     {modal?.type==='issue'&&issueRequest&&<Modal title="Setujui & Terbitkan Nomor Surat" className="letter-action-modal" close={()=>setModal(null)}>
-      <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
+      <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
       <form className="modal-form" onSubmit={submitIssue}>
         {issueEditableFields.length>0&&<div className="letter-issue-office-fields">
           <div className="letter-issue-office-fields-heading"><strong>Hari/tanggal dan tempat</strong><small>Lengkapi sebelum menerbitkan surat. Nilai dari pemohon sudah terisi jika tersedia.</small></div>
@@ -1529,7 +1952,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       </form>
     </Modal>}
     {modal?.type==='preview'&&previewRequest&&<Modal title="Pratinjau Surat" className="letter-preview-modal" close={()=>setModal(null)}>
-      {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" disabled={printing||pdfBusy} onClick={handlePrintLetter}><Printer size={16}/>{printing?'Menyiapkan cetak...':'Cetak'}</button><button type="button" className="secondary" disabled={pdfBusy||printing} onClick={()=>void downloadLetterPdf(previewRequest)}><Download size={16}/>{pdfBusy?'Menyiapkan PDF...':'Simpan / Unduh PDF'}</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
+      {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" disabled={printing||pdfBusy} onClick={handlePrintLetter}><Printer size={16}/>{printing?'Menyiapkan cetak...':'Cetak'}</button><button type="button" className="secondary" disabled={pdfBusy||printing} onClick={()=>void downloadLetterPdf(previewRequest)}><Download size={16}/>{pdfBusy?'Menyiapkan PDF...':'Simpan / Unduh PDF'}</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
     </Modal>}
     {modal?.type==='notifications'&&<Modal title="Notifikasi" close={()=>setModal(null)}><div className="notification-list">{notifications.length?notifications.map(notification=>{
       const relatedRequest=requests.find(request=>request.id===notification.letter_request_id)
@@ -1539,7 +1962,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   {printTarget&&createPortal(<div id="letter-print-portal" ref={printPortalRef} data-paper-size={printTarget.paperSize}>
     <style>{`@page{size:${printTarget.paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:0}`}</style>
     <div className={`letter-app letter-print-app${printTarget.paperSize==='F4'?' letter-print-app-f4':''}`}>
-      <div className={`letter-paper letter-paper-preview${printTarget.paperSize==='F4'?' paper-f4':''}`}>
+      <div className={`letter-paper letter-paper-preview${printTarget.paperSize==='F4'?' paper-f4':''}`} style={{padding:`${printTarget.marginsMm.top}mm ${printTarget.marginsMm.right}mm ${printTarget.marginsMm.bottom}mm ${printTarget.marginsMm.left}mm`}}>
         {printTarget.isDraft&&<span className="letter-watermark">KONSEP / BELUM BERNOMOR</span>}
         <div className="letter-document-render letter-paper-preview letter-print-content" dangerouslySetInnerHTML={{__html:`${printTarget.header}<article class="letter-template-body">${printTarget.html}</article>`}}/>
       </div>
@@ -1567,9 +1990,9 @@ function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,o
    const isOwner=request.requester_id===ownerId
    const principalApprovalComplete=!request.letter_templates?.requires_principal_approval
      ||Boolean(request.letter_approvals?.some(approval=>approval.approver_role==='kepala_sekolah'&&approval.decision==='approved'))
-   const canReview=(['submitted','resubmitted','in_review'].includes(request.status)&&['kepala_tu','administrator'].includes(role??''))
+   const canReview=(['submitted','resubmitted','in_review'].includes(request.status)&&['kepala_tu','staf_tu','administrator'].includes(role??''))
      ||(role==='kepala_sekolah'&&request.status==='approved'&&request.letter_templates?.requires_principal_approval)
-   const canIssue=request.status==='approved'&&request.letter_templates?.requires_number!==false&&principalApprovalComplete&&['kepala_tu','administrator'].includes(role??'')
+   const canIssue=request.status==='approved'&&request.letter_templates?.requires_number!==false&&principalApprovalComplete&&['kepala_tu','staf_tu','administrator'].includes(role??'')
    return <tr key={request.id}><td><b>{request.subject}</b><small>{request.request_code}</small></td><td>{request.requester_name}<small>{request.requester_position||'—'}</small></td><td>{new Date(request.created_at).toLocaleDateString('id-ID')}</td><td><span className={`status status-${request.status}`}>{statusLabels[request.status]}</span>{request.admin_note&&<small className="request-admin-note">{request.admin_note}</small>}{isOwner&&<ExpiryReminder request={request} now={now}/>}</td><td><div className="row-actions">
      {onPreview&&<button type="button" title="Lihat surat" aria-label="Lihat surat" onClick={()=>onPreview(request)}><Eye size={16}/></button>}
      {isOwner&&role!=='pemohon'&&['draft','revision'].includes(request.status)&&onEdit&&<button type="button" title="Edit draft" aria-label="Edit draft" onClick={()=>onEdit(request)}><Pencil size={16}/></button>}
@@ -1591,9 +2014,13 @@ function ExpiryReminder({request,now}:{request:LetterRequest;now:number}){
     :`Belum diunduh · Segera simpan PDF · Sisa waktu unduh: ${timeLabel}`
   return <small className={`request-expiry-reminder${isDownloaded?' is-downloaded':' is-pending'}`} title={`${message}. Pengajuan dihapus otomatis 48 jam setelah diterbitkan/disetujui final.`}>{message}</small>
 }
-function FitLetterPreview({paperSize,html,watermark,className=''}:{paperSize:PaperSize;html:string;watermark?:string;className?:string}){
+function FitLetterPreview({paperSize,marginsMm:rawMargins,html,watermark,className=''}:{
+  paperSize:PaperSize; marginsMm?:PageMarginsMm; html:string; watermark?:string; className?:string
+}){
   const stageRef=useRef<HTMLDivElement>(null)
   const [stageSize,setStageSize]=useState({width:0,height:0})
+  const [zoomState,setZoomState]=useState<{paperSize:PaperSize;value:number}>({paperSize,value:1})
+  const zoom=zoomState.paperSize===paperSize?zoomState.value:1
   const pages=useMemo(()=>splitLetterHtmlAtPageBreaks(html),[html])
   useEffect(()=>{
     const stage=stageRef.current
@@ -1606,21 +2033,32 @@ function FitLetterPreview({paperSize,html,watermark,className=''}:{paperSize:Pap
   },[])
   const widthMm=paperSize==='F4'?215:210
   const heightMm=paperSize==='F4'?330:297
+  const marginsMm=normalizePageMargins(rawMargins)
   const widthPx=widthMm*96/25.4
   const heightPx=heightMm*96/25.4
-  const scale=stageSize.width>0
-    ?Math.min((stageSize.width-16)/widthPx,pages.length===1&&stageSize.height>0?(stageSize.height-16)/heightPx:1)
+  const fitScale=stageSize.width>0
+    ?Math.min((stageSize.width-24)/widthPx,pages.length===1&&stageSize.height>0?(stageSize.height-58)/heightPx:1)
     :1
-  return <div ref={stageRef} className={`letter-fit-preview${pages.length>1?' is-multipage':''} ${className}`}>
-    {pages.map((pageHtml,index)=><div className="letter-fit-page" key={index}>
-      {pages.length>1&&<div className="letter-page-label">Halaman {index+1}</div>}
-      <div className="letter-fit-frame" style={{width:widthPx*scale,height:heightPx*scale}}>
-        <div className={`letter-paper letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,transform:`scale(${scale})`}}>
-          {watermark&&<span className="letter-watermark">{watermark}</span>}
-          <div className="letter-document-render letter-paper-preview" dangerouslySetInnerHTML={{__html:pageHtml}}/>
+  const scale=fitScale*zoom
+  const percent=Math.round(zoom*100)
+  return <div className={`letter-preview-shell ${className}`}>
+    <div className="letter-zoom-controls" role="group" aria-label="Kontrol zoom pratinjau surat">
+      <button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom<=.5} onClick={()=>setZoomState(current=>({paperSize,value:Math.max(.5,Math.round(((current.paperSize===paperSize?current.value:1)-.1)*10)/10)}))}>-</button>
+      <output aria-live="polite">{zoom===1?'Fit':`${percent}%`}</output>
+      <button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom>=3} onClick={()=>setZoomState(current=>({paperSize,value:Math.min(3,Math.round(((current.paperSize===paperSize?current.value:1)+.1)*10)/10)}))}>+</button>
+      <button type="button" className="letter-zoom-fit" onClick={()=>setZoomState({paperSize,value:1})}>Fit / Reset</button>
+    </div>
+    <div ref={stageRef} className={`letter-fit-preview${pages.length>1?' is-multipage':''}`}>
+      {pages.map((pageHtml,index)=><div className="letter-fit-page" key={index}>
+        {pages.length>1&&<div className="letter-page-label">Halaman {index+1}</div>}
+        <div className="letter-fit-frame" style={{width:widthPx*scale,height:heightPx*scale}}>
+          <div className={`letter-paper letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,padding:`${marginsMm.top}mm ${marginsMm.right}mm ${marginsMm.bottom}mm ${marginsMm.left}mm`,transform:`scale(${scale})`}}>
+            {watermark&&<span className="letter-watermark">{watermark}</span>}
+            <div className="letter-document-render letter-paper-preview" dangerouslySetInnerHTML={{__html:pageHtml}}/>
+          </div>
         </div>
-      </div>
-    </div>)}
+      </div>)}
+    </div>
   </div>
 }
 

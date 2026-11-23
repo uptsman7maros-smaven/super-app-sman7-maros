@@ -165,9 +165,15 @@
 .letter-app .letter-preview-empty span{font-size:10px}
 .letter-app .letter-paper{position:relative;width:210mm;max-width:100%;min-height:297mm;margin:0 auto;padding:18mm 17mm;background:#fff;color:#000;box-shadow:0 8px 26px #18274418;overflow:hidden}
 .letter-app .letter-paper.paper-f4{width:215mm;min-height:330mm}
-.letter-app .letter-fit-preview{display:flex;min-width:0;min-height:0;flex:1;align-items:center;justify-content:center;overflow:hidden}
-.letter-app .letter-fit-preview.is-multipage{display:block;overflow:auto;padding:8px}
-.letter-app .letter-fit-page{width:max-content;max-width:100%;margin:0 auto 18px}
+.letter-app .letter-preview-shell{display:flex;min-width:0;min-height:0;width:100%;flex:1;flex-direction:column;overflow:hidden}
+.letter-app .letter-zoom-controls{display:flex;flex:none;align-items:center;justify-content:flex-end;gap:6px;padding:4px 2px 8px;color:#58677e}
+.letter-app .letter-zoom-controls button{display:inline-grid;min-width:30px;min-height:28px;place-items:center;border:1px solid #e1e5ef;border-radius:7px;background:#fff;color:#5549b6;font-size:13px;font-weight:800}
+.letter-app .letter-zoom-controls button:hover:not(:disabled){background:#f3f1ff}
+.letter-app .letter-zoom-controls button:disabled{opacity:.42;cursor:not-allowed}
+.letter-app .letter-zoom-controls output{min-width:45px;text-align:center;font-size:9px;font-weight:800}
+.letter-app .letter-zoom-controls .letter-zoom-fit{padding:0 9px;font-size:9px}
+.letter-app .letter-fit-preview{display:block;min-width:0;min-height:0;width:100%;flex:1;overflow:auto;padding:8px;scroll-behavior:smooth;overscroll-behavior:contain}
+.letter-app .letter-fit-page{width:max-content;max-width:none;margin:0 auto 18px}
 .letter-app .letter-page-label{margin:0 0 6px;color:#75849a;font-size:10px;font-weight:700;text-align:right}
 .letter-app .letter-fit-frame{position:relative;flex:none}
 .letter-app .letter-fit-sheet{position:absolute;top:0;left:0;max-width:none;min-height:0;margin:0;transform-origin:top left}
@@ -186,7 +192,7 @@
 .letter-app .letter-document-heading p:last-child{margin-top:2mm;font-size:7.5pt}
 .letter-app .letter-document-rules{grid-column:1/-1;width:100%;height:2mm;border-top:2pt solid #111;border-bottom:.8pt solid #111}
 .letter-app .letter-template-body{font:12pt/1.5 "Times New Roman",serif}
-.letter-app .letter-template-body p{margin:0 0 4mm}
+.letter-app .letter-template-body p{margin:revert}
 .letter-app .letter-template-body table{width:100%;border-collapse:collapse}
 .letter-app .letter-template-body th,.letter-app .letter-template-body td{padding:1.5mm;text-align:left;vertical-align:top}
 .letter-app .letter-paper-preview table{width:revert;min-width:0;border-collapse:revert;text-align:revert}
@@ -195,6 +201,15 @@
 .letter-app .letter-paper-preview tbody tr:hover{background:revert}
 .letter-app .letter-paper-preview td b{display:revert;color:inherit;font-size:inherit}
 .letter-app .letter-paper-preview td small{display:revert;color:inherit;font-size:inherit;margin:revert}
+.letter-app .template-access-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.letter-app .template-access-tags .soft-tag{font-size:8px}
+.letter-app .template-access-tags .is-restricted{background:#fff1dc;color:#9b6110}
+.letter-app .request-scope-tabs{display:flex;gap:6px;margin:0 0 14px}
+.letter-app .request-scope-tabs button{padding:8px 11px;border:1px solid #e5e7f2;border-radius:8px;background:#fff;color:#6d728b;font-size:9px;font-weight:700}
+.letter-app .request-scope-tabs button.active{border-color:#d6d0fb;background:#f2efff;color:#5446b6}
+.letter-app .outgoing-section-title{margin:22px 0 10px;color:#34445f;font-size:11px}
+.letter-app .outgoing-section-title:first-child{margin-top:4px}
+.letter-app .letter-document-render .pdf-import-page{position:relative}
 .letter-app .letter-watermark{position:absolute;z-index:2;top:42%;right:0;left:0;color:#8883;font:700 28pt Arial,sans-serif;text-align:center;transform:rotate(-25deg);pointer-events:none}
 .letter-app .template-card.is-inactive{opacity:.64}
 .letter-app .template-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
