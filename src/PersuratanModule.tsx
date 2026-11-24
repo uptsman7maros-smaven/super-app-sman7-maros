@@ -469,6 +469,11 @@ function applyLetterPrintPageBreaks(root:ParentNode){
 
 function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null, signatories:LetterSignatory[]) {
   const issued = Array.isArray(request.letter_issued) ? request.letter_issued[0] : request.letter_issued
+  const letterNumber=issued?.letter_number??request.form_data?.nomor_surat
+  const issueDate=issued?.issue_date??request.form_data?.tanggal_terbit
+  const signerName=issued?.signer_name??request.form_data?.penandatangan
+  const signerPosition=issued?.signer_position??request.form_data?.jabatan_penandatangan
+  const signerNip=issued?.signer_nip??request.form_data?.nip_penandatangan
   const savedPrincipalName = request.form_data?.nama_kepala_sekolah
   const savedPrincipalNip = request.form_data?.nip_kepala_sekolah
   const savedBursarName = request.form_data?.nama_bendahara
@@ -486,10 +491,18 @@ function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSetti
       || (typeof savedBursarName === 'string' ? savedBursarName : ''),
     nip_bendahara: schoolOfficerTokenValue('nip_bendahara', schoolSettings, signatories)
       || (typeof savedBursarNip === 'string' ? savedBursarNip : ''),
-    nomor_surat: issued?.letter_number,
-    tanggal_terbit: issued?.issue_date,
-    penandatangan: issued?.signer_name,
-    nip_penandatangan: issued?.signer_nip,
+    nomor_surat: letterNumber,
+    letter_number: letterNumber,
+    tanggal_terbit: issueDate,
+    issue_date: issueDate,
+    penandatangan: signerName,
+    nama_penandatangan: signerName,
+    signer_name: signerName,
+    jabatan_penandatangan: signerPosition,
+    posisi_penandatangan: signerPosition,
+    signer_position: signerPosition,
+    nip_penandatangan: signerNip,
+    signer_nip: signerNip,
   }
 }
 
@@ -1063,12 +1076,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     setSession(current=>current?.user.id===nextUserId?current:nextSession)
   },[])
 
-  const loadAll=useCallback(async(silent=false):Promise<void>=>{
+  const loadAll=useCallback(async(silent=false,force=false):Promise<void>=>{
     const uid=session?.user.id
     if(!uid)return
     lastAutoRefreshAt.current=Date.now()
     const currentRequest=loadRequestRef.current
-    if(currentRequest.userId===uid&&currentRequest.promise)return currentRequest.promise
+    if(!force&&currentRequest.userId===uid&&currentRequest.promise)return currentRequest.promise
     const generation=currentRequest.generation+1
     loadRequestRef.current={userId:uid,generation,promise:null}
     if(!silent){setLoading(true);setError('')}
@@ -1366,7 +1379,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       await auditLetter('Nomor surat diterbitkan',`${issueRequest.request_code} · ${issueForm.letter_number}`)
       notify('Nomor surat berhasil diterbitkan dan masuk arsip')
       setModal(null)
-      await loadAll(true)
+      await loadAll(true,true)
     }
     setBusy(false)
   }
@@ -1877,7 +1890,22 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       Boolean(selectedTemplateRecord.hide_requester_identity),
     )
     :''
-  const previewDocument=previewRequest?getRequestTemplate(previewRequest):null
+  const issuePreviewBase=issueRequest&&previewRequest?.id===issueRequest.id?previewRequest:issueRequest
+  const issuePreviewRequest=modal?.type==='issue'&&issuePreviewBase
+    ?{
+      ...issuePreviewBase,
+      form_data:{...issuePreviewBase.form_data,...issueForm.ktu_fields},
+      letter_issued:{
+        letter_number:issueForm.letter_number,
+        issue_date:issueForm.issue_date,
+        signer_name:issueForm.signer_name,
+        signer_position:issueForm.signer_position,
+        signer_nip:issueForm.signer_nip||null,
+      },
+    }
+    :null
+  const documentPreviewRequest=modal?.type==='issue'?issuePreviewRequest:previewRequest
+  const previewDocument=documentPreviewRequest?getRequestTemplate(documentPreviewRequest):null
   const principalTtePreviewMarkup=previewRequest&&requestWantsPrincipalTte(previewRequest)
     ?getRequestTemplate(previewRequest,false):null
   const principalTteName=previewRequest
@@ -2187,7 +2215,6 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           {issueEditableFields.map(field=><label key={field.name}>{field.label} *<input type={field.type==='date'?'date':'text'} required value={issueForm.ktu_fields[field.name]||''} onChange={event=>{
             const value=event.target.value
             setIssueForm(previous=>({...previous,ktu_fields:{...previous.ktu_fields,[field.name]:value}}))
-            setPreviewRequest(previous=>previous?.id===issueRequest.id?{...previous,form_data:{...previous.form_data,[field.name]:value}}:previous)
           }}/></label>)}
         </div>}
         <label>Nomor surat<input required maxLength={160} value={issueForm.letter_number} onChange={event=>setIssueForm(previous=>({...previous,letter_number:event.target.value}))}/><small className="hint">Saran format: 421.03/001/UPT.SMA.07/MRS/DISDIK/{new Date().getFullYear()}</small></label>
