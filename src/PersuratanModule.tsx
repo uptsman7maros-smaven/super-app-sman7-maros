@@ -458,13 +458,27 @@ function splitLetterElementAtPageBreaks(root:HTMLElement):HTMLElement[]{
 function splitLetterHtmlAtPageBreaks(html:string):string[]{
   const root=document.createElement('div')
   root.innerHTML=html
-  return splitLetterElementAtPageBreaks(root).map(page=>page.innerHTML)
+  return splitLetterElementAtPageBreaks(root).map(page=>{
+    page.querySelectorAll<HTMLElement>('*').forEach(element=>{
+      const style=element.getAttribute('style')
+      if(style){
+        const cleanedStyle=style
+          .replace(/(?:^|;)\s*(?:page-break-(?:before|after)|break-(?:before|after))\s*:\s*(?:always|page)(?:\s*!important)?(?=\s*(?:;|$))/gi,'')
+          .replace(/;{2,}/g,';')
+          .replace(/^\s*;|;\s*$/g,'')
+          .trim()
+        if(cleanedStyle)element.setAttribute('style',cleanedStyle)
+        else element.removeAttribute('style')
+      }
+      element.removeAttribute('data-page-break')
+      element.classList.remove('letter-page-break-before','letter-page-break-after')
+    })
+    return page.innerHTML
+  })
 }
 
-function applyLetterPrintPageBreaks(root:ParentNode){
-  root.querySelectorAll<HTMLElement>('*').forEach(element=>{
-    getPageBreakPositions(element).forEach(position=>element.classList.add(`letter-page-break-${position}`))
-  })
+function makeLetterDocumentHtml(header:string,html:string){
+  return `${header}<article class="letter-template-body">${html}</article>`
 }
 
 function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null, signatories:LetterSignatory[]) {
@@ -1705,7 +1719,6 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         const portal=printPortalRef.current
         const content=portal?.querySelector<HTMLElement>('.letter-print-content')
         if(!portal||!content)throw new Error('Area dokumen cetak tidak tersedia.')
-        applyLetterPrintPageBreaks(content)
         await waitForPrintImages(portal)
         await document.fonts.ready
         if(!content.textContent?.trim())throw new Error('Isi surat untuk dicetak kosong.')
@@ -1742,39 +1755,36 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       const [{default:html2canvas},{default:JsPDF}]=await Promise.all([import('html2canvas'),import('jspdf')])
       const pageWidth=documentMarkup.paperSize==='F4'?215:210
       const pageHeight=documentMarkup.paperSize==='F4'?330:297
+      const pageHtmlList=splitLetterHtmlAtPageBreaks(makeLetterDocumentHtml(documentMarkup.header,documentMarkup.html))
+      if(!pageHtmlList.length)throw new Error('Tidak ada halaman surat yang dapat dibuat menjadi PDF.')
       renderHost=document.createElement('div')
-      renderHost.className='letter-app'
+      renderHost.className=`letter-app letter-print-app${documentMarkup.paperSize==='F4'?' letter-print-app-f4':''}`
       Object.assign(renderHost.style,{
         position:'fixed',left:'-10000px',top:'0',width:`${pageWidth}mm`,zIndex:'-1',
         pointerEvents:'none',background:'#fff',
       })
-      const paper=document.createElement('div')
-      paper.className=`letter-paper${documentMarkup.paperSize==='F4'?' paper-f4':''}`
-      Object.assign(paper.style,{
-        width:`${pageWidth}mm`,height:'auto',minHeight:`${pageHeight}mm`,maxWidth:'none',
-        margin:'0',
-        padding:`${documentMarkup.marginsMm.top}mm ${documentMarkup.marginsMm.right}mm ${documentMarkup.marginsMm.bottom}mm ${documentMarkup.marginsMm.left}mm`,
-        boxShadow:'none',overflow:'visible',
-      })
-      if(documentMarkup.isDraft){
-        const watermark=document.createElement('span')
-        watermark.className='letter-watermark'
-        watermark.textContent='KONSEP / BELUM BERNOMOR'
-        paper.appendChild(watermark)
-      }
-      const content=document.createElement('div')
-      content.className='letter-document-render letter-paper-preview'
-      content.innerHTML=`${documentMarkup.header}<article class="letter-template-body">${documentMarkup.html}</article>`
-      paper.appendChild(content)
-      renderHost.appendChild(paper)
       document.body.appendChild(renderHost)
-      const pageElements=splitLetterElementAtPageBreaks(paper)
-      paper.remove()
-      if(!pageElements.length)throw new Error('Tidak ada halaman surat yang dapat dibuat menjadi PDF.')
       const pdf=new JsPDF({orientation:'portrait',unit:'mm',format:[pageWidth,pageHeight],compress:true})
-      let pdfHasPageContent=false
-      for(const page of pageElements){
-        renderHost.appendChild(page)
+      for(const [pageIndex,pageHtml] of pageHtmlList.entries()){
+        const page=document.createElement('div')
+        page.className=`letter-paper letter-paper-preview letter-print-sheet${documentMarkup.paperSize==='F4'?' paper-f4':''}`
+        Object.assign(page.style,{
+          width:`${pageWidth}mm`,height:`${pageHeight}mm`,minHeight:`${pageHeight}mm`,
+          maxHeight:`${pageHeight}mm`,maxWidth:'none',margin:'0',
+          padding:`${documentMarkup.marginsMm.top}mm ${documentMarkup.marginsMm.right}mm ${documentMarkup.marginsMm.bottom}mm ${documentMarkup.marginsMm.left}mm`,
+          boxShadow:'none',overflow:'hidden',
+        })
+        if(documentMarkup.isDraft){
+          const watermark=document.createElement('span')
+          watermark.className='letter-watermark'
+          watermark.textContent='KONSEP / BELUM BERNOMOR'
+          page.appendChild(watermark)
+        }
+        const content=document.createElement('div')
+        content.className='letter-document-render letter-paper-preview letter-print-content'
+        content.innerHTML=pageHtml
+        page.appendChild(content)
+        renderHost.replaceChildren(page)
         const images=Array.from(page.querySelectorAll('img'))
         await Promise.all(images.map(async image=>{
           const source=image.getAttribute('src')
@@ -1794,33 +1804,12 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
         const canvas=await html2canvas(page,{
           scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,
-          width:page.offsetWidth,height:page.scrollHeight,windowWidth:page.offsetWidth,
-          windowHeight:page.scrollHeight,scrollX:0,scrollY:0,
+          width:page.offsetWidth,height:page.offsetHeight,windowWidth:page.offsetWidth,
+          windowHeight:page.offsetHeight,scrollX:0,scrollY:0,
         })
         if(!canvas.width||!canvas.height)throw new Error('Lembar surat kosong dan tidak dapat dirender.')
-        const mmPerPixel=pageWidth/canvas.width
-        const pageImageHeight=canvas.height*mmPerPixel
-        if(pageImageHeight<=pageHeight+0.5){
-          if(pdfHasPageContent)pdf.addPage()
-          const fitScale=Math.min(pageWidth/canvas.width,pageHeight/canvas.height)
-          const imageWidth=canvas.width*fitScale
-          const imageHeight=canvas.height*fitScale
-          pdf.addImage(canvas.toDataURL('image/png'),'PNG',(pageWidth-imageWidth)/2,0,imageWidth,imageHeight,undefined,'FAST')
-          pdfHasPageContent=true
-          continue
-        }
-        const pixelsPerPage=Math.max(1,Math.floor(pageHeight/mmPerPixel))
-        for(let top=0;top<canvas.height;top+=pixelsPerPage){
-          const slice=document.createElement('canvas')
-          slice.width=canvas.width
-          slice.height=Math.min(pixelsPerPage,canvas.height-top)
-          const context=slice.getContext('2d')
-          if(!context)throw new Error('Canvas halaman PDF tidak dapat diproses.')
-          context.drawImage(canvas,0,top,canvas.width,slice.height,0,0,canvas.width,slice.height)
-          if(pdfHasPageContent)pdf.addPage()
-          pdf.addImage(slice.toDataURL('image/png'),'PNG',0,0,pageWidth,slice.height*mmPerPixel,undefined,'FAST')
-          pdfHasPageContent=true
-        }
+        if(pageIndex>0)pdf.addPage()
+        pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,pageWidth,pageHeight,undefined,'FAST')
       }
       const issued=Array.isArray(request.letter_issued)?request.letter_issued[0]:request.letter_issued
       const fileBase=`${documentMarkup.title}_${issued?.letter_number||request.request_code}`
@@ -2228,7 +2217,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       </form>
     </Modal>}
     {modal?.type==='preview'&&previewRequest&&<Modal title="Pratinjau Surat" className="letter-preview-modal" close={()=>setModal(null)}>
-      {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" disabled={printing||pdfBusy} onClick={handlePrintLetter}><Printer size={16}/>{printing?'Menyiapkan cetak...':'Cetak'}</button><button type="button" className="secondary" disabled={pdfBusy||printing} onClick={()=>void downloadLetterPdf(previewRequest)}><Download size={16}/>{pdfBusy?'Menyiapkan PDF...':'Simpan / Unduh PDF'}</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
+      {previewDocument?<><FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={makeLetterDocumentHtml(previewDocument.header,previewDocument.html)} className="letter-modal-fit-preview"/><div className="letter-preview-actions"><button type="button" className="primary" disabled={printing||pdfBusy} onClick={handlePrintLetter}><Printer size={16}/>{printing?'Menyiapkan cetak...':'Cetak'}</button><button type="button" className="secondary" disabled={pdfBusy||printing} onClick={()=>void downloadLetterPdf(previewRequest)}><Download size={16}/>{pdfBusy?'Menyiapkan PDF...':'Simpan / Unduh PDF'}</button></div></>:<p role="alert">Konten template surat tidak tersedia.</p>}
     </Modal>}
     {modal?.type==='notifications'&&<Modal title="Notifikasi" close={()=>setModal(null)}><div className="notification-list">{notifications.length?notifications.map(notification=>{
       const relatedRequest=requests.find(request=>request.id===notification.letter_request_id)
@@ -2238,10 +2227,21 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   {printTarget&&createPortal(<div id="letter-print-portal" ref={printPortalRef} data-paper-size={printTarget.paperSize}>
     <style>{`@page{size:${printTarget.paperSize==='F4'?'215mm 330mm':'210mm 297mm'};margin:0}`}</style>
     <div className={`letter-app letter-print-app${printTarget.paperSize==='F4'?' letter-print-app-f4':''}`}>
-      <div className={`letter-paper letter-paper-preview${printTarget.paperSize==='F4'?' paper-f4':''}`} style={{padding:`${printTarget.marginsMm.top}mm ${printTarget.marginsMm.right}mm ${printTarget.marginsMm.bottom}mm ${printTarget.marginsMm.left}mm`}}>
+      {splitLetterHtmlAtPageBreaks(makeLetterDocumentHtml(printTarget.header,printTarget.html)).map((pageHtml,index)=><div
+        className={`letter-paper letter-paper-preview letter-print-sheet${printTarget.paperSize==='F4'?' paper-f4':''}`}
+        key={index}
+        style={{
+          width:printTarget.paperSize==='F4'?'215mm':'210mm',
+          height:printTarget.paperSize==='F4'?'330mm':'297mm',
+          minHeight:printTarget.paperSize==='F4'?'330mm':'297mm',
+          maxHeight:printTarget.paperSize==='F4'?'330mm':'297mm',
+          maxWidth:'none',margin:0,
+          padding:`${printTarget.marginsMm.top}mm ${printTarget.marginsMm.right}mm ${printTarget.marginsMm.bottom}mm ${printTarget.marginsMm.left}mm`,
+        }}
+      >
         {printTarget.isDraft&&<span className="letter-watermark">KONSEP / BELUM BERNOMOR</span>}
-        <div className="letter-document-render letter-paper-preview letter-print-content" dangerouslySetInnerHTML={{__html:`${printTarget.header}<article class="letter-template-body">${printTarget.html}</article>`}}/>
-      </div>
+        <div className="letter-document-render letter-paper-preview letter-print-content" dangerouslySetInnerHTML={{__html:pageHtml}}/>
+      </div>)}
     </div>
   </div>,document.body)}</>
 }
@@ -2347,19 +2347,20 @@ function FitLetterPreview({paperSize,marginsMm:rawMargins,html,watermark,classNa
     ?Math.min((stageSize.width-24)/widthPx,pages.length===1&&stageSize.height>0?(stageSize.height-58)/heightPx:1)
     :1
   const scale=fitScale*zoom
-  const percent=Math.round(zoom*100)
+  const percent=Math.round(scale*100)
   return <div className={`letter-preview-shell ${className}`}>
     <div className="letter-zoom-controls" role="group" aria-label="Kontrol zoom pratinjau surat">
       <button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom<=.5} onClick={()=>setZoomState(current=>({paperSize,value:Math.max(.5,Math.round(((current.paperSize===paperSize?current.value:1)-.1)*10)/10)}))}>-</button>
-      <output aria-live="polite">{zoom===1?'Fit':`${percent}%`}</output>
-      <button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom>=3} onClick={()=>setZoomState(current=>({paperSize,value:Math.min(3,Math.round(((current.paperSize===paperSize?current.value:1)+.1)*10)/10)}))}>+</button>
+      <output aria-live="polite">{zoom===1?`Fit · ${percent}%`:`${percent}%`}</output>
+      <button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom>=10} onClick={()=>setZoomState(current=>({paperSize,value:Math.min(10,Math.round(((current.paperSize===paperSize?current.value:1)+.1)*10)/10)}))}>+</button>
+      <button type="button" className="letter-zoom-full" disabled={stageSize.width<=0} onClick={()=>setZoomState({paperSize,value:Math.min(10,Math.round((1/Math.max(fitScale,.01))*10)/10)})}>100%</button>
       <button type="button" className="letter-zoom-fit" onClick={()=>setZoomState({paperSize,value:1})}>Fit / Reset</button>
     </div>
     <div ref={stageRef} className={`letter-fit-preview${pages.length>1?' is-multipage':''}`}>
       {pages.map((pageHtml,index)=><div className="letter-fit-page" key={index}>
         {pages.length>1&&<div className="letter-page-label">Halaman {index+1}</div>}
         <div className="letter-fit-frame" style={{width:widthPx*scale,height:heightPx*scale}}>
-          <div className={`letter-paper letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,padding:`${marginsMm.top}mm ${marginsMm.right}mm ${marginsMm.bottom}mm ${marginsMm.left}mm`,transform:`scale(${scale})`}}>
+          <div className={`letter-paper letter-paper-preview letter-fit-sheet${paperSize==='F4'?' paper-f4':''}`} style={{width:widthPx,height:heightPx,minHeight:heightPx,maxWidth:'none',margin:0,padding:`${marginsMm.top}mm ${marginsMm.right}mm ${marginsMm.bottom}mm ${marginsMm.left}mm`,transform:`scale(${scale})`}}>
             {watermark&&<span className="letter-watermark">{watermark}</span>}
             <div className="letter-document-render letter-paper-preview" dangerouslySetInnerHTML={{__html:pageHtml}}/>
           </div>
