@@ -8,7 +8,7 @@ export type SectionKey =
   | "Rujukan BK"
   | "Rencana Karir";
 
-export type ViewMode = "data" | "alerts" | "assignments" | "workflow";
+export type ViewMode = "data" | "alerts" | "assignments" | "workflow" | "teacher";
 export type FieldKind = "text" | "date" | "time" | "textarea" | "select" | "student" | "class";
 export type UserRole =
   | "super_admin"
@@ -57,7 +57,13 @@ export type StudentOption = {
 };
 
 export type AcademicYearOption = { id: string; name: string; is_active: boolean };
-export type ClassOption = { id: string; name: string; grade_level: number; academic_year_id: string };
+export type ClassOption = {
+  id: string;
+  name: string;
+  grade_level: number;
+  academic_year_id: string;
+  homeroom_teacher_id?: string | null;
+};
 export type SchoolHeader = {
   layout: "1" | "2" | "3";
   school_name: string;
@@ -121,8 +127,11 @@ export type StudentProfile = {
   organizations: KbRow[];
   permissions: KbRow[];
   referrals: KbRow[];
+  teacherReferrals: KbRow[];
+  appreciations: KbRow[];
   careerPlans: KbRow[];
   counselingNotes: KbRow[];
+  safeAttendanceSummary: KbRow | null;
 };
 
 export type SectionFormValue = Record<string, string>;

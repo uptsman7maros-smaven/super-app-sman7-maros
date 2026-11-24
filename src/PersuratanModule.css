@@ -333,3 +333,126 @@
 @media print{
   .letter-app .letter-expiry-alert,.letter-app .request-expiry-reminder{display:none!important}
 }
+
+@media screen{
+  .letter-app .app-shell{font-size:14px;line-height:1.45}
+  .letter-app .app-shell .nav-item,
+  .letter-app .app-shell .module-nav-item,
+  .letter-app .app-shell .top-user,
+  .letter-app .app-shell .content,
+  .letter-app .app-shell .panel,
+  .letter-app .app-shell .table-wrap td,
+  .letter-app .app-shell .notification-row{font-size:14px;line-height:1.45}
+  .letter-app .app-shell .table-wrap th,
+  .letter-app .app-shell label,
+  .letter-app .app-shell .module-nav-label,
+  .letter-app .app-shell .topbar .eyebrow,
+  .letter-app .app-shell .template-field-schema,
+  .letter-app .app-shell .template-field-schema small,
+  .letter-app .app-shell .request-expiry-reminder{font-size:12px;line-height:1.5}
+  .letter-app .app-shell .table-wrap td small,
+  .letter-app .app-shell .table-wrap td .request-expiry-reminder,
+  .letter-app .app-shell .template-card .soft-tag,
+  .letter-app .app-shell .simple-row .soft-tag,
+  .letter-app .app-shell .simple-row small,
+  .letter-app .app-shell .top-user small,
+  .letter-app .app-shell .module-nav-label small,
+  .letter-app .app-shell .stat-top,
+  .letter-app .app-shell .stat-card small,
+  .letter-app .app-shell .welcome-icon small,
+  .letter-app .app-shell .template-studio-fields small,
+  .letter-app .app-shell .template-preview-controls small,
+  .letter-app .app-shell .letter-expiry-alert,
+  .letter-app .app-shell .tte-request-toggle small,
+  .letter-app .app-shell .principal-tte-manager-heading small,
+  .letter-app .app-shell .principal-tte-limit,
+  .letter-app .app-shell .principal-tte-slot-content small,
+  .letter-app .app-shell .principal-tte-no-slots{font-size:12px;line-height:1.5}
+  .letter-app .app-shell .letter-expiry-alert b{font-size:13px}
+  .letter-app .app-shell .primary,
+  .letter-app .app-shell .secondary,
+  .letter-app .app-shell .back-portal,
+  .letter-app .app-shell .template-preview-controls select,
+  .letter-app .app-shell input:not([type=checkbox]):not([type=radio]),
+  .letter-app .app-shell textarea,
+  .letter-app .app-shell .template-studio-fields input,
+  .letter-app .app-shell .template-studio-fields select,
+  .letter-app .app-shell .template-studio-fields textarea,
+  .letter-app .app-shell .modal-form input,
+  .letter-app .app-shell .modal-form select,
+  .letter-app .app-shell .modal-form textarea,
+  .letter-app .app-shell .form-grid input,
+  .letter-app .app-shell .form-grid select,
+  .letter-app .app-shell .form-grid textarea{font-size:14px;line-height:1.45}
+  .letter-app .app-shell .primary,
+  .letter-app .app-shell .secondary{min-height:40px;padding:9px 14px}
+  .letter-app .app-shell .topbar h2,
+  .letter-app .app-shell .modal-head h3,
+  .letter-app .app-shell .panel-head h3,
+  .letter-app .app-shell .section-heading h2{font-size:17px;line-height:1.35}
+  .letter-app .app-shell .section-heading p,
+  .letter-app .app-shell .panel-head p,
+  .letter-app .app-shell .request-admin-note{font-size:12px;line-height:1.5}
+  .letter-app .app-shell .template-disable,
+  .letter-app .app-shell .text-btn,
+  .letter-app .app-shell .module-status,
+  .letter-app .app-shell .role-chip{font-size:13px;line-height:1.45}
+  .letter-app .app-shell .top-user>span{font-size:13.5px;line-height:1.4}
+  .letter-app .app-shell .template-card h4{font-size:16px;line-height:1.4}
+  .letter-app .app-shell .template-card p{font-size:12px;line-height:1.5}
+  .letter-app .app-shell .table-wrap th{font-weight:700}
+  .letter-app .app-shell .table-wrap .status,
+  .letter-app .app-shell .table-wrap .soft-tag,
+  .letter-app .app-shell .requester-identity-card .tte-request-badge{font-size:12px!important;line-height:1.4}
+  .letter-app .app-shell .requester-identity-card small,
+  .letter-app .app-shell .requester-identity-card .soft-tag,
+  .letter-app .app-shell .template-preview-caption,
+  .letter-app .app-shell .template-card p{font-size:12px}
+  .letter-app .app-shell select{
+    box-sizing:border-box;
+    min-height:42px;
+    padding:9px 42px 9px 12px;
+    border:1px solid #dfe4ee;
+    border-radius:11px;
+    background-color:#fff;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2368798F' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position:right 13px center;
+    background-repeat:no-repeat;
+    appearance:none;
+    transition:border-color .18s ease,box-shadow .18s ease,background-color .18s ease
+  }
+  .letter-app .app-shell select:hover{border-color:#b9c3d4;background-color:#fdfdff}
+  .letter-app .app-shell select:focus-visible{
+    border-color:#7868df;
+    outline:none;
+    box-shadow:0 0 0 3px #7868df24
+  }
+  .letter-app .app-shell .template-approval-toggle{
+    padding:11px 13px;
+    border:1px solid #e4e1f4;
+    border-radius:12px;
+    background:#fbfaff;
+    line-height:1.45
+  }
+  .letter-app .app-shell .template-approval-toggle input,
+  .letter-app .app-shell .tte-request-toggle input,
+  .letter-app .app-shell .principal-tte-slot input{accent-color:#5b4bd8}
+  .letter-app .app-shell .tte-request-toggle{
+    grid-template-columns:20px minmax(0,1fr);
+    gap:6px 10px;
+    border-radius:12px
+  }
+  .letter-app .app-shell .tte-request-toggle span,
+  .letter-app .app-shell .principal-tte-manager-heading strong{font-size:13px}
+  .letter-app .app-shell .principal-tte-slot{
+    min-height:72px;
+    border-radius:10px
+  }
+  .letter-app .app-shell .principal-tte-slot-content strong{font-size:12.5px}
+  .letter-app .app-shell .template-approval-toggle:focus-within,
+  .letter-app .app-shell .tte-request-toggle:focus-within,
+  .letter-app .app-shell .principal-tte-slot:focus-within{
+    outline:3px solid #7868df24;
+    outline-offset:1px
+  }
+}

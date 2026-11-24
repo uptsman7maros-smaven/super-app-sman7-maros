@@ -46,6 +46,7 @@ import type {
   UserRole,
 } from "../types";
 import type { RplPdfData } from "../utils/rplPdfGenerator";
+import { listAkpdAggregateSummary } from "../services/teacherBkService";
 
 export type CounselingWorkspaceTab =
   | "Konsultasi BK"
@@ -105,6 +106,11 @@ const AKPD_DEFAULT_QUESTIONS = [
   { area: "Karir", text: "Saya membutuhkan informasi untuk mengenali minat, bakat, dan pilihan karir." },
   { area: "Karir", text: "Saya membutuhkan bantuan merencanakan studi lanjut atau pekerjaan." },
 ];
+
+function isNeedAnswer(answer: string) {
+  return !/\btidak\b/i.test(answer)
+    && (/\b(sangat\s+)?membutuhkan\b/i.test(answer) || /\bya\b/i.test(answer));
+}
 
 function weekday(date: string) {
   return date ? new Date(`${date}T00:00:00`).toLocaleDateString("id-ID", { weekday: "long" }) : "";
@@ -270,6 +276,7 @@ export default function CounselingWorkflowPanel({
   const [rpls, setRpls] = useState<RplRow[]>([]);
   const [forms, setForms] = useState<AkpdFormRow[]>([]);
   const [responses, setResponses] = useState<AkpdResponseRow[]>([]);
+  const [akpdAggregate, setAkpdAggregate] = useState<Awaited<ReturnType<typeof listAkpdAggregateSummary>>>([]);
   const [threads, setThreads] = useState<CurhatThreadRow[]>([]);
   const [messages, setMessages] = useState<CurhatMessageRow[]>([]);
   const [selectedThread, setSelectedThread] = useState<CurhatThreadRow | null>(null);
@@ -351,12 +358,18 @@ export default function CounselingWorkflowPanel({
       } else if (tab === "Generator RPL") {
         setRpls(await listRpl());
       } else if (tab === "Angket Kebutuhan Siswa") {
-        const [loadedForms, loadedResponses] = await Promise.all([
+        const [loadedForms, loadedResponses, loadedAggregate] = await Promise.all([
           listAkpdForms(isStudent),
-          listAkpdResponses(undefined, isStudent ? student?.id : undefined),
+          role === "operator"
+            ? Promise.resolve([])
+            : listAkpdResponses(undefined, isStudent ? student?.id : undefined),
+          role === "operator"
+            ? listAkpdAggregateSummary()
+            : Promise.resolve([]),
         ]);
         setForms(loadedForms);
         setResponses(loadedResponses);
+        setAkpdAggregate(loadedAggregate);
         if (!selectedForm && loadedForms.length) setSelectedForm(loadedForms[0].id);
       } else if (tab === "Kotak Masuk Curhat" || tab === "Curhat ke Guru BK") {
         setThreads(await listCurhatThreads(isStudent ? student?.id : undefined));
@@ -371,7 +384,7 @@ export default function CounselingWorkflowPanel({
     return () => window.clearTimeout(timerId);
   // reloadTab uses the active tab and the student scope as its request key.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, student?.id]);
+  }, [role, tab, student?.id]);
 
   useEffect(() => {
     if (!selectedThread) return;
@@ -450,13 +463,11 @@ export default function CounselingWorkflowPanel({
     .map(item => [item.counselor_profile_id as string, item.counselor_name ?? "Guru BK"])).entries()];
 
   useEffect(() => {
-    setStudentPage(current => Math.min(current, totalStudentPages));
-  }, [totalStudentPages]);
-
-  useEffect(() => {
     if (selectedStudent && !visibleStudents.some(item => item.id === selectedStudent.id)) {
-      setSelectedStudent(null);
+      const timerId = window.setTimeout(() => setSelectedStudent(null), 0);
+      return () => window.clearTimeout(timerId);
     }
+    return undefined;
   }, [selectedStudent, visibleStudents]);
 
   const selectedAkpd = forms.find(form => form.id === selectedForm) ?? forms[0] ?? null;
@@ -901,28 +912,46 @@ export default function CounselingWorkflowPanel({
   if (tab === "Angket Kebutuhan Siswa") {
     const questions = selectedAkpd?.questions ?? [];
     const formResponses = responses.filter(response => response.form_id === selectedAkpd?.id);
-    const topNeed = questions.map(question => ({
-      ...question,
-      count: formResponses.filter(response => /butuh|sangat|ya/i.test(response.answers[question.id] ?? "")).length,
-    })).sort((a, b) => b.count - a.count);
+    const aggregateForForm = akpdAggregate.filter(row => row.form_id === selectedAkpd?.id);
+    const respondentCount = role === "operator"
+      ? aggregateForForm.reduce((count, row) => Math.max(count, row.respondent_count), 0)
+      : formResponses.length;
+    const topNeed = questions.map(question => {
+      const aggregate = aggregateForForm.find(row => row.question_id === question.id);
+      const answeredCount = role === "operator"
+        ? Number(aggregate?.answered_count ?? 0)
+        : formResponses.length;
+      const count = role === "operator"
+        ? Number(aggregate?.need_count ?? 0)
+        : formResponses.filter(response => isNeedAnswer(response.answers[question.id] ?? "")).length;
+      return {
+        ...question,
+        count,
+        answeredCount,
+        percent: answeredCount ? Math.round(count / answeredCount * 100) : 0,
+      };
+    }).sort((a, b) => b.count - a.count);
     const akpdExportRows = topNeed.map(item => ({
       Bidang: item.area,
       Pertanyaan: item.text,
       "Jumlah kebutuhan": item.count,
-      "Jumlah responden": formResponses.length,
-      Persentase: formResponses.length ? `${Math.round(item.count / formResponses.length * 100)}%` : "0%",
+      "Jumlah responden": respondentCount,
+      Persentase: `${item.percent}%`,
     }));
-      const areaSummary = AREA_OPTIONS.map(area => {
-        const areaQuestions = topNeed.filter(question => question.area === area);
-        const needs = areaQuestions.reduce((sum, question) => sum + question.count, 0);
-        const possible = areaQuestions.length * formResponses.length;
-        return { area, needs, percent: possible ? Math.round(needs / possible * 100) : 0 };
-      });
-      const cohortCounts = new Map<string, { responses: number; needs: number }>();
+    const areaSummary = AREA_OPTIONS.map(area => {
+      const areaQuestions = topNeed.filter(question => question.area === area);
+      const needs = areaQuestions.reduce((sum, question) => sum + question.count, 0);
+      const answered = role === "operator"
+        ? areaQuestions.reduce((sum, question) => sum + question.answeredCount, 0)
+        : areaQuestions.length * formResponses.length;
+      return { area, needs, percent: answered ? Math.round(needs / answered * 100) : 0 };
+    });
+    const cohortCounts = new Map<string, { responses: number; needs: number }>();
+    if (role !== "operator") {
       for (const response of formResponses) {
         const respondent = students.find(item => item.id === response.student_id);
         if (!respondent) continue;
-        const needCount = Object.values(response.answers).filter(answer => /butuh|sangat|ya/i.test(answer)).length;
+        const needCount = Object.values(response.answers).filter(isNeedAnswer).length;
         const cohortNames = [
           respondent.class_name ? `Kelas ${respondent.class_name}` : "",
           respondent.grade_level ? `Angkatan ${respondent.grade_level}` : "",
@@ -934,6 +963,7 @@ export default function CounselingWorkflowPanel({
           cohortCounts.set(cohortName, aggregate);
         }
       }
+    }
     return (
       <section className="kb-panel kb-workflow-panel">
         <PrintHeader header={outputHeader} title="Rekap Angket Kebutuhan Peserta Didik" />
@@ -993,11 +1023,15 @@ export default function CounselingWorkflowPanel({
           <div className="kb-form">
             <label>Pilih angket untuk rekap<select value={selectedAkpd?.id ?? ""} onChange={event => setSelectedForm(event.target.value)}>{forms.map(form => <option key={form.id} value={form.id}>{form.title} · {form.target_grade}</option>)}</select></label>
             <div className="kb-workflow-list">{areaSummary.map(item => <article key={item.area}><div><strong>{item.area}</strong><small>{item.needs} kebutuhan · {item.percent}% indeks kebutuhan</small></div></article>)}</div>
-            <div className="kb-table-wrap"><table className="kb-table"><thead><tr><th>Kelompok</th><th>Jumlah responden</th><th>Jawaban kebutuhan</th></tr></thead><tbody>{[...cohortCounts.entries()].map(([name, value]) => <tr key={name}><td>{name}</td><td>{value.responses}</td><td>{value.needs}</td></tr>)}{cohortCounts.size === 0 && <tr><td colSpan={3} className="kb-empty">Rekap kelompok akan tampil setelah siswa mengisi angket.</td></tr>}</tbody></table></div>
+            {role === "operator"
+              ? <p className="kb-privacy">Data per siswa maupun per kelas tidak ditampilkan pada akun Operator.</p>
+              : <div className="kb-table-wrap"><table className="kb-table"><thead><tr><th>Kelompok</th><th>Jumlah responden</th><th>Jawaban kebutuhan</th></tr></thead><tbody>{[...cohortCounts.entries()].map(([name, value]) => <tr key={name}><td>{name}</td><td>{value.responses}</td><td>{value.needs}</td></tr>)}{cohortCounts.size === 0 && <tr><td colSpan={3} className="kb-empty">Rekap kelompok akan tampil setelah siswa mengisi angket.</td></tr>}</tbody></table></div>}
             {topNeed[0] && <div className="kb-actions"><button className="kb-primary" type="button" onClick={() => onCreateRplFromTopic(topNeed[0].text)}>Buat RPL dari topik teratas</button></div>}
-            <div className="kb-workflow-list">{topNeed.map((item, index) => <article key={item.id}><div><strong>{index + 1}. {item.text}</strong><small>{item.area} · {item.count} dari {formResponses.length} siswa</small></div></article>)}</div>
+            <div className="kb-workflow-list">{topNeed.map((item, index) => <article key={item.id}><div><strong>{index + 1}. {item.text}</strong><small>{item.area} · {item.count} dari {item.answeredCount} jawaban ({item.percent}%)</small></div></article>)}</div>
           </div>
-          <div className="kb-table-wrap"><table className="kb-table"><thead><tr><th>Tingkat</th><th>Angket</th><th>Status</th><th>Responden</th><th>Aksi</th></tr></thead><tbody>{forms.map(form => <tr key={form.id}><td>{form.target_grade}</td><td>{form.title}</td><td>{form.is_active ? "Aktif" : "Ditutup"}</td><td>{responses.filter(response => response.form_id === form.id).length}</td><td><button className="kb-mini" type="button" onClick={() => {
+          <div className="kb-table-wrap"><table className="kb-table"><thead><tr><th>Tingkat</th><th>Angket</th><th>Status</th><th>Responden</th><th>Aksi</th></tr></thead><tbody>{forms.map(form => <tr key={form.id}><td>{form.target_grade}</td><td>{form.title}</td><td>{form.is_active ? "Aktif" : "Ditutup"}</td><td>{role === "operator"
+            ? Math.max(0, ...akpdAggregate.filter(row => row.form_id === form.id).map(row => row.respondent_count))
+            : responses.filter(response => response.form_id === form.id).length}</td><td><button className="kb-mini" type="button" onClick={() => {
             setAkpdId(form.id); setFormTitle(form.title); setAkpdYearId(form.academic_year_id); setTargetGrade(form.target_grade); setFormActive(form.is_active); setSelectedForm(form.id);
             setQuestionDraft(form.questions.map(question => `${question.area} | ${question.text}`).join("\n"));
           }}>Edit</button></td></tr>)}</tbody></table></div>

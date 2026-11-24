@@ -10,6 +10,7 @@ import SectionForm from "./features/kesiswaan-bk/components/SectionForm";
 import StatsHeader from "./features/kesiswaan-bk/components/StatsHeader";
 import StudentProfileDrawer from "./features/kesiswaan-bk/components/StudentProfileDrawer";
 import CounselingWorkflowPanel, { type CounselingWorkspaceTab } from "./features/kesiswaan-bk/components/CounselingWorkflowPanel";
+import TeacherBkWorkspace, { type TeacherWorkspaceTab } from "./features/kesiswaan-bk/components/TeacherBkWorkspace";
 import { SchoolLetterheadPicker } from "./components/shared/SchoolLetterheadPicker";
 import { getSchoolLetterhead, type LetterheadSlot } from "./services/masterDataService";
 import { SECTION_BY_KEY, SECTION_CONFIGS } from "./features/kesiswaan-bk/constants";
@@ -29,6 +30,7 @@ import {
   saveSectionRecord,
 } from "./features/kesiswaan-bk/services/kesiswaanBkService";
 import { loadStudentServiceSummary } from "./features/kesiswaan-bk/services/bkWorkflowService";
+import { countPendingTeacherReferrals } from "./features/kesiswaan-bk/services/teacherBkService";
 import type {
   AcademicYearOption,
   AssignmentStudent,
@@ -99,6 +101,9 @@ export default function KesiswaanBK({
   const [workflowTab, setWorkflowTab] = useState<CounselingWorkspaceTab>(
     () => role === "siswa" ? "Curhat ke Guru BK" : "Konsultasi BK",
   );
+  const [teacherTab, setTeacherTab] = useState<TeacherWorkspaceTab>(() => role === "guru"
+    ? "Rujukan & Observasi Siswa"
+    : role === "siswa" ? "Apresiasi & Perilaku Positif" : "Rujukan Masuk");
   const [rplPrefillTopic, setRplPrefillTopic] = useState("");
   const [students, setStudents] = useState<StudentOption[]>([]);
   const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
@@ -139,6 +144,7 @@ export default function KesiswaanBK({
   const [alerts, setAlerts] = useState<AttendanceBkAlert[]>([]);
   const [assignmentStudents, setAssignmentStudents] = useState<AssignmentStudent[]>([]);
   const [counselors, setCounselors] = useState<CounselorOption[]>([]);
+  const [pendingReferralCount, setPendingReferralCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loadedMasterDataKey, setLoadedMasterDataKey] = useState("");
   const [alertsLoading, setAlertsLoading] = useState(false);
@@ -160,7 +166,9 @@ export default function KesiswaanBK({
   const isStudentCounseling = isCounselingModule && role === "siswa";
   const canSeePrivateNotes = role === "super_admin" || role === "guru_bk";
   const canManageAssignments = role === "super_admin" || role === "operator" || role === "guru_bk";
-  const workflowTabs: CounselingWorkspaceTab[] = role === "siswa"
+  const workflowTabs: CounselingWorkspaceTab[] = !isCounselingModule
+    ? []
+    : role === "siswa"
     ? ["Curhat ke Guru BK", "Angket Kebutuhan Siswa", "Pengajuan Konsultasi"]
     : role === "guru_bk"
       ? [
@@ -176,12 +184,35 @@ export default function KesiswaanBK({
         : role === "operator"
           ? ["Generator RPL", "Daftar Siswa Asuh", "Angket Kebutuhan Siswa"]
       : [];
+  const homeroomClassIds = classes
+    .filter(classOption => classOption.homeroom_teacher_id === currentUser.id)
+    .map(classOption => classOption.id);
+  const teacherWorkspaceTabs: TeacherWorkspaceTab[] = !isCounselingModule
+    ? []
+    : role === "guru"
+      ? [
+          "Rujukan & Observasi Siswa",
+          "Apresiasi & Perilaku Positif",
+          ...(homeroomClassIds.length
+            ? [
+                "Pemantauan Kelas Perwalian",
+                "Catatan Pembinaan Wali Kelas",
+                "Jadwal & Kunjungan",
+                "Ringkasan AKPD Kelas",
+              ] as TeacherWorkspaceTab[]
+            : []),
+        ]
+      : role === "siswa"
+        ? ["Apresiasi & Perilaku Positif", "Jadwal & Tindak Lanjut Saya"]
+        : role === "guru_bk" || role === "super_admin"
+          ? ["Rujukan Masuk"]
+          : [];
   const canSeeAlerts = role === "guru_bk" || role === "super_admin" || role === "operator";
   const canSeeSection = moduleSections.some(section => section.key === active)
     && (active !== "Rencana Karir" || canSeePrivateNotes);
   const studentById = useMemo(() => new Map(students.map(student => [student.id, student])), [students]);
   const currentStudent = students.find(student => student.profile_id === currentUser.id) ?? students[0] ?? null;
-  const masterDataKey = `${currentUser.id}:${role}:${isStudentCounseling}`;
+  const masterDataKey = `${currentUser.id}:${role}:${module}:${isStudentCounseling}`;
   const masterDataLoading = loadedMasterDataKey !== masterDataKey;
   const studentSummaryKey = `${currentUser.id}:${studentSummaryReload}`;
   const studentServiceSummary = studentServiceSummaryState?.key === studentSummaryKey
@@ -192,10 +223,25 @@ export default function KesiswaanBK({
     academicYearId: filters.academicYearId,
     semester: filters.semester,
   }), [filters.academicYearId, filters.semester]);
+  const canCreateParentLetterFromDrawer = isCounselingModule
+    && role === "guru"
+    && Boolean(selectedStudentId && students.find(student => student.id === selectedStudentId)?.class_id
+      && homeroomClassIds.includes(students.find(student => student.id === selectedStudentId)?.class_id ?? ""));
 
   const refreshRows = useCallback(async () => {
     const requestId = ++rowsRequestId.current;
     if (!hasModuleAccess) return;
+    const sectionVisible = isCounselingModule
+      ? ["guru_bk", "super_admin", "operator"].includes(role)
+        && ["Catatan BK", "Jadwal BK", "Rujukan BK", "Rencana Karir"].includes(active)
+        && (active !== "Rencana Karir" || canSeePrivateNotes)
+      : ["Prestasi", "Ekstrakurikuler", "Perizinan", "OSIS & Kegiatan"].includes(active);
+    if (!sectionVisible) {
+      setRows([]);
+      setCount(0);
+      setLoading(false);
+      return;
+    }
     if (isSensitive && !canSeePrivateNotes) {
       if (requestId === rowsRequestId.current) {
         setRows([]);
@@ -216,7 +262,7 @@ export default function KesiswaanBK({
     } finally {
       if (requestId === rowsRequestId.current) setLoading(false);
     }
-  }, [canSeePrivateNotes, config, filters, hasModuleAccess, isSensitive, page, students]);
+  }, [active, canSeePrivateNotes, config, filters, hasModuleAccess, isCounselingModule, isSensitive, page, role, students]);
 
   const refreshAlerts = useCallback(async () => {
     setAlertsLoading(true);
@@ -233,11 +279,36 @@ export default function KesiswaanBK({
   }, []);
 
   useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      if (!isCounselingModule) {
+        setActive("Prestasi");
+        setView("data");
+        setSelectedStudentId(null);
+        setWorkflowTab("Konsultasi BK");
+        setTeacherTab("Rujukan & Observasi Siswa");
+        return;
+      }
+      if (role === "guru") {
+        setActive("Catatan BK");
+        setTeacherTab("Rujukan & Observasi Siswa");
+        setView("teacher");
+      } else if (role === "siswa") {
+        setWorkflowTab("Curhat ke Guru BK");
+        setView("workflow");
+      } else {
+        setActive("Catatan BK");
+        setView("data");
+      }
+      setSelectedStudentId(null);
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [isCounselingModule, role]);
+
+  useEffect(() => {
     if (!hasModuleAccess) return;
     let activeEffect = true;
-    setMasterDataError("");
     invalidateStudentsAndYearsCache(currentUser.id);
-    void loadStudentsAndYears(role, currentUser.id).then(result => {
+    void loadStudentsAndYears(role, currentUser.id, module).then(result => {
       if (!activeEffect) return;
       setStudents(result.students);
       setAcademicYears(result.academicYears);
@@ -258,7 +329,7 @@ export default function KesiswaanBK({
       });
     }
     return () => { activeEffect = false; };
-  }, [currentUser.id, hasModuleAccess, isStudentCounseling, masterDataKey, role]);
+  }, [currentUser.id, hasModuleAccess, isStudentCounseling, masterDataKey, module, role]);
 
   useEffect(() => {
     if (!hasModuleAccess) return;
@@ -270,15 +341,15 @@ export default function KesiswaanBK({
   }, [filters, hasModuleAccess, refreshRows]);
 
   useEffect(() => {
-    if (!hasModuleAccess || isStudentCounseling) return;
+    if (!hasModuleAccess || isStudentCounseling || (isCounselingModule && role === "guru")) return;
     let activeEffect = true;
-    void loadSummaryStats(role, statsFilters).then(result => {
+    void loadSummaryStats(role, statsFilters, module).then(result => {
       if (activeEffect) setStats(result);
     }).catch(statsError => {
       if (activeEffect) setError(messageOf(statsError, "Ringkasan statistik gagal dimuat."));
     });
     return () => { activeEffect = false; };
-  }, [hasModuleAccess, isStudentCounseling, role, statsFilters]);
+  }, [hasModuleAccess, isCounselingModule, isStudentCounseling, module, role, statsFilters]);
 
   useEffect(() => {
     if (!hasModuleAccess) return;
@@ -294,17 +365,39 @@ export default function KesiswaanBK({
   }, [currentUser.id, hasModuleAccess, isStudentCounseling, studentSummaryKey, students]);
 
   useEffect(() => {
-    if (!hasModuleAccess || view !== "alerts" || !canSeeAlerts) return;
+    if (!isCounselingModule || !hasModuleAccess || view !== "alerts" || !canSeeAlerts) return;
     const timer = window.setTimeout(() => { void refreshAlerts(); }, 0);
     const interval = window.setInterval(() => { void refreshAlerts(); }, 5 * 60_000);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);
     };
-  }, [canSeeAlerts, hasModuleAccess, refreshAlerts, view]);
+  }, [canSeeAlerts, hasModuleAccess, isCounselingModule, refreshAlerts, view]);
 
   useEffect(() => {
-    if (!hasModuleAccess || view !== "assignments" || !canManageAssignments) return;
+    let activeEffect = true;
+    const canReadReferralQueue = isCounselingModule && ["guru_bk", "super_admin"].includes(role);
+    const refreshPendingCount = async () => {
+      try {
+        const count = canReadReferralQueue ? await countPendingTeacherReferrals() : 0;
+        if (activeEffect) setPendingReferralCount(count);
+      } catch (loadError) {
+        if (activeEffect) setError(messageOf(loadError, "Jumlah rujukan masuk gagal dimuat."));
+      }
+    };
+    const timerId = window.setTimeout(() => { void refreshPendingCount(); }, 0);
+    const intervalId = canReadReferralQueue
+      ? window.setInterval(() => { void refreshPendingCount(); }, 60_000)
+      : undefined;
+    return () => {
+      activeEffect = false;
+      window.clearTimeout(timerId);
+      if (intervalId) window.clearInterval(intervalId);
+    };
+  }, [isCounselingModule, role]);
+
+  useEffect(() => {
+    if (!isCounselingModule || !hasModuleAccess || view !== "assignments" || !canManageAssignments) return;
     let activeEffect = true;
     const timer = window.setTimeout(() => {
       setAssignmentsLoading(true);
@@ -323,7 +416,7 @@ export default function KesiswaanBK({
       activeEffect = false;
       window.clearTimeout(timer);
     };
-  }, [canManageAssignments, hasModuleAccess, view]);
+  }, [canManageAssignments, hasModuleAccess, isCounselingModule, view]);
 
   function changeFilters(changes: Partial<QueryFilters>) {
     setFilters(current => ({ ...current, ...changes }));
@@ -348,12 +441,21 @@ export default function KesiswaanBK({
   }
 
   function selectWorkflowTab(tab: CounselingWorkspaceTab) {
+    if (!isCounselingModule || !workflowTabs.includes(tab)) return;
     if (tab !== "Konsultasi BK" && tab !== "Pengajuan Konsultasi") {
       setConsultationStudentId(null);
       setConsultationPrefillTopic("");
     }
     setWorkflowTab(tab);
     setView("workflow");
+    setNotice("");
+    setError("");
+  }
+
+  function selectTeacherTab(tab: TeacherWorkspaceTab) {
+    if (!isCounselingModule || !teacherWorkspaceTabs.includes(tab)) return;
+    setTeacherTab(tab);
+    setView("teacher");
     setNotice("");
     setError("");
   }
@@ -468,7 +570,7 @@ export default function KesiswaanBK({
       setForm({});
       setEditingId(null);
       await refreshRows();
-      const nextStats = await loadSummaryStats(role, filters);
+      const nextStats = await loadSummaryStats(role, filters, module);
       setStats(nextStats);
     } catch (saveError) {
       setError(messageOf(saveError, "Data gagal disimpan."));
@@ -604,7 +706,7 @@ export default function KesiswaanBK({
             <small>Jawaban hanya terlihat oleh Anda dan petugas BK berwenang</small>
           </div></div>
         </div>
-      ) : (
+      ) : isCounselingModule && role === "guru" ? null : (
         <StatsHeader
           stats={stats}
           academicYearId={filters.academicYearId}
@@ -635,6 +737,12 @@ export default function KesiswaanBK({
           type="button"
           onClick={() => selectWorkflowTab(tab)}
         >{tab}</button>)}
+        {teacherWorkspaceTabs.map(tab => <button
+          key={tab}
+          className={view === "teacher" && teacherTab === tab ? "active" : ""}
+          type="button"
+          onClick={() => selectTeacherTab(tab)}
+        >{tab === "Rujukan Masuk" && pendingReferralCount > 0 ? `${tab} (${pendingReferralCount})` : tab}</button>)}
         {isCounselingModule && canSeeAlerts && <button className={view === "alerts" ? "active" : ""} type="button" onClick={() => setView("alerts")}>
           🔔 Peringatan Absensi{stats.unreadAlerts ? ` (${stats.unreadAlerts})` : ""}
         </button>}
@@ -666,6 +774,22 @@ export default function KesiswaanBK({
             setNotice(`Topik RPL diisi dari angket: ${topic}`);
           }}
           />
+      )}
+      {view === "teacher" && isCounselingModule && teacherWorkspaceTabs.includes(teacherTab) && (
+        role === "guru" && masterDataLoading
+          ? <section className="kb-panel"><div className="kb-empty" role="status">Memuat daftar siswa dan kelas perwalian…</div></section>
+          : <TeacherBkWorkspace
+              key={teacherTab}
+              tab={teacherTab}
+              role={role}
+              students={students}
+              homeroomClassIds={homeroomClassIds}
+              onOpenProfile={student => setSelectedStudentId(student.id)}
+              onOpenParentLetter={onOpenParentLetter
+                ? (student, context) => openParentLetter(student, context)
+                : undefined}
+              onPendingReferralCountChange={setPendingReferralCount}
+            />
       )}
 
       {view === "data" && canSeeSection && <>
@@ -750,6 +874,8 @@ export default function KesiswaanBK({
         key={selectedStudentId}
         studentId={selectedStudentId}
         role={role}
+        scope={isCounselingModule ? "bimbingan-konseling" : "kesiswaan"}
+        canCreateParentLetter={canCreateParentLetterFromDrawer && Boolean(onOpenParentLetter)}
         onClose={() => setSelectedStudentId(null)}
         onCreateNote={student => {
           setSelectedStudentId(null);
@@ -773,7 +899,7 @@ export default function KesiswaanBK({
           setConsultationPrefillTopic("");
           selectWorkflowTab(role === "siswa" ? "Pengajuan Konsultasi" : "Konsultasi BK");
         }}
-        onCreateParentLetter={student => openParentLetter(student)}
+        onCreateParentLetter={student => openParentLetter(student, "Surat panggilan / pembinaan orang tua dari Wali Kelas.")}
       />}
       <ConfirmModal
         open={rowToDelete !== null}

@@ -65,15 +65,20 @@ function toStudentOption(
           id: row.class_id,
           name: row.class_name,
           academic_year_id: typeof row.academic_year_id === "string" ? row.academic_year_id : null,
-          homeroom_teacher_id: typeof row.homeroom_teacher_id === "string" ? row.homeroom_teacher_id : null,
+          homeroom_teacher_id: typeof row.homeroom_teacher_profile_id === "string"
+            ? row.homeroom_teacher_profile_id
+            : typeof row.homeroom_teacher_id === "string" ? row.homeroom_teacher_id : null,
           grade_level: typeof row.grade_level === "number" ? row.grade_level : null,
           academic_year: typeof row.academic_year === "string" ? { name: row.academic_year } : null,
         }
       : null
   );
   const academicYear = relationOne(classRow?.academic_year ?? null);
+  const homeroomTeacherId = typeof row.homeroom_teacher_profile_id === "string"
+    ? row.homeroom_teacher_profile_id
+    : classRow?.homeroom_teacher_id;
   return {
-    id: String(row.id),
+    id: String(row.id ?? row.student_id ?? ""),
     nisn: String(row.nisn ?? ""),
     full_name: String(row.full_name ?? ""),
     status: String(row.status ?? ""),
@@ -81,8 +86,8 @@ function toStudentOption(
     gender: typeof row.gender === "string" ? row.gender : null,
     class_id: typeof row.class_id === "string" ? row.class_id : null,
     class_name: classRow?.name ?? "",
-    homeroom_teacher_name: classRow?.homeroom_teacher_id
-      ? teacherNames.get(classRow.homeroom_teacher_id) ??
+    homeroom_teacher_name: homeroomTeacherId
+      ? teacherNames.get(homeroomTeacherId) ??
         (typeof row.homeroom_teacher_name === "string" ? row.homeroom_teacher_name : null)
       : null,
     academic_year_id: classRow?.academic_year_id ?? null,
@@ -97,7 +102,10 @@ function toStudentOption(
   };
 }
 
-async function fetchStudentsAndYears(role: UserRole): Promise<StudentsAndYears> {
+async function fetchStudentsAndYears(
+  role: UserRole,
+  scope: "kesiswaan" | "bimbingan-konseling",
+): Promise<StudentsAndYears> {
   if (role === "siswa") {
     const contextResult = await supabase.rpc("kb_student_self_context");
     throwOnError(contextResult.error);
@@ -112,6 +120,31 @@ async function fetchStudentsAndYears(role: UserRole): Promise<StudentsAndYears> 
         ? [{ id: String(context.class_id), name: String(context.class_name), grade_level: Number(context.grade_level ?? 0), academic_year_id: String(context.academic_year_id ?? "") }]
         : [],
     };
+  }
+
+  if (role === "guru" && scope === "bimbingan-konseling") {
+    const { data, error } = await supabase.rpc("kb_teacher_student_directory", { p_student_id: null });
+    throwOnError(error);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const students = rows.map(row => toStudentOption({
+      ...row,
+      id: row.student_id,
+      status: "Active",
+    }, typeof row.counselor_profile_id === "string" ? row.counselor_profile_id : null));
+    const classes = new Map<string, ClassOption>();
+    for (const row of rows) {
+      if (typeof row.class_id !== "string" || typeof row.class_name !== "string") continue;
+      classes.set(row.class_id, {
+        id: row.class_id,
+        name: row.class_name,
+        grade_level: Number(row.grade_level ?? 0),
+        academic_year_id: typeof row.academic_year_id === "string" ? row.academic_year_id : "",
+        homeroom_teacher_id: typeof row.homeroom_teacher_profile_id === "string"
+          ? row.homeroom_teacher_profile_id
+          : null,
+      });
+    }
+    return { students, academicYears: [], classes: [...classes.values()] };
   }
 
   if (role === "guru_bk") {
@@ -152,7 +185,7 @@ async function fetchStudentsAndYears(role: UserRole): Promise<StudentsAndYears> 
     supabase.from("academic_years").select("id,name,is_active").order("start_date", { ascending: false }),
     supabase.from("attendance_bk_assignments").select("student_id,counselor_profile_id"),
     supabase.from("teachers").select("profile_id,full_name").not("profile_id", "is", null),
-    supabase.from("classes").select("id,name,grade_level,academic_year_id").order("grade_level").order("name"),
+    supabase.from("classes").select("id,name,grade_level,academic_year_id,homeroom_teacher_id").order("grade_level").order("name"),
   ]);
   throwOnError(studentsResult.error);
   throwOnError(yearsResult.error);
@@ -179,14 +212,15 @@ async function fetchStudentsAndYears(role: UserRole): Promise<StudentsAndYears> 
 export async function loadStudentsAndYears(
   role: UserRole,
   accountId: string,
+  scope: "kesiswaan" | "bimbingan-konseling" = "kesiswaan",
 ): Promise<StudentsAndYears> {
-  const cacheKey = `${accountId}:${role}`;
+  const cacheKey = `${accountId}:${role}:${scope}`;
   const cached = studentsAndYearsCache.get(cacheKey);
   if (cached && Date.now() - cached.cachedAt < STUDENTS_AND_YEARS_CACHE_MS) return cached.data;
   const existingRequest = studentsAndYearsRequests.get(cacheKey);
   if (existingRequest) return existingRequest;
 
-  const request = fetchStudentsAndYears(role).then(data => {
+  const request = fetchStudentsAndYears(role, scope).then(data => {
     studentsAndYearsCache.set(cacheKey, { data, cachedAt: Date.now() });
     return data;
   });
@@ -343,7 +377,11 @@ export async function exportSectionCsv(
   return `\uFEFF${csv}`;
 }
 
-export async function loadSummaryStats(role: UserRole, filters: QueryFilters): Promise<SummaryStats> {
+export async function loadSummaryStats(
+  role: UserRole,
+  filters: QueryFilters,
+  scope: "kesiswaan" | "bimbingan-konseling" = "kesiswaan",
+): Promise<SummaryStats> {
   const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Makassar" });
   let achievementsQuery = supabase.from("kb_prestasi").select("id", { count: "exact", head: true });
   const permitsQuery = supabase.from("kb_perizinan")
@@ -355,7 +393,7 @@ export async function loadSummaryStats(role: UserRole, filters: QueryFilters): P
   const [achievementsResult, permitsResult, alertsResult] = await Promise.all([
     achievementsQuery,
     permitsQuery,
-    ["guru_bk", "super_admin", "operator"].includes(role)
+    scope === "bimbingan-konseling" && ["guru_bk", "super_admin", "operator"].includes(role)
       ? supabase.from("attendance_bk_alerts").select("id", { count: "exact", head: true }).eq("is_read", false)
       : Promise.resolve({ count: null, error: null }),
   ]);
@@ -364,14 +402,14 @@ export async function loadSummaryStats(role: UserRole, filters: QueryFilters): P
   throwOnError(alertsResult.error);
 
   let activeCases: number | null = null;
-  if (role === "kepala_sekolah" || role === "super_admin") {
+  if (scope === "bimbingan-konseling" && (role === "kepala_sekolah" || role === "super_admin")) {
     const { data, error } = await supabase.rpc("kb_case_summary");
     throwOnError(error);
     const caseSummary = (data ?? []) as Array<{ status_kasus: string | null; jumlah: number }>;
     activeCases = caseSummary
       .filter(row => row.status_kasus !== "Selesai")
       .reduce((count, row) => count + Number(row.jumlah), 0);
-  } else if (role === "guru_bk") {
+  } else if (scope === "bimbingan-konseling" && role === "guru_bk") {
     let casesQuery = supabase.from("kb_catatan_bk").select("id", { count: "exact", head: true }).neq("status_kasus", "Selesai");
     if (filters.academicYearId) casesQuery = casesQuery.eq("academic_year_id", filters.academicYearId);
     if (filters.semester) casesQuery = casesQuery.eq("semester", Number(filters.semester));
@@ -551,7 +589,54 @@ export async function deleteSectionRecord(config: SectionConfig, recordId: strin
   throwOnError(error);
 }
 
-export async function loadStudentProfile(studentId: string, role: UserRole): Promise<StudentProfile> {
+export async function loadStudentProfile(
+  studentId: string,
+  role: UserRole,
+  scope: "kesiswaan" | "bimbingan-konseling" = "bimbingan-konseling",
+): Promise<StudentProfile> {
+  if (role === "guru" && scope === "bimbingan-konseling") {
+    const directoryResult = await supabase.rpc("kb_teacher_student_directory", { p_student_id: studentId });
+    throwOnError(directoryResult.error);
+    const directoryRow = Array.isArray(directoryResult.data)
+      ? directoryResult.data[0] as Record<string, unknown> | undefined
+      : undefined;
+    if (!directoryRow) throw new Error("Profil siswa tidak ditemukan atau tidak dapat diakses.");
+
+    const option = toStudentOption({
+      ...directoryRow,
+      id: directoryRow.student_id,
+      status: "Active",
+    }, typeof directoryRow.counselor_profile_id === "string" ? directoryRow.counselor_profile_id : null);
+    const [referralsResult, appreciationsResult, attendanceResult] = await Promise.all([
+      supabase.from("kb_teacher_referrals").select("*").eq("student_id", studentId)
+        .order("created_at", { ascending: false }).limit(50),
+      supabase.from("kb_teacher_appreciations").select("*").eq("student_id", studentId)
+        .order("created_at", { ascending: false }).limit(50),
+      supabase.rpc("kb_homeroom_attendance_summary"),
+    ]);
+    throwOnError(referralsResult.error);
+    throwOnError(appreciationsResult.error);
+    throwOnError(attendanceResult.error);
+    const attendanceRows = (attendanceResult.data ?? []) as Record<string, unknown>[];
+    const ownClassSummary = attendanceRows.find(row => row.student_id === studentId);
+    return {
+      student: option,
+      counselorName: option.counselor_name,
+      alerts: [],
+      attendance: [],
+      achievements: [],
+      extracurriculars: [],
+      organizations: [],
+      permissions: [],
+      referrals: [],
+      teacherReferrals: (referralsResult.data ?? []) as KbRow[],
+      appreciations: (appreciationsResult.data ?? []) as KbRow[],
+      careerPlans: [],
+      counselingNotes: [],
+      safeAttendanceSummary: ownClassSummary as KbRow | undefined ?? null,
+    };
+  }
+
   const { data: studentData, error: studentError } = await supabase.from("students")
     .select("id,nisn,full_name,status,birth_date,gender,class_id,class:classes!students_class_id_fkey(id,name,academic_year_id,homeroom_teacher_id,academic_year:academic_years(name))")
     .eq("id", studentId)
@@ -574,8 +659,11 @@ export async function loadStudentProfile(studentId: string, role: UserRole): Pro
     teacherNames,
   );
   const counselorName = option.counselor_name;
-  const allowedNotes = role === "guru_bk" || role === "super_admin";
-  const allowedAttendance = ["guru_bk", "super_admin", "operator", "kepala_sekolah"].includes(role);
+  const isKesiswaanScope = scope === "kesiswaan";
+  const allowedNotes = !isKesiswaanScope && (role === "guru_bk" || role === "super_admin");
+  const allowedAttendance = !isKesiswaanScope && ["guru_bk", "super_admin", "operator", "kepala_sekolah"].includes(role);
+  const allowedTeacherData = !isKesiswaanScope && ["guru_bk", "super_admin", "siswa"].includes(role);
+  const allowedLegacyReferrals = !isKesiswaanScope && ["guru_bk", "super_admin"].includes(role);
 
   const [
     alertsResult,
@@ -585,6 +673,8 @@ export async function loadStudentProfile(studentId: string, role: UserRole): Pro
     organizationsResult,
     permissionsResult,
     referralsResult,
+    teacherReferralsResult,
+    appreciationsResult,
     careerResult,
     notesResult,
   ] = await Promise.all([
@@ -598,7 +688,15 @@ export async function loadStudentProfile(studentId: string, role: UserRole): Pro
     supabase.from("kb_ekstrakurikuler").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100),
     supabase.from("kb_osis_kegiatan").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100),
     supabase.from("kb_perizinan").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100),
-    supabase.from("kb_referrals").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100),
+    !allowedLegacyReferrals
+      ? Promise.resolve({ data: [], error: null })
+      : supabase.from("kb_referrals").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100),
+    allowedTeacherData && (role === "guru_bk" || role === "super_admin")
+      ? supabase.from("kb_teacher_referrals").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100)
+      : Promise.resolve({ data: [], error: null }),
+    allowedTeacherData
+      ? supabase.from("kb_teacher_appreciations").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100)
+      : Promise.resolve({ data: [], error: null }),
     allowedNotes
       ? supabase.from("kb_career_plans").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(50)
       : Promise.resolve({ data: [], error: null }),
@@ -606,7 +704,10 @@ export async function loadStudentProfile(studentId: string, role: UserRole): Pro
       ? supabase.from("kb_catatan_bk").select("*").eq("student_id", studentId).order("created_at", { ascending: false }).limit(100)
       : Promise.resolve({ data: [], error: null }),
   ]);
-  for (const result of [alertsResult, attendanceResult, achievementsResult, extracurricularsResult, organizationsResult, permissionsResult, referralsResult, careerResult, notesResult]) {
+  for (const result of [
+    alertsResult, attendanceResult, achievementsResult, extracurricularsResult, organizationsResult,
+    permissionsResult, referralsResult, teacherReferralsResult, appreciationsResult, careerResult, notesResult,
+  ]) {
     throwOnError(result.error);
   }
   return {
@@ -619,7 +720,10 @@ export async function loadStudentProfile(studentId: string, role: UserRole): Pro
     organizations: (organizationsResult.data ?? []) as KbRow[],
     permissions: (permissionsResult.data ?? []) as KbRow[],
     referrals: (referralsResult.data ?? []) as KbRow[],
+    teacherReferrals: (teacherReferralsResult.data ?? []) as KbRow[],
+    appreciations: (appreciationsResult.data ?? []) as KbRow[],
     careerPlans: (careerResult.data ?? []) as KbRow[],
     counselingNotes: (notesResult.data ?? []) as KbRow[],
+    safeAttendanceSummary: null,
   };
 }
