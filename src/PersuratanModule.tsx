@@ -26,6 +26,9 @@ type PaperSize = 'A4' | 'F4'
 type LogoPosition = 'left' | 'top' | 'none'
 type PageMarginsMm = { top: number; right: number; bottom: number; left: number }
 type LetterDocumentMarkup = { html: string; header: string; paperSize: PaperSize; marginsMm: PageMarginsMm; isDraft: boolean; title: string }
+type PrincipalSignatureSlot = { id: number; page: number; context: string }
+type PrincipalSignatureOccurrence = PrincipalSignatureSlot & { element: Element; start: number; end: number }
+type PrincipalSignatureLayout = { root: HTMLDivElement; occurrences: PrincipalSignatureOccurrence[] }
 type TemplateField = {
   name: string
   label: string
@@ -85,6 +88,7 @@ type LetterRequest = {
     signer_position: string | null
     signer_nip: string | null
     html_snapshot?: string | null
+    tte_html_snapshot?: string | null
   } | null)[] | {
     id?: string
     letter_number: string
@@ -93,8 +97,10 @@ type LetterRequest = {
     signer_position: string | null
     signer_nip: string | null
     html_snapshot?: string | null
+    tte_html_snapshot?: string | null
   } | null
   letter_approvals?: { approver_role: string; decision: string }[] | null
+  tte_kepsek_slots?: number[] | null
 }
 type IssueForm = {
   letter_number: string
@@ -139,6 +145,7 @@ type StudentLetterPrefill = {
 }
 
 const TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}/g
+const KEPSEK_TTE_CODES = ['£', '§', 'ñ', 'µ', 'Ø', 'œ', 'Ð', '¶', 'ø', 'ð', 'ƒ'] as const
 const USER_TOKEN_NAMES = new Set(['nama', 'nip', 'jabatan'])
 const OFFICE_TOKEN_NAMES = new Set(['nomor_surat', 'tanggal_terbit', 'penandatangan', 'nip_penandatangan'])
 const SCHOOL_PROFILE_TOKEN_NAMES = new Set(['nama_kepala_sekolah', 'nip_kepala_sekolah'])
@@ -400,11 +407,12 @@ function getPageBreakPositions(element:HTMLElement):('before'|'after')[]{
 }
 
 function getPageBreakBoundaries(root:HTMLElement):PageBreakBoundary[]{
+  const documentRef=root.ownerDocument
   return Array.from(root.querySelectorAll<HTMLElement>('*'))
     .flatMap(element=>getPageBreakPositions(element).map(position=>({element,position})))
     .sort((first,second)=>{
-      const firstRange=document.createRange()
-      const secondRange=document.createRange()
+      const firstRange=documentRef.createRange()
+      const secondRange=documentRef.createRange()
       if(first.position==='before')firstRange.setStartBefore(first.element)
       else firstRange.setStartAfter(first.element)
       if(second.position==='before')secondRange.setStartBefore(second.element)
@@ -483,6 +491,139 @@ function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSetti
     penandatangan: issued?.signer_name,
     nip_penandatangan: issued?.signer_nip,
   }
+}
+
+function requestWantsPrincipalTte(request:LetterRequest) {
+  return request.form_data?.request_tte_kepsek === true
+}
+
+function getPrincipalSignatureLayout(html:string,principalName:string):PrincipalSignatureLayout|null {
+  const name=principalName.trim()
+  if(!name||typeof DOMParser==='undefined')return null
+  const parsed=new DOMParser().parseFromString(html,'text/html')
+  const root=parsed.createElement('div')
+  root.innerHTML=html
+  const normalizedName=name.toLocaleLowerCase('id-ID')
+  const isSlotCandidate=(element:Element)=>{
+    const text=element.textContent?.replace(/\s+/g,' ').trim().toLocaleLowerCase('id-ID')||''
+    return text.includes(normalizedName)&&/(?:kepala\s+sekolah|kepala\s+sman\b|pejabat\s+yang\s+memberi\s+perintah)/i.test(text)
+  }
+  const candidateElements=Array.from(root.querySelectorAll('*')).filter(element=>
+    isSlotCandidate(element)
+    &&!Array.from(element.children).some(child=>isSlotCandidate(child)
+      ||Array.from(child.querySelectorAll('*')).some(isSlotCandidate)),
+  )
+  const pageBreaks=getPageBreakBoundaries(root)
+  const occurrences:PrincipalSignatureOccurrence[]=[]
+  for(const element of candidateElements){
+    const fullText=element.textContent||''
+    const lowerText=fullText.toLocaleLowerCase('id-ID')
+    let searchOffset=0
+    while(true){
+      const start=lowerText.indexOf(normalizedName,searchOffset)
+      if(start<0)break
+      const end=start+name.length
+      const compactContext=fullText.replace(/\s+/g,' ').trim()
+      const contextStart=Math.max(0,compactContext.toLocaleLowerCase('id-ID').indexOf(normalizedName)-55)
+      const context=compactContext.slice(contextStart,contextStart+Math.max(120,name.length+80)).trim()
+      const slotRange=parsed.createRange()
+      slotRange.setStartBefore(element)
+      slotRange.collapse(true)
+      const page=1+pageBreaks.filter(boundary=>{
+        const boundaryRange=parsed.createRange()
+        if(boundary.position==='before')boundaryRange.setStartBefore(boundary.element)
+        else boundaryRange.setStartAfter(boundary.element)
+        boundaryRange.collapse(true)
+        return boundaryRange.compareBoundaryPoints(Range.START_TO_START,slotRange)<=0
+      }).length
+      occurrences.push({id:occurrences.length+1,page,context,element,start,end})
+      searchOffset=end
+    }
+  }
+  return {root,occurrences}
+}
+
+function findPrincipalSignatureSlots(html:string,principalName:string):PrincipalSignatureSlot[] {
+  return getPrincipalSignatureLayout(html,principalName)?.occurrences.map(({id,page,context})=>({id,page,context}))||[]
+}
+
+function renderPrincipalTteCodes(html:string,principalName:string,selectedSlotIds:number[]) {
+  if(!selectedSlotIds.length||typeof DOMParser==='undefined')return html
+  const layout=getPrincipalSignatureLayout(html,principalName)
+  if(!layout)return html
+  const {root,occurrences}=layout
+  const parsed=root.ownerDocument
+  const selectedIds=new Set(selectedSlotIds)
+  const codeBySlot=new Map<number,string>()
+  let codeIndex=0
+  for(const occurrence of occurrences){
+    if(selectedIds.has(occurrence.id)&&codeIndex<KEPSEK_TTE_CODES.length){
+      codeBySlot.set(occurrence.id,KEPSEK_TTE_CODES[codeIndex])
+      codeIndex+=1
+    }
+  }
+  const mappedOccurrences=occurrences
+    .filter(occurrence=>codeBySlot.has(occurrence.id))
+    .sort((first,second)=>{
+      if(first.element===second.element)return second.start-first.start
+      return first.element.compareDocumentPosition(second.element)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1
+    })
+  for(const occurrence of mappedOccurrences){
+    const walker=parsed.createTreeWalker(occurrence.element,NodeFilter.SHOW_TEXT)
+    const textNodes:Text[]=[]
+    let node:Node|null
+    let fullLength=0
+    while((node=walker.nextNode())){
+      if(!(node instanceof Text))continue
+      textNodes.push(node)
+      fullLength+=node.data.length
+    }
+    if(occurrence.end>fullLength)continue
+    const locateOffset=(offset:number,isEnd:boolean):{node:Text;offset:number}|null=>{
+      let remaining=offset
+      for(const textNode of textNodes){
+        if(remaining<textNode.data.length||isEnd&&remaining===textNode.data.length){
+          return {node:textNode,offset:remaining}
+        }
+        remaining-=textNode.data.length
+      }
+      const last=textNodes[textNodes.length-1]
+      return last&&offset===fullLength?{node:last,offset:last.data.length}:null
+    }
+    const start=locateOffset(occurrence.start,false)
+    const end=locateOffset(occurrence.end,true)
+    if(!start||!end)continue
+    const nameLine=start.node.parentElement?.closest('div,p,li')
+    let gapLineBreaks=0
+    let previousSibling=nameLine?.previousSibling||null
+    while(previousSibling){
+      if(previousSibling.nodeType===Node.TEXT_NODE&&!previousSibling.textContent?.trim()){
+        previousSibling=previousSibling.previousSibling
+        continue
+      }
+      if(previousSibling.nodeType===Node.ELEMENT_NODE&&(previousSibling as Element).tagName==='BR'){
+        gapLineBreaks+=1
+        previousSibling=previousSibling.previousSibling
+        continue
+      }
+      break
+    }
+    const range=parsed.createRange()
+    range.setStart(start.node,start.offset)
+    range.setEnd(end.node,end.offset)
+    const signature=parsed.createElement('span')
+    signature.className='letter-kepsek-tte-signature'
+    if(gapLineBreaks){
+      signature.classList.add('is-gap-positioned')
+      signature.style.setProperty('--tte-code-offset',`${-(gapLineBreaks/2+0.6)}lh`)
+    }
+    const code=parsed.createElement('span')
+    code.className='letter-kepsek-tte-code'
+    code.textContent=codeBySlot.get(occurrence.id)||''
+    signature.append(code,range.extractContents())
+    range.insertNode(signature)
+  }
+  return root.innerHTML
 }
 
 function normalizePaperSize(value: unknown): PaperSize {
@@ -835,6 +976,8 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [selectedTemplate,setSelectedTemplate]=useState('')
   const [requestScope,setRequestScope]=useState<'all'|'mine'>('all')
   const [requestData,setRequestData]=useState<LetterForm>({})
+  const [requestTteKepsek,setRequestTteKepsek]=useState(false)
+  const [selectedTteSlots,setSelectedTteSlots]=useState<number[]>([])
   const [personFields,setPersonFields]=useState<Record<string,PersonOption>>({})
   const [myName,setMyName]=useState('')
   const [myNip,setMyNip]=useState('')
@@ -844,6 +987,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const loadedUserIdRef=useRef<string|null>(null)
   const cleanupAttemptedUserRef=useRef<string|null>(null)
   const isAdmin=role==='administrator'
+  const isPrincipalTteManager=role==='kepala_tu'||isAdmin
   const canManageTemplates=isAdmin||role==='operator'
   const activeTemplates=templates.filter(template=>template.is_active!==false)
   const canUseAllTemplates=role==='administrator'||role==='operator'||role==='kepala_tu'||role==='staf_tu'
@@ -947,7 +1091,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       const {data:roleData,error:roleErr}=await supabase.rpc('letter_current_role')
       const requestRole=!roleErr&&isLetterRole(roleData)?roleData:null
       let requestsQuery=supabase.from('letter_requests')
-        .select('*, letter_templates(name, category_id, requires_principal_approval, requires_number, available_to_teacher, hide_requester_identity, html_content, fields_schema, page_settings), letter_issued(id,letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot), letter_approvals(approver_role,decision)')
+        .select('*, letter_templates(name, category_id, requires_principal_approval, requires_number, available_to_teacher, hide_requester_identity, html_content, fields_schema, page_settings), letter_issued(id,letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot,tte_html_snapshot), letter_approvals(approver_role,decision)')
         .order('created_at',{ascending:false})
       if(!requestRole||!GLOBAL_REQUEST_ROLES.has(requestRole))requestsQuery=requestsQuery.eq('requester_id',uid)
       const [{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:outData,error:outErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr}] = await Promise.all([
@@ -1093,7 +1237,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       requester_nip:myNip.trim()||null,
       requester_position:myPosition.trim()||null,
       subject:form.subject?.trim()||template.subject||template.name,
-      form_data:requestData,
+      form_data:{...requestData,request_tte_kepsek:requestTteKepsek},
       status:editingRequest?.status==='revision'?'revision':'draft',
     }
     const result=requestDraftId
@@ -1121,6 +1265,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       notify('Draft pengajuan berhasil disimpan')
     }
     setRequestDraftId(null)
+    setRequestTteKepsek(false)
     setPage('requests')
     await loadAll(true)
     setBusy(false)
@@ -1133,6 +1278,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   }
   function review(request:LetterRequest){
     setReviewRequest(request)
+    setSelectedTteSlots(Array.isArray(request.tte_kepsek_slots)?request.tte_kepsek_slots:[])
     setReviewDecision('revision')
     setReviewNote('')
     setPreviewRequest(request)
@@ -1143,6 +1289,11 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(!reviewRequest)return
     if(reviewDecision!=='approved'&&!reviewNote.trim()){notify('Catatan wajib diisi untuk revisi atau penolakan.');return}
     setBusy(true)
+    if(isPrincipalTteManager&&requestWantsPrincipalTte(reviewRequest)
+      &&!await persistPrincipalTteSlots(reviewRequest,selectedTteSlots,false)){
+      setBusy(false)
+      return
+    }
     const {error}=await supabase.rpc('letter_review_request',{
       p_request_id:reviewRequest.id,
       p_decision:reviewDecision,
@@ -1168,6 +1319,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       String(request.form_data?.[field.name]??''),
     ]))
     setIssueRequest(request)
+    setSelectedTteSlots(Array.isArray(request.tte_kepsek_slots)?request.tte_kepsek_slots:[])
     setIssueForm({
       letter_number:`421.03/001/UPT.SMA.07/MRS/DISDIK/${year}`,
       issue_date:new Date().toISOString().slice(0,10),
@@ -1182,8 +1334,18 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   async function submitIssue(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
     if(!issueRequest)return
+    const requestRequiresTte=requestWantsPrincipalTte(issueRequest)
+    if(requestRequiresTte&&!previewDocument){
+      notify('Pratinjau surat TTE tidak tersedia; nomor belum diterbitkan agar kode TTE tidak hilang.')
+      return
+    }
     setBusy(true)
-    const {error}=await supabase.rpc('letter_issue_number_with_ktu_fields',{
+    if(isPrincipalTteManager&&requestRequiresTte
+      &&!await persistPrincipalTteSlots(issueRequest,selectedTteSlots,false)){
+      setBusy(false)
+      return
+    }
+    const issueParams={
       p_request_id:issueRequest.id,
       p_letter_number:issueForm.letter_number.trim(),
       p_issue_date:issueForm.issue_date,
@@ -1191,7 +1353,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       p_signer_position:issueForm.signer_position.trim(),
       p_signer_nip:issueForm.signer_nip.trim()||null,
       p_ktu_fields:issueForm.ktu_fields,
-    })
+    }
+    const result=requestRequiresTte
+      ?await supabase.rpc('letter_issue_number_with_ktu_fields_and_tte',{
+        ...issueParams,
+        p_tte_html_snapshot:previewDocument?.html||'',
+      })
+      :await supabase.rpc('letter_issue_number_with_ktu_fields',issueParams)
+    const {error}=result
     if(error)notify(error.message)
     else{
       await auditLetter('Nomor surat diterbitkan',`${issueRequest.request_code} · ${issueForm.letter_number}`)
@@ -1200,6 +1369,48 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       await loadAll(true)
     }
     setBusy(false)
+  }
+  async function persistPrincipalTteSlots(request:LetterRequest,slotIds:number[],showSuccess=true):Promise<boolean>{
+    if(!isPrincipalTteManager||!requestWantsPrincipalTte(request)){
+      notify('Pengajuan ini tidak meminta TTE Kepala Sekolah atau akses Anda tidak diizinkan.')
+      return false
+    }
+    const slots=[...new Set(slotIds)].sort((first,second)=>first-second)
+    if(slots.length>KEPSEK_TTE_CODES.length){
+      notify(`Maksimal ${KEPSEK_TTE_CODES.length} slot dapat diberi kode TTE.`)
+      return false
+    }
+    const {error}=await supabase.rpc('letter_update_tte_kepsek_slots',{
+      p_request_id:request.id,
+      p_slots:slots,
+    })
+    if(error){
+      notify(`Pilihan kode TTE gagal disimpan: ${error.message}`)
+      return false
+    }
+    setRequests(previous=>previous.map(item=>item.id===request.id?{...item,tte_kepsek_slots:slots}:item))
+    setPreviewRequest(previous=>previous?.id===request.id?{...previous,tte_kepsek_slots:slots}:previous)
+    setReviewRequest(previous=>previous?.id===request.id?{...previous,tte_kepsek_slots:slots}:previous)
+    setIssueRequest(previous=>previous?.id===request.id?{...previous,tte_kepsek_slots:slots}:previous)
+    setSelectedTteSlots(slots)
+    if(showSuccess)notify('Pilihan kode TTE Kepala Sekolah berhasil disimpan.')
+    return true
+  }
+  async function savePrincipalTteSlots(request:LetterRequest){
+    setBusy(true)
+    await persistPrincipalTteSlots(request,selectedTteSlots)
+    setBusy(false)
+  }
+  function togglePrincipalTteSlot(request:LetterRequest,slotId:number,checked:boolean){
+    const next=checked
+      ?[...new Set([...selectedTteSlots,slotId])].sort((first,second)=>first-second)
+      :selectedTteSlots.filter(id=>id!==slotId)
+    if(next.length>KEPSEK_TTE_CODES.length){
+      notify(`Maksimal ${KEPSEK_TTE_CODES.length} slot dapat diberi kode TTE.`)
+      return
+    }
+    setSelectedTteSlots(next)
+    setPreviewRequest(previous=>previous?.id===request.id?{...previous,tte_kepsek_slots:next}:previous)
   }
   function openNewTemplate(){
     setEditingTemplateId(null)
@@ -1424,19 +1635,27 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     setPreviewRequest(previous=>previous?.id===request.id?{...previous,downloaded_at:downloadedAt}:previous)
     return true
   }
-  const getRequestTemplate=(request:LetterRequest):LetterDocumentMarkup|null=>{
+  const getRequestTemplate=(request:LetterRequest,applyPrincipalTte=true):LetterDocumentMarkup|null=>{
     const activeTemplate=templates.find(template=>template.id===request.template_id)
     const issued=Array.isArray(request.letter_issued)?request.letter_issued[0]:request.letter_issued
-    const html=activeTemplate?.html_content||request.letter_templates?.html_content||issued?.html_snapshot||''
+    const savedTteSnapshot=requestWantsPrincipalTte(request)?issued?.tte_html_snapshot:''
+    const html=savedTteSnapshot||activeTemplate?.html_content||request.letter_templates?.html_content||issued?.html_snapshot||''
     const fields=activeTemplate?.fields_schema||request.letter_templates?.fields_schema||[]
     if(!html)return null
-    return {
-      html:renderTemplateContent(
+    const values=requestDocumentValues(request,schoolSettings,signatories)
+    const renderedHtml=savedTteSnapshot
+      ?savedTteSnapshot
+      :renderTemplateContent(
         html,
-        requestDocumentValues(request,schoolSettings,signatories),
+        values,
         fields,
         Boolean(activeTemplate?.hide_requester_identity||request.letter_templates?.hide_requester_identity),
-      ),
+      )
+    const tteSlots=Array.isArray(request.tte_kepsek_slots)?request.tte_kepsek_slots:[]
+    return {
+      html:applyPrincipalTte&&requestWantsPrincipalTte(request)&&!savedTteSnapshot
+        ?renderPrincipalTteCodes(renderedHtml,String(values.nama_kepala_sekolah||''),tteSlots)
+        :renderedHtml,
       header:makeLetterheadHtml(schoolSettings,letterheadSlot,activeTemplate?.page_settings?.logo_position||request.letter_templates?.page_settings?.logo_position||'top'),
       paperSize:normalizePaperSize(activeTemplate?.page_settings?.size||request.letter_templates?.page_settings?.size),
       marginsMm:normalizePageMargins(activeTemplate?.page_settings?.margins_mm||request.letter_templates?.page_settings?.margins_mm),
@@ -1610,10 +1829,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const template=templates.find(item=>item.id===request.template_id)
     if(!template){notify('Format surat untuk pengajuan ini tidak lagi tersedia.');return}
     setRequestDraftId(request.id)
+    setRequestTteKepsek(requestWantsPrincipalTte(request))
     setSelectedTemplate(template.id)
     setForm({subject:request.subject})
+    const savedFormData={...request.form_data} as Record<string,string>
+    delete savedFormData.request_tte_kepsek
     setRequestData({
-      ...request.form_data as Record<string,string>,
+      ...savedFormData,
       nama:myName,
       NIP:myNip,
       jabatan:myPosition,
@@ -1656,6 +1878,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     )
     :''
   const previewDocument=previewRequest?getRequestTemplate(previewRequest):null
+  const principalTtePreviewMarkup=previewRequest&&requestWantsPrincipalTte(previewRequest)
+    ?getRequestTemplate(previewRequest,false):null
+  const principalTteName=previewRequest
+    ?String(requestDocumentValues(previewRequest,schoolSettings,signatories).nama_kepala_sekolah||'')
+    :''
+  const principalTteSlots=principalTtePreviewMarkup
+    ?findPrincipalSignatureSlots(principalTtePreviewMarkup.html,principalTteName)
+    :[]
   function insertTemplateToken(name:string){
     const editor=templateHtmlRef.current
     const current=String(form.html_content||'')
@@ -1795,13 +2025,18 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
                 <div><small>IDENTITAS PENGAJU · OTOMATIS</small><strong>{myName||'Memuat identitas...'}</strong><span>{[myNip,myPosition].filter(Boolean).join(' · ')||'Data akun terhubung melalui Data Induk'}</span></div>
               </div>}
               <label className="span-2">Perihal pengajuan<input value={form.subject||''} onChange={event=>setForm(previous=>({...previous,subject:event.target.value}))} placeholder="Perihal surat" required/></label>
+              <label className="tte-request-toggle span-2">
+                <input type="checkbox" checked={requestTteKepsek} onChange={event=>setRequestTteKepsek(event.target.checked)}/>
+                <span>File ini diminta untuk di TTE</span>
+                <small>Aktifkan jika dokumen memerlukan kode TTE Kepala Sekolah. Pilihan ini tersimpan pada draft dan pengajuan.</small>
+              </label>
               {(selectedTemplateRecord?.fields_schema||[])
                 .filter(field=>!selectedTemplateRecord?.hide_requester_identity
                   ||(field.type!=='auto_user'&&!USER_TOKEN_NAMES.has(field.name.toLocaleLowerCase('id-ID'))))
                 .map(renderTemplateField)}
               {selectedTemplateRecord?.requires_principal_approval&&<p className="letter-approval-hint span-2">Format ini memerlukan persetujuan Kepala Sekolah setelah pemeriksaan Kepala Tata Usaha.</p>}
               <div className="span-2 form-actions">
-                <button type="button" className="secondary" onClick={()=>setPage('requests')}>Batal</button>
+                <button type="button" className="secondary" onClick={()=>{setRequestDraftId(null);setRequestTteKepsek(false);setPage('requests')}}>Batal</button>
                 <button type="submit" className="secondary" value="draft" disabled={busy||!profileReady}>Simpan Draft</button>
                 <button type="submit" className="primary" value="submit" disabled={busy||!profileReady||!selectedTemplate}>Kirim Pengajuan <Send size={16}/></button>
               </div>
@@ -1920,6 +2155,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     {modal?.type==='incoming'&&<Modal title="Catat surat masuk" close={()=>setModal(null)}><form className="modal-form" onSubmit={createIncoming}><label>Nomor surat<input required value={form.external_number||''} onChange={e=>setForm({...form,external_number:e.target.value})}/></label><label>Asal surat<input required value={form.sender||''} onChange={e=>setForm({...form,sender:e.target.value})}/></label><label>Perihal<input required value={form.subject||''} onChange={e=>setForm({...form,subject:e.target.value})}/></label><label>Tanggal surat<input type="date" value={form.letter_date||''} onChange={e=>setForm({...form,letter_date:e.target.value})}/></label><label>Ringkasan<textarea rows={3} value={form.summary||''} onChange={e=>setForm({...form,summary:e.target.value})}/></label><button className="primary" disabled={busy}>Simpan surat masuk</button></form></Modal>}
     {modal?.type==='review'&&reviewRequest&&<Modal title="Review & Tindakan Surat" className="letter-action-modal" close={()=>setModal(null)}>
       <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
+      {isPrincipalTteManager&&requestWantsPrincipalTte(reviewRequest)&&<PrincipalTteSlotManager
+        slots={principalTteSlots}
+        selectedSlotIds={selectedTteSlots}
+        saving={busy}
+        onToggle={(slotId,checked)=>togglePrincipalTteSlot(reviewRequest,slotId,checked)}
+        onSave={()=>void savePrincipalTteSlots(reviewRequest)}
+      />}
       <form className="modal-form" onSubmit={submitReview}>
         <label>Tindakan
           <select value={reviewDecision} onChange={event=>setReviewDecision(event.target.value as 'approved'|'revision'|'rejected')}>
@@ -1932,6 +2174,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     </Modal>}
     {modal?.type==='issue'&&issueRequest&&<Modal title="Setujui & Terbitkan Nomor Surat" className="letter-action-modal" close={()=>setModal(null)}>
       <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
+      {isPrincipalTteManager&&requestWantsPrincipalTte(issueRequest)&&<PrincipalTteSlotManager
+        slots={principalTteSlots}
+        selectedSlotIds={selectedTteSlots}
+        saving={busy}
+        onToggle={(slotId,checked)=>togglePrincipalTteSlot(issueRequest,slotId,checked)}
+        onSave={()=>void savePrincipalTteSlots(issueRequest)}
+      />}
       <form className="modal-form" onSubmit={submitIssue}>
         {issueEditableFields.length>0&&<div className="letter-issue-office-fields">
           <div className="letter-issue-office-fields-heading"><strong>Hari/tanggal dan tempat</strong><small>Lengkapi sebelum menerbitkan surat. Nilai dari pemohon sudah terisi jika tersedia.</small></div>
@@ -1993,7 +2242,8 @@ function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,o
    const canReview=(['submitted','resubmitted','in_review'].includes(request.status)&&['kepala_tu','staf_tu','administrator'].includes(role??''))
      ||(role==='kepala_sekolah'&&request.status==='approved'&&request.letter_templates?.requires_principal_approval)
    const canIssue=request.status==='approved'&&request.letter_templates?.requires_number!==false&&principalApprovalComplete&&['kepala_tu','staf_tu','administrator'].includes(role??'')
-   return <tr key={request.id}><td><b>{request.subject}</b><small>{request.request_code}</small></td><td>{request.requester_name}<small>{request.requester_position||'—'}</small></td><td>{new Date(request.created_at).toLocaleDateString('id-ID')}</td><td><span className={`status status-${request.status}`}>{statusLabels[request.status]}</span>{request.admin_note&&<small className="request-admin-note">{request.admin_note}</small>}{isOwner&&<ExpiryReminder request={request} now={now}/>}</td><td><div className="row-actions">
+      &&(!requestWantsPrincipalTte(request)||role!=='staf_tu')
+   return <tr key={request.id}><td><b>{request.subject}</b><small>{request.request_code}</small>{requestWantsPrincipalTte(request)&&<span className="soft-tag tte-request-badge">Diminta TTE Kepsek</span>}</td><td>{request.requester_name}<small>{request.requester_position||'—'}</small></td><td>{new Date(request.created_at).toLocaleDateString('id-ID')}</td><td><span className={`status status-${request.status}`}>{statusLabels[request.status]}</span>{request.admin_note&&<small className="request-admin-note">{request.admin_note}</small>}{isOwner&&<ExpiryReminder request={request} now={now}/>}</td><td><div className="row-actions">
      {onPreview&&<button type="button" title="Lihat surat" aria-label="Lihat surat" onClick={()=>onPreview(request)}><Eye size={16}/></button>}
      {isOwner&&role!=='pemohon'&&['draft','revision'].includes(request.status)&&onEdit&&<button type="button" title="Edit draft" aria-label="Edit draft" onClick={()=>onEdit(request)}><Pencil size={16}/></button>}
      {isOwner&&role!=='pemohon'&&['draft','revision'].includes(request.status)&&<button type="button" title="Kirim pengajuan" aria-label="Kirim pengajuan" onClick={()=>onSubmit(request.id)}><Send size={16}/></button>}
@@ -2002,6 +2252,36 @@ function RequestTable({rows,onSubmit,onReview,onIssue,onPrint,onPreview,onEdit,o
      {isRequestExpiryEligible(request)&&onPrint&&<button type="button" title="Cetak surat" aria-label="Cetak surat" onClick={()=>onPrint(request)}><Printer size={16}/></button>}
    </div></td></tr>
  })}</tbody></table></div>
+}
+function PrincipalTteSlotManager({slots,selectedSlotIds,saving,onToggle,onSave}:{
+  slots:PrincipalSignatureSlot[]
+  selectedSlotIds:number[]
+  saving:boolean
+  onToggle:(slotId:number,checked:boolean)=>void
+  onSave:()=>void
+}){
+  const selected=new Set(selectedSlotIds)
+  let codeIndex=0
+  return <section className="principal-tte-manager" aria-label="Pengaturan kode TTE Kepala Sekolah">
+    <div className="principal-tte-manager-heading">
+      <div><strong>Tempat TTD Kepala Sekolah</strong><small>Pilih slot yang disetujui. Kode diberikan berurutan hanya pada slot terpilih.</small></div>
+      <button type="button" className="secondary" disabled={saving} onClick={onSave}>{saving?'Menyimpan...':'Simpan Pilihan Kode TTE'}</button>
+    </div>
+    {slots.length
+      ?<div className="principal-tte-slot-list">{slots.map(slot=>{
+        const checked=selected.has(slot.id)
+        const code=checked?KEPSEK_TTE_CODES[codeIndex++]:null
+        return <label className={`principal-tte-slot${checked?' is-selected':''}`} key={slot.id}>
+          <input type="checkbox" checked={checked} onChange={event=>onToggle(slot.id,event.target.checked)}/>
+          <span className="principal-tte-slot-content">
+            <strong>Tempat TTD Kepala Sekolah #{slot.id}{code&&<span className="principal-tte-slot-code">{code}</span>}</strong>
+            <small>Halaman {slot.page} · {slot.context}</small>
+          </span>
+        </label>
+      })}</div>
+      :<p className="principal-tte-no-slots">Tidak ditemukan tempat TTD Kepala Sekolah yang memuat nama Kepala Sekolah pada dokumen ini. Pastikan template berisi jabatan “Kepala Sekolah” dan nama penandatangan.</p>}
+    {slots.length>KEPSEK_TTE_CODES.length&&<small className="principal-tte-limit">Maksimal {KEPSEK_TTE_CODES.length} slot dapat diberi kode TTE.</small>}
+  </section>
 }
 function ExpiryReminder({request,now}:{request:LetterRequest;now:number}){
   const expiresAt=requestExpiryAt(request)
