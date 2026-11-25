@@ -175,6 +175,113 @@
 .attendance-weekly-report-table th,.attendance-weekly-report-table td { border:1px solid #111!important; }
 .attendance-weekly-report-table td:nth-child(3),.attendance-weekly-report-table td:last-child { text-align:left; }
 .attendance-weekly-report-table td small { display:block; font-size:10px; overflow-wrap:anywhere; }
+.attendance-identifier { white-space:nowrap!important; word-break:keep-all!important; font-variant-numeric:tabular-nums; }
+.attendance-weekly-report-table th:nth-child(2),
+.attendance-weekly-report-table td:nth-child(2) { width:125px; min-width:125px; white-space:nowrap!important; word-break:keep-all!important; }
+.attendance-page select:not(.attendance-qr-select) {
+  appearance:none;
+  padding-right:40px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2364758b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 12px center;
+}
+.attendance-page input[type="date"],
+.attendance-page input[type="month"],
+.attendance-page input[type="time"] { min-height:43px; border-radius:12px; color-scheme:light; }
+.attendance-page textarea { border-radius:12px; line-height:1.55; }
+.attendance-page input[type="checkbox"] { accent-color:#087f66; }
+.attendance-page details summary { padding:9px 2px; color:#263750; }
+.attendance-page :focus-visible { outline:3px solid rgba(8,127,102,.2); outline-offset:2px; }
+.attendance-segment-tabs {
+  display:flex;
+  gap:6px;
+  width:fit-content;
+  max-width:100%;
+  overflow-x:auto;
+  padding:6px;
+  border:1px solid #e2e8f0;
+  border-radius:16px;
+  background:rgba(255,255,255,.82);
+  box-shadow:0 6px 20px rgba(28,39,64,.055);
+}
+.attendance-segment-tabs button {
+  flex:none;
+  min-height:41px;
+  padding:9px 15px;
+  border:0;
+  border-radius:11px;
+  background:transparent;
+  color:#64748b;
+  font:inherit;
+  font-size:13px;
+  font-weight:750;
+  white-space:nowrap;
+  transition:background .18s ease,color .18s ease,box-shadow .18s ease;
+}
+.attendance-segment-tabs button:hover { background:#f1f5f9; color:#243249; }
+.attendance-segment-tabs button.is-active {
+  background:linear-gradient(110deg,#087f66,#0c9b7d);
+  color:#fff;
+  box-shadow:0 5px 13px rgba(8,127,102,.2);
+}
+.attendance-report-filters {
+  display:flex;
+  align-items:end;
+  flex-wrap:wrap;
+  gap:11px;
+  margin:0 0 15px;
+}
+.attendance-report-filters label,
+.attendance-monthly-controls label,
+.attendance-monthly-teacher-filter {
+  display:grid;
+  min-width:170px;
+  flex:1 1 170px;
+  gap:6px;
+  color:#475569;
+  font-size:12px;
+  font-weight:750;
+}
+.attendance-report-filters input,
+.attendance-report-filters select,
+.attendance-monthly-controls input,
+.attendance-monthly-teacher-filter select {
+  width:100%;
+  min-width:0;
+  min-height:43px;
+  border:1px solid #dce3eb;
+  border-radius:12px;
+  padding:9px 12px;
+  background-color:#fff;
+  color:#172033;
+  font:inherit;
+}
+.attendance-monthly-report { display:grid; gap:15px; }
+.attendance-monthly-controls {
+  display:flex;
+  align-items:end;
+  flex-wrap:wrap;
+  gap:12px;
+}
+.attendance-monthly-controls .school-letterhead-picker { flex:1 1 220px; }
+.attendance-monthly-preview {
+  display:block;
+  width:100%;
+  min-height:680px;
+  border:1px solid #e1e7f0;
+  border-radius:15px;
+  background:#fff;
+  box-shadow:0 8px 26px rgba(31,41,55,.07);
+}
+.attendance-monthly-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:9px;
+}
+.attendance-monthly-actions>span { flex:1; color:#64748b; font-size:12px; }
+.attendance-monthly-actions button { white-space:nowrap; }
 
 @keyframes attendance-enter { from { opacity:0 } to { opacity:1 } }
 @keyframes attendance-rise { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:translateY(0) } }
@@ -196,6 +303,15 @@
   .attendance-month-export { align-items:stretch; flex-direction:column; }
   .attendance-student-qr-grid { grid-template-columns:1fr; }
   .attendance-homeroom-heading { align-items:flex-start; flex-direction:column; }
+  .attendance-segment-tabs { width:100%; }
+  .attendance-segment-tabs button { padding:9px 12px; font-size:12px; }
+  .attendance-report-filters,.attendance-monthly-controls { align-items:stretch; flex-direction:column; }
+  .attendance-report-filters label,.attendance-monthly-controls label { width:100%; }
+  .attendance-monthly-controls .school-letterhead-picker { width:100%; }
+  .attendance-monthly-preview { min-height:520px; }
+  .attendance-monthly-actions { align-items:stretch; flex-direction:column; }
+  .attendance-monthly-actions>span { flex:auto; }
+  .attendance-monthly-actions button { width:100%; }
 }
 @media(prefers-reduced-motion:reduce) {
   .attendance-page,.attendance-stat,.attendance-panel,.attendance-alert,.attendance-hero-decoration span,.attendance-camera::after { animation:none!important; }

@@ -1,0 +1,191 @@
+.official-announcement-backdrop {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(15, 23, 42, .48);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: official-announcement-fade-in .18s ease-out;
+}
+
+.official-announcement-card {
+  position: relative;
+  width: min(100%, 620px);
+  max-height: min(88vh, 760px);
+  overflow: auto;
+  padding: clamp(24px, 5vw, 42px);
+  border: 1px solid rgba(255, 255, 255, .82);
+  border-radius: 26px;
+  background: linear-gradient(145deg, #fff 0%, #fbfcff 100%);
+  box-shadow: 0 30px 90px rgba(11, 18, 42, .28);
+  color: #202542;
+}
+
+.official-announcement-close-icon {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #e8eaf2;
+  border-radius: 13px;
+  background: #fff;
+  color: #66708a;
+}
+
+.official-announcement-close-icon:hover {
+  background: #f5f6fb;
+  color: #29324e;
+}
+
+.official-announcement-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+  padding-right: 36px;
+}
+
+.official-announcement-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 16px;
+  background: #eeeaff;
+  color: #6251c8;
+}
+
+.official-announcement-eyebrow {
+  display: block;
+  margin: 3px 0 8px;
+  color: #7568c8;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .14em;
+}
+
+.official-announcement-heading h2 {
+  margin: 0;
+  color: #202542;
+  font-size: clamp(21px, 4vw, 29px);
+  line-height: 1.24;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+
+.official-announcement-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 23px 0 19px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #eceef5;
+  color: #7a8298;
+  font-size: 12px;
+}
+
+.official-announcement-meta span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #f1efff;
+  color: #5f51bf;
+  font-weight: 750;
+}
+
+.official-announcement-body {
+  color: #4b536b;
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.official-announcement-actions,
+.official-announcement-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.official-announcement-actions {
+  margin-top: 30px;
+  padding-top: 19px;
+  border-top: 1px solid #eceef5;
+}
+
+.official-announcement-count {
+  color: #80889c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.official-announcement-navigation button,
+.official-announcement-error button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 42px;
+  padding: 9px 13px;
+  border: 1px solid #e1e4ef;
+  border-radius: 12px;
+  background: #fff;
+  color: #4b536b;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.official-announcement-navigation button.is-primary,
+.official-announcement-error button {
+  border-color: transparent;
+  background: linear-gradient(105deg, #5c4bc5, #4385cf);
+  color: #fff;
+  box-shadow: 0 7px 16px rgba(78, 82, 187, .2);
+}
+
+.official-announcement-navigation button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.official-announcement-error {
+  position: fixed;
+  z-index: 10000;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(620px, calc(100vw - 40px));
+  padding: 14px;
+  border: 1px solid #ffd1d6;
+  border-radius: 15px;
+  background: #fff8f8;
+  color: #963546;
+  box-shadow: 0 14px 40px rgba(24, 31, 56, .14);
+  font-size: 13px;
+}
+
+@keyframes official-announcement-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 520px) {
+  .official-announcement-backdrop { padding: 13px; }
+  .official-announcement-card { border-radius: 21px; }
+  .official-announcement-actions { align-items: flex-start; flex-direction: column; }
+  .official-announcement-navigation { width: 100%; justify-content: flex-end; }
+  .official-announcement-navigation button { flex: 1; }
+  .official-announcement-error { align-items: flex-start; flex-direction: column; }
+}

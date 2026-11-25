@@ -176,6 +176,26 @@ type AttendanceExportRow = Pick<
   AttendanceRow,
   "attendance_date" | "person_type" | "person_identifier" | "person_name" | "class_name" | "status" | "note" | "created_at"
 >;
+type AttendanceView = "personal" | "subjects" | "homeroom" | "monitor" | "admin";
+type AttendanceUserCategory = "guru" | "tendik" | "siswa";
+type MonthlyAttendanceReportRow = {
+  attendance_date: string;
+  person_identifier: string;
+  person_name: string;
+  person_type: PersonType;
+  class_name: string | null;
+  status: AttendanceRowStatus;
+  note: string | null;
+  session_type: AttendanceQrSessionType | null;
+  subject: string | null;
+  teacher_name: string | null;
+  user_category: AttendanceUserCategory;
+  created_at: string;
+};
+type EmployeeClassification = {
+  category: "guru" | "tendik";
+  teacherRole: "guru_bk" | "guru" | "tendik";
+};
 const attendancePageSize = 1000;
 const attendanceTimezone = "Asia/Makassar";
 const attendanceHistoryWindowMs = 6 * 24 * 60 * 60 * 1000;
@@ -186,6 +206,14 @@ const defaultWeeklyReportTemplate = `<h1>REKAPITULASI KEHADIRAN MINGGUAN PESERTA
 <p>Periode: {{periode_minggu}}</p>
 {{kop_surat}}
 {{baris_siswa}}`;
+const defaultMonthlyReportTemplate = `<h1>{{judul_rekap}}</h1>
+{{kop_surat}}
+<p><strong>Kategori:</strong> {{kategori_pengguna}}</p>
+<p><strong>Periode:</strong> {{bulan_tahun}}</p>
+{{ringkasan_rekap}}
+{{tabel_rekap_bulanan}}
+<p class="report-date">Diunduh pada {{tanggal_unduh}}</p>
+<div class="report-signature"><p>Kepala Sekolah</p><br><strong>{{kepala_sekolah}}</strong><br>NIP. {{nip_kepala_sekolah}}</div>`;
 const statuses: {value: AttendanceStatus; label: string}[] = [
   {value:"hadir",label:"Hadir"}, {value:"sakit",label:"Sakit"},
   {value:"izin",label:"Izin"}, {value:"terlambat",label:"Terlambat"},
@@ -344,6 +372,8 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const [studentQrToken, setStudentQrToken] = useState("");
   const [qrSubject, setQrSubject] = useState("");
   const [qrClassId, setQrClassId] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("all");
+  const [subjectClassFilter, setSubjectClassFilter] = useState("all");
   const [qrAttendanceStatus, setQrAttendanceStatus] = useState<"hadir" | "izin" | "sakit">("hadir");
   const [qrAttendanceNote, setQrAttendanceNote] = useState("");
   const [teacherSubjectAssignments, setTeacherSubjectAssignments] = useState<TeacherAttendanceAssignment[]>([]);
@@ -388,6 +418,20 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const [weeklyTemplateError, setWeeklyTemplateError] = useState("");
   const [weeklyTemplateNotice, setWeeklyTemplateNotice] = useState("");
   const weeklyTemplateInputRef = useRef<HTMLInputElement>(null);
+  const [attendanceView, setAttendanceView] = useState<AttendanceView>(() =>
+    ["super_admin", "operator"].includes(currentUser?.role ?? userRole) ? "admin" : "personal",
+  );
+  const [adminCategory, setAdminCategory] = useState<"all" | AttendanceUserCategory>("all");
+  const [adminTeacherFilter, setAdminTeacherFilter] = useState<"all" | "guru" | "guru_bk">("all");
+  const [employeeClassifications, setEmployeeClassifications] = useState<Map<string, EmployeeClassification>>(new Map());
+  const [monthlyReportRows, setMonthlyReportRows] = useState<MonthlyAttendanceReportRow[]>([]);
+  const [monthlyLoadedMonth, setMonthlyLoadedMonth] = useState("");
+  const [monthlyReportLoading, setMonthlyReportLoading] = useState(false);
+  const [monthlyReportError, setMonthlyReportError] = useState("");
+  const [monthlyTemplate, setMonthlyTemplate] = useState(defaultMonthlyReportTemplate);
+  const [monthlyTemplateFileName, setMonthlyTemplateFileName] = useState("");
+  const [monthlyTemplateError, setMonthlyTemplateError] = useState("");
+  const monthlyTemplateInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimer = useRef<number | null>(null);
@@ -398,7 +442,9 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   }>({ attendance: () => undefined, identity: () => undefined });
   const loadRequestRef = useRef(0);
   const role = currentUser?.role ?? userRole;
-  const isSelfService = ["siswa", "guru", "guru_bk", "tendik"].includes(role);
+  const isSelfService = [
+    "siswa", "guru", "guru_bk", "tendik", "staff_tata_usaha", "kepala_tata_usaha",
+  ].includes(role);
   const isTeacher = role === "guru";
   const isHomeroomTeacher = role === "guru" || role === "guru_bk";
   const isAdminMonitor = role === "super_admin";
@@ -406,6 +452,62 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const canRecordAttendance = isSelfService || canManageAttendance;
   const canViewAllAttendance = ["super_admin", "operator", "kepala_sekolah", "kepala_tata_usaha", "staff_tata_usaha"].includes(role);
   const canManageWhatsapp = ["super_admin", "operator", "kepala_sekolah"].includes(role);
+
+  useEffect(() => {
+    if (!canManageAttendance) return;
+
+    let active = true;
+    const loadEmployeeClassifications = async () => {
+      try {
+        const [teachersResult, profilesResult] = await Promise.all([
+          supabase.from("teachers").select("nip,profile_id,staff_category,primary_role"),
+          supabase.from("profiles")
+            .select("id,username,role")
+            .in("role", ["guru", "guru_bk", "tendik", "staff_tata_usaha", "kepala_tata_usaha"]),
+        ]);
+        if (teachersResult.error) throw teachersResult.error;
+        if (profilesResult.error) throw profilesResult.error;
+
+        const profilesById = new Map((profilesResult.data ?? []).map((profile) => [
+          profile.id,
+          profile.role as string,
+        ]));
+        const profilesByUsername = new Map((profilesResult.data ?? []).map((profile) => [
+          profile.username.trim(),
+          profile.role as string,
+        ]));
+        const classifications = new Map<string, EmployeeClassification>();
+        (teachersResult.data ?? []).forEach((teacher) => {
+          if (!teacher.nip) return;
+          const accountRole = (teacher.profile_id ? profilesById.get(teacher.profile_id) : undefined)
+            ?? profilesByUsername.get(teacher.nip.trim());
+          const isTeacherRole = teacher.staff_category === "Guru"
+            || teacher.primary_role === "Guru BK"
+            || accountRole === "guru"
+            || accountRole === "guru_bk";
+          classifications.set(teacher.nip.trim(), {
+            category: isTeacherRole ? "guru" : "tendik",
+            teacherRole: teacher.primary_role === "Guru BK" || accountRole === "guru_bk"
+              ? "guru_bk"
+              : isTeacherRole ? "guru" : "tendik",
+          });
+        });
+        if (active) {
+          setEmployeeClassifications(classifications);
+          setMonthlyReportError("");
+        }
+      } catch (classificationError) {
+        if (active) {
+          setMonthlyReportError(
+            `Kategori Guru/Tendik gagal dimuat dari Data Induk: ${errorMessage(classificationError)}`,
+          );
+        }
+      }
+    };
+
+    void loadEmployeeClassifications();
+    return () => { active = false; };
+  }, [canManageAttendance]);
 
   useEffect(() => {
     if (!isSelfService) return;
@@ -546,6 +648,24 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         offset += attendancePageSize;
       }
 
+      if (isHomeroomTeacher) {
+        let studentOffset = 0;
+        while (true) {
+          const { data, error: studentAttendanceError } = await supabase
+            .from("attendance_records")
+            .select("id,attendance_date,person_type,person_identifier,person_name,class_name,status,note,created_at")
+            .eq("person_type", "siswa")
+            .eq("attendance_date", date)
+            .order("created_at", { ascending: false })
+            .range(studentOffset, studentOffset + attendancePageSize - 1);
+          if (studentAttendanceError) throw studentAttendanceError;
+          const page = (data ?? []) as AttendanceRow[];
+          loadedRows.push(...page);
+          if (page.length < attendancePageSize) break;
+          studentOffset += attendancePageSize;
+        }
+      }
+
       let qrOffset = 0;
       while (true) {
         let qrQuery = supabase
@@ -593,7 +713,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [date, identity, isSelfService, role]);
+  }, [date, identity, isHomeroomTeacher, isSelfService, role]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadRows(); }, 0);
@@ -936,7 +1056,19 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     const updateClock = () => {
       const now = Date.now() + serverClockOffsetMs;
       setClockNow(now);
-      if (qrSession?.expires_at && Date.parse(qrSession.expires_at) <= now) {
+      const sessionExpiresAt = qrSession?.expires_at ? Date.parse(qrSession.expires_at) : null;
+      const tokenExpiresAt = qrSession ? Date.parse(qrSession.token_expires_at) : null;
+      if (
+        qrSession
+        && (
+          sessionExpiresAt === null
+          || tokenExpiresAt === null
+          || !Number.isFinite(sessionExpiresAt)
+          || !Number.isFinite(tokenExpiresAt)
+          || sessionExpiresAt <= now
+          || tokenExpiresAt <= now
+        )
+      ) {
         setQrSession(null);
         setQrError("Sesi QR berakhir. Buat sesi baru untuk melanjutkan.");
       }
@@ -1191,6 +1323,9 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const createQrSession = async () => {
     if (!isTeacher) return;
     setQrError("");
+    setQrSession(null);
+    setManualQrValue("");
+    setCopiedQrToken("");
     setQrBusy(true);
     try {
       const { data, error: createError } = await supabase
@@ -1203,6 +1338,20 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       if (createError) throw createError;
       if (!isAttendanceQrSession(data)) {
         throw new Error("Respons pembuatan QR tidak valid. Pastikan migrasi absensi QR sudah diterapkan.");
+      }
+      const expiresAt = Date.parse(data.expires_at ?? "");
+      const tokenExpiresAt = Date.parse(data.token_expires_at);
+      const now = Date.now() + serverClockOffsetMs;
+      if (
+        data.attendance_date !== today()
+        || !Number.isFinite(expiresAt)
+        || !Number.isFinite(tokenExpiresAt)
+        || expiresAt <= now
+        || tokenExpiresAt <= now
+      ) {
+        throw new Error(
+          "Server membuat sesi QR dengan tanggal atau masa aktif yang sudah berakhir. Terapkan migrasi durasi QR mapel terbaru lalu coba lagi.",
+        );
       }
       setQrSession(data);
       setQrError("");
@@ -1591,9 +1740,6 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       setSaving(false);
     }
   };
-  const filtered = useMemo(() => rows.filter(r =>
-    `${r.person_identifier} ${r.person_name} ${r.class_name ?? ""} ${r.status}`.toLowerCase().includes(filter.toLowerCase())
-  ), [rows, filter]);
   const availableQrSubjects = useMemo(
     () => [...new Set(teacherSubjectAssignments.map((assignment) => assignment.subject))],
     [teacherSubjectAssignments],
@@ -1604,9 +1750,6 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       .sort((a, b) => a.grade_level - b.grade_level || a.class_name.localeCompare(b.class_name)),
     [qrSubject, teacherSubjectAssignments],
   );
-  const summary = useMemo(() => statuses.map(s => ({
-    ...s, count: rows.filter(r => r.status === s.value).length
-  })), [rows]);
   const homeroomReports = useMemo(() => {
     const reports = new Map<string, { className: string; gradeLevel: number; rows: HomeroomWeeklyAttendanceRow[] }>();
     for (const row of homeroomRows) {
@@ -1706,6 +1849,69 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       }),
     };
   }), [homeroomReports, weeklyDays]);
+  const personalRows = useMemo(() => rows.filter((row) =>
+    row.session_type !== "subject"
+    && (!identity || (
+      row.person_type === identity.personType
+      && row.person_identifier === identity.identifier
+    )),
+  ), [identity, rows]);
+  const homeroomClassNames = useMemo(
+    () => new Set(weeklyReportData.map((report) => report.className.trim().toLocaleLowerCase("id-ID"))),
+    [weeklyReportData],
+  );
+  const homeroomRowsForMonitor = useMemo(() => rows.filter((row) =>
+    row.person_type === "siswa"
+    && (
+      row.session_type === "subject"
+      || row.session_type === "school_departure"
+      || row.session_type === undefined
+    )
+    && Boolean(row.class_name)
+    && homeroomClassNames.has((row.class_name ?? "").trim().toLocaleLowerCase("id-ID")),
+  ), [homeroomClassNames, rows]);
+  const homeroomSubjectRows = useMemo(
+    () => homeroomRowsForMonitor.filter((row) => row.session_type === "subject"),
+    [homeroomRowsForMonitor],
+  );
+  const teacherSubjectRows = useMemo(() => rows.filter((row) =>
+    row.session_type === "subject"
+    && row.teacher_name === currentUser?.full_name
+    && (subjectFilter === "all" || row.subject === subjectFilter)
+    && (subjectClassFilter === "all" || row.class_name === subjectClassFilter)
+    && teacherSubjectAssignments.some((assignment) =>
+      assignment.subject === row.subject
+      && assignment.class_name.trim().toLocaleLowerCase("id-ID")
+        === (row.class_name ?? "").trim().toLocaleLowerCase("id-ID"),
+    ),
+  ), [currentUser?.full_name, rows, subjectClassFilter, subjectFilter, teacherSubjectAssignments]);
+  const adminRows = useMemo(() => rows.filter((row) => {
+    if (adminCategory === "all") return true;
+    const category = row.person_type === "siswa"
+      ? "siswa"
+      : employeeClassifications.get(row.person_identifier)?.category;
+    if (category !== adminCategory) return false;
+    if (adminCategory !== "guru" || adminTeacherFilter === "all") return true;
+    return employeeClassifications.get(row.person_identifier)?.teacherRole === adminTeacherFilter;
+  }), [adminCategory, adminTeacherFilter, employeeClassifications, rows]);
+  const visibleRows = attendanceView === "subjects"
+    ? teacherSubjectRows
+    : attendanceView === "homeroom"
+      ? homeroomSubjectRows
+      : attendanceView === "monitor"
+      ? homeroomRowsForMonitor
+      : attendanceView === "admin"
+        ? adminRows
+        : personalRows;
+  const filtered = useMemo(() => visibleRows.filter((row) =>
+    `${row.person_identifier} ${row.person_name} ${row.class_name ?? ""} ${row.status} ${row.subject ?? ""} ${row.teacher_name ?? ""}`
+      .toLocaleLowerCase("id-ID")
+      .includes(filter.toLocaleLowerCase("id-ID")),
+  ), [filter, visibleRows]);
+  const summary = useMemo(() => statuses.map((status) => ({
+    ...status,
+    count: visibleRows.filter((row) => row.status === status.value).length,
+  })), [visibleRows]);
 
   const handleWeeklyTemplateFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1790,7 +1996,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         const noteText = row?.note ? `<small>${escapeAttendanceHtml(row.note)}</small>` : "";
         return `<td class="day-cell">${code ?? (day > today() ? "—" : row?.is_effective_day ? "—" : "Libur")}${time}${noteText}</td>`;
       }).join("");
-      return `<tr><td>${index + 1}</td><td>${escapeAttendanceHtml(student.identifier || "—")}</td><td>${escapeAttendanceHtml(student.name)}</td><td>${student.gender ?? "—"}</td>${dayCells}<td>${student.counts.H}</td><td>${student.counts.T}</td><td>${student.counts.S}</td><td>${student.counts.I}</td><td>${student.counts.A}</td><td>${student.percentage === null ? "—" : `${student.percentage}%`}</td><td class="remarks">${escapeAttendanceHtml(student.remarks)}</td></tr>`;
+      return `<tr><td>${index + 1}</td><td class="report-identifier">${escapeAttendanceHtml(student.identifier || "—")}</td><td>${escapeAttendanceHtml(student.name)}</td><td>${student.gender ?? "—"}</td>${dayCells}<td>${student.counts.H}</td><td>${student.counts.T}</td><td>${student.counts.S}</td><td>${student.counts.I}</td><td>${student.counts.A}</td><td>${student.percentage === null ? "—" : `${student.percentage}%`}</td><td class="remarks">${escapeAttendanceHtml(student.remarks)}</td></tr>`;
     }).join("");
     const attendanceTable = `<table class="weekly-attendance"><thead>
       <tr><th rowspan="2">No.</th><th rowspan="2">NISN</th><th rowspan="2">Nama Siswa</th><th rowspan="2">JK</th>${dayHeaders}<th colspan="5">Rekapitulasi</th><th rowspan="2">Persentase Hadir</th><th rowspan="2">Keterangan/Tindak Lanjut</th></tr>
@@ -1851,6 +2057,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         .weekly-attendance th,.weekly-attendance td{border:1px solid #111;padding:3px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}
         .weekly-attendance th{background:#67d4f5;font-weight:700}
         .weekly-attendance th:nth-child(3),.weekly-attendance td:nth-child(3){width:14%;text-align:left}
+        .weekly-attendance th:nth-child(2),.weekly-attendance td:nth-child(2),.report-identifier{width:110px;white-space:nowrap;word-break:keep-all}
         .weekly-attendance th:last-child,.weekly-attendance td:last-child{width:16%}
         .weekly-attendance .day-cell{font-size:9px}.weekly-attendance small{display:block;font-size:7px;margin-top:1px}
         .weekly-attendance .remarks{text-align:left}.codes{margin-top:7px}
@@ -1910,6 +2117,14 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       [],
       ["Keterangan Kode: H = Hadir, T = Terlambat, S = Sakit, I = Izin, A = Alpa"],
     ]);
+    report.students.forEach((student, index) => {
+      const cell = sheet[XLSX.utils.encode_cell({ r: index + 5, c: 1 })];
+      if (cell) {
+        cell.t = "s";
+        cell.v = String(student.identifier || "—");
+        cell.z = "@";
+      }
+    });
     sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 15 } }];
     sheet["!cols"] = [
       { wch: 5 }, { wch: 14 }, { wch: 28 }, { wch: 5 },
@@ -1939,32 +2154,34 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     setExporting(true);
     try {
       let loadedRows: AttendanceExportRow[] = [];
-      let offset = 0;
-      while (true) {
-        let query = supabase
-          .from("attendance_records")
-          .select("attendance_date,person_type,person_identifier,person_name,class_name,status,note,created_at")
-          .order("attendance_date")
-          .order("person_name")
-          .order("id");
-        if (isSelfService && identity) {
-          query = query
-            .eq("person_type", identity.personType)
-            .eq("person_identifier", identity.identifier);
+      if (attendanceView !== "subjects") {
+        let offset = 0;
+        while (true) {
+          let query = supabase
+            .from("attendance_records")
+            .select("attendance_date,person_type,person_identifier,person_name,class_name,status,note,created_at")
+            .order("attendance_date")
+            .order("person_name")
+            .order("id");
+          if (isSelfService && identity) {
+            query = query
+              .eq("person_type", identity.personType)
+              .eq("person_identifier", identity.identifier);
+          }
+          if (monthly) {
+            const [year, mon] = month.split("-").map(Number);
+            const nextMonth = new Date(Date.UTC(year, mon, 1)).toISOString().slice(0, 10);
+            query = query.gte("attendance_date", `${month}-01`).lt("attendance_date", nextMonth);
+          } else {
+            query = query.eq("attendance_date", date);
+          }
+          const { data, error: exportError } = await query.range(offset, offset + attendancePageSize - 1);
+          if (exportError) throw exportError;
+          const page = (data ?? []) as AttendanceExportRow[];
+          loadedRows = loadedRows.concat(page);
+          if (page.length < attendancePageSize) break;
+          offset += attendancePageSize;
         }
-        if (monthly) {
-          const [year, mon] = month.split("-").map(Number);
-          const nextMonth = new Date(Date.UTC(year, mon, 1)).toISOString().slice(0, 10);
-          query = query.gte("attendance_date", `${month}-01`).lt("attendance_date", nextMonth);
-        } else {
-          query = query.eq("attendance_date", date);
-        }
-        const { data, error: exportError } = await query.range(offset, offset + attendancePageSize - 1);
-        if (exportError) throw exportError;
-        const page = (data ?? []) as AttendanceExportRow[];
-        loadedRows = loadedRows.concat(page);
-        if (page.length < attendancePageSize) break;
-        offset += attendancePageSize;
       }
 
       let qrOffset = 0;
@@ -1976,10 +2193,17 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           .eq("is_voided", false)
           .order("attendance_date")
           .order("created_at");
-        if (isSelfService && identity?.personType === "siswa") {
+        if (attendanceView === "subjects") {
           query = query
-            .eq("person_type", "siswa")
-            .eq("person_identifier", identity.identifier);
+            .eq("session_type", "subject")
+            .eq("teacher_name", currentUser?.full_name ?? "");
+          if (subjectFilter !== "all") query = query.eq("subject", subjectFilter);
+          if (subjectClassFilter !== "all") query = query.eq("class_name", subjectClassFilter);
+        } else if (isSelfService && identity) {
+          query = query
+            .eq("person_type", identity.personType)
+            .eq("person_identifier", identity.identifier)
+            .neq("session_type", "subject");
         }
         if (monthly) {
           const [year, mon] = month.split("-").map(Number);
@@ -1998,7 +2222,9 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           person_name: row.person_name,
           class_name: row.class_name,
           status: row.session_type === "school_departure" ? "pulang" : row.status,
-          note: row.note ?? (row.session_type === "school_departure"
+          note: row.session_type === "subject"
+            ? `Mapel: ${row.subject || "—"} · Guru: ${row.teacher_name || "—"}${row.note ? ` · ${row.note}` : ""}`
+            : row.note ?? (row.session_type === "school_departure"
             ? "QR kepulangan sekolah"
             : `QR mata pelajaran: ${row.subject || "—"}${row.teacher_name ? ` · ${row.teacher_name}` : ""}`),
           created_at: row.created_at,
@@ -2013,7 +2239,16 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         Status:statusLabel(r.status), Keterangan:r.note ?? ""
       }));
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(output), "Rekap Absensi");
+      const sheet = XLSX.utils.json_to_sheet(output);
+      output.forEach((row, index) => {
+        const cell = sheet[XLSX.utils.encode_cell({ r: index + 1, c: 2 })];
+        if (cell) {
+          cell.t = "s";
+          cell.v = String(row["NISN/NIP"]);
+          cell.z = "@";
+        }
+      });
+      XLSX.utils.book_append_sheet(wb, sheet, "Rekap Absensi");
       XLSX.writeFile(wb, `Rekap-Absensi-${monthly ? month : date}.xlsx`);
     } catch (exportError) {
       setError("Ekspor gagal: " + errorMessage(exportError));
@@ -2021,6 +2256,258 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       setExporting(false);
     }
   };
+  const loadMonthlyReport = async () => {
+    if (!canManageAttendance) return;
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      setMonthlyReportError("Pilih bulan yang valid untuk rekap bulanan.");
+      return;
+    }
+
+    setMonthlyReportLoading(true);
+    setMonthlyReportError("");
+    setMonthlyReportRows([]);
+    setMonthlyLoadedMonth("");
+    try {
+      const [year, monthNumber] = month.split("-").map(Number);
+      const nextMonth = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
+      const loadedAttendance: AttendanceExportRow[] = [];
+      let offset = 0;
+      while (true) {
+        const { data, error: attendanceError } = await supabase
+          .from("attendance_records")
+          .select("attendance_date,person_type,person_identifier,person_name,class_name,status,note,created_at")
+          .gte("attendance_date", `${month}-01`)
+          .lt("attendance_date", nextMonth)
+          .order("attendance_date")
+          .order("person_name")
+          .range(offset, offset + attendancePageSize - 1);
+        if (attendanceError) throw attendanceError;
+        const page = (data ?? []) as AttendanceExportRow[];
+        loadedAttendance.push(...page);
+        if (page.length < attendancePageSize) break;
+        offset += attendancePageSize;
+      }
+
+      const loadedQr: AttendanceQrExportRecord[] = [];
+      let qrOffset = 0;
+      while (true) {
+        const { data, error: qrError } = await supabase
+          .from("attendance_qr_records")
+          .select("attendance_date,person_identifier,person_name,class_name,session_type,subject,teacher_name,status,note,is_voided,created_at")
+          .in("session_type", ["subject", "school_departure"])
+          .eq("is_voided", false)
+          .gte("attendance_date", `${month}-01`)
+          .lt("attendance_date", nextMonth)
+          .order("attendance_date")
+          .order("created_at")
+          .range(qrOffset, qrOffset + attendancePageSize - 1);
+        if (qrError) throw qrError;
+        const page = (data ?? []) as AttendanceQrExportRecord[];
+        loadedQr.push(...page);
+        if (page.length < attendancePageSize) break;
+        qrOffset += attendancePageSize;
+      }
+
+      const unknownEmployees = loadedAttendance.filter((row) =>
+        row.person_type === "guru_tendik"
+        && !employeeClassifications.has(row.person_identifier),
+      );
+      if (unknownEmployees.length) {
+        throw new Error(
+          `${unknownEmployees.length} catatan Guru/Tendik tidak memiliki kategori yang cocok di Data Induk; periksa NIP sebelum membuat laporan.`,
+        );
+      }
+      const reportRows: MonthlyAttendanceReportRow[] = [
+        ...loadedAttendance.map((row) => ({
+          attendance_date: row.attendance_date,
+          person_identifier: row.person_identifier,
+          person_name: row.person_name,
+          person_type: row.person_type,
+          class_name: row.class_name,
+          status: row.status,
+          note: row.note,
+          session_type: null,
+          subject: null,
+          teacher_name: null,
+          user_category: row.person_type === "siswa"
+            ? "siswa" as const
+            : employeeClassifications.get(row.person_identifier)!.category,
+          created_at: row.created_at,
+        })),
+        ...loadedQr.map((row) => ({
+          attendance_date: row.attendance_date,
+          person_identifier: row.person_identifier,
+          person_name: row.person_name,
+          person_type: "siswa" as const,
+          class_name: row.class_name,
+          status: row.session_type === "school_departure" ? "pulang" as const : row.status,
+          note: row.note,
+          session_type: row.session_type,
+          subject: row.subject,
+          teacher_name: row.teacher_name,
+          user_category: "siswa" as const,
+          created_at: row.created_at,
+        })),
+      ].sort((a, b) => a.attendance_date.localeCompare(b.attendance_date)
+        || a.person_name.localeCompare(b.person_name, "id-ID")
+        || a.created_at.localeCompare(b.created_at));
+      setMonthlyReportRows(reportRows);
+      setMonthlyLoadedMonth(month);
+    } catch (reportError) {
+      setMonthlyReportRows([]);
+      setMonthlyLoadedMonth("");
+      setMonthlyReportError(`Rekap bulanan gagal dimuat: ${errorMessage(reportError)}`);
+    } finally {
+      setMonthlyReportLoading(false);
+    }
+  };
+  const handleMonthlyTemplateFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!/\.(html?|htm)$/i.test(file.name)) {
+      setMonthlyTemplateError("Pilih file template .html atau .htm.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setMonthlyTemplateError("Ukuran file template maksimal 5 MB.");
+      return;
+    }
+    try {
+      const html = sanitizeAttendanceTemplateHtml(await file.text());
+      if (!html.trim()) throw new Error("File tidak memiliki konten HTML yang dapat digunakan.");
+      if (html.length > 200_000) throw new Error("Konten HTML maksimal 200 KB.");
+      setMonthlyTemplate(html);
+      setMonthlyTemplateFileName(file.name);
+      setMonthlyTemplateError("");
+    } catch (templateError) {
+      setMonthlyTemplateError(`Template gagal dibaca: ${errorMessage(templateError)}`);
+    }
+  };
+  const monthlyReportCategoryLabel = adminCategory === "all"
+    ? "Semua"
+    : adminCategory === "guru"
+      ? adminTeacherFilter === "guru_bk" ? "Guru BK" : adminTeacherFilter === "guru" ? "Guru Mapel" : "Guru & Guru BK"
+      : adminCategory === "tendik" ? "Tendik" : "Siswa";
+  const monthlyFilteredRows = useMemo(() => monthlyReportRows.filter((row) => {
+    if (adminCategory !== "all" && row.user_category !== adminCategory) return false;
+    if (adminCategory === "guru" && row.user_category === "guru" && adminTeacherFilter !== "all") {
+      return employeeClassifications.get(row.person_identifier)?.teacherRole === adminTeacherFilter;
+    }
+    return true;
+  }), [adminCategory, adminTeacherFilter, employeeClassifications, monthlyReportRows]);
+  const monthlyReportHtml = useMemo(() => {
+    const monthLabel = /^\d{4}-\d{2}$/.test(month)
+      ? new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" })
+        .format(new Date(`${month}-01T00:00:00Z`))
+      : month;
+    const records = monthlyLoadedMonth === month ? monthlyFilteredRows : [];
+    const statusCounts = statuses.map((status) =>
+      `<li>${status.label}: <strong>${records.filter((row) => row.status === status.value).length}</strong></li>`,
+    ).join("");
+    const rowsHtml = records.map((row, index) => `<tr>
+      <td>${index + 1}</td>
+      <td class="report-identifier">${escapeAttendanceHtml(row.person_identifier || "—")}</td>
+      <td>${escapeAttendanceHtml(row.person_name)}</td>
+      <td>${escapeAttendanceHtml(row.class_name ?? "—")}</td>
+      <td>${escapeAttendanceHtml(row.session_type === "subject" ? row.subject ?? "Mapel" : row.user_category === "siswa" ? "Sekolah" : "Pribadi")}</td>
+      <td>${escapeAttendanceHtml(row.session_type === "subject" ? row.teacher_name ?? "—" : "—")}</td>
+      <td>${escapeAttendanceHtml(statusLabel(row.status))}</td>
+      <td>${escapeAttendanceHtml(row.note ?? "—")}</td>
+    </tr>`).join("");
+    const table = `<table class="monthly-attendance"><thead><tr>
+      <th>No.</th><th>NISN / NIP</th><th>Nama</th><th>Kelas</th><th>Mapel / Jenis</th><th>Guru Pengampu</th><th>Status</th><th>Keterangan</th>
+      </tr></thead><tbody>${rowsHtml || `<tr><td colspan="8">Tidak ada catatan pada periode ini.</td></tr>`}</tbody></table>`;
+    const letterhead = getSchoolLetterhead(schoolSettings, letterheadSlot);
+    const safeImage = (url: string) => /^(?:https?:\/\/|\/(?!\/))/i.test(url) ? escapeAttendanceHtml(url) : "";
+    const letterheadHtml = `<div class="report-letterhead kop-${letterhead.layout}">
+      <img src="${safeImage(letterhead.province_logo_url)}" alt="">
+      <div><p>PEMERINTAH PROVINSI SULAWESI SELATAN</p><p>DINAS PENDIDIKAN</p><h2>${escapeAttendanceHtml(letterhead.school_name)}</h2><p>${escapeAttendanceHtml(letterhead.letterhead)}</p></div>
+      ${letterhead.layout === "2" ? `<img src="${safeImage(letterhead.school_logo_url)}" alt="">` : ""}
+    </div><div class="report-rule"></div>`;
+    const summary = `<ul class="report-summary">${statusCounts}<li>Total catatan: <strong>${records.length}</strong></li></ul>`;
+    const variables: Record<string, string> = {
+      kop_surat: letterheadHtml,
+      judul_rekap: "REKAPITULASI KEHADIRAN BULANAN",
+      kategori_pengguna: escapeAttendanceHtml(monthlyReportCategoryLabel),
+      bulan_tahun: escapeAttendanceHtml(monthLabel),
+      tabel_rekap_bulanan: table,
+      ringkasan_rekap: summary,
+      tanggal_unduh: escapeAttendanceHtml(new Intl.DateTimeFormat("id-ID", {
+        dateStyle: "long",
+        timeZone: attendanceTimezone,
+      }).format(new Date())),
+      kepala_sekolah: escapeAttendanceHtml(schoolSettings?.principal_name?.trim() || "—"),
+      nip_kepala_sekolah: escapeAttendanceHtml(schoolSettings?.principal_nip?.trim() || "—"),
+    };
+    const template = sanitizeAttendanceTemplateHtml(monthlyTemplate);
+    const hasTableToken = template.includes("{{tabel_rekap_bulanan}}");
+    const defaultBody = `${letterheadHtml}<h1>REKAPITULASI KEHADIRAN BULANAN</h1>
+      <p><strong>Kategori:</strong> ${variables.kategori_pengguna}</p>
+      <p><strong>Periode:</strong> ${variables.bulan_tahun}</p>${summary}${table}
+      <p>Diunduh pada ${variables.tanggal_unduh}</p>
+      <div class="report-signature"><p>Kepala Sekolah</p><br><strong>${variables.kepala_sekolah}</strong><br>NIP. ${variables.nip_kepala_sekolah}</div>`;
+    const body = template.includes("{{")
+      ? template.replace(/\{\{(kop_surat|judul_rekap|kategori_pengguna|bulan_tahun|tabel_rekap_bulanan|ringkasan_rekap|tanggal_unduh|kepala_sekolah|nip_kepala_sekolah)\}\}/g,
+        (_placeholder, key: string) => variables[key] ?? "")
+      : template.trim() || defaultBody;
+    const finalBody = hasTableToken ? body : `${body}${table}`;
+    return `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Rekap Kehadiran ${escapeAttendanceHtml(monthLabel)}</title>
+      <style>
+        *{box-sizing:border-box}body{margin:0;padding:24px;color:#182033;font:12px Arial,sans-serif}
+        h1{text-align:center;font-size:17px;margin:18px 0}.report-letterhead{display:grid;grid-template-columns:78px 1fr 78px;align-items:center;gap:12px;text-align:center}
+        .report-letterhead.kop-1,.report-letterhead.kop-3{grid-template-columns:78px 1fr}.report-letterhead img{max-width:70px;max-height:70px;object-fit:contain}
+        .report-letterhead p{margin:2px;font-size:10px}.report-letterhead h2{margin:3px;font-size:15px}.report-rule{border-top:3px double #111;margin:8px 0 16px}
+        .monthly-attendance{width:100%;border-collapse:collapse;font-size:10px}.monthly-attendance th,.monthly-attendance td{border:1px solid #333;padding:5px;text-align:left;vertical-align:top}
+        .monthly-attendance th{background:#edf1f8}.monthly-attendance .report-identifier{width:110px;white-space:nowrap;word-break:keep-all}
+        .report-summary{display:flex;flex-wrap:wrap;gap:16px;list-style:none;padding:0}.report-signature{margin:35px 5% 0 auto;width:230px;text-align:center}.report-date{text-align:right}
+        @page{size:A4 landscape;margin:12mm}@media print{body{padding:0}}
+      </style></head><body>${finalBody}</body></html>`;
+  }, [letterheadSlot, month, monthlyFilteredRows, monthlyLoadedMonth, monthlyReportCategoryLabel, monthlyTemplate, schoolSettings]);
+  const printMonthlyReport = () => {
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      setMonthlyReportError("Jendela cetak diblokir browser. Izinkan pop-up lalu coba lagi.");
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(monthlyReportHtml);
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => printWindow.print(), 250);
+  };
+  const downloadMonthlyHtml = () => {
+    const blob = new Blob([monthlyReportHtml], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Rekap-Kehadiran-${month}-${adminCategory}.html`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const attendanceTabs: Array<{ value: AttendanceView | "all" | AttendanceUserCategory; label: string }> =
+    canManageAttendance
+      ? [
+        { value: "guru", label: "Rekap Guru" },
+        { value: "tendik", label: "Rekap Tendik" },
+        { value: "siswa", label: "Rekap Siswa" },
+        { value: "all", label: "Semua" },
+      ]
+      : isTeacher
+        ? [
+          { value: "personal", label: "Absensi & Rekap Saya" },
+          { value: "subjects", label: "Rekap Mapel Saya" },
+          { value: "homeroom", label: "Kelas Perwalian" },
+        ]
+        : role === "guru_bk"
+          ? [
+            { value: "personal", label: "Absensi & Rekap Saya" },
+            { value: "monitor", label: "Pantauan Siswa (Read-Only)" },
+          ]
+          : isSelfService
+            ? [{ value: "personal", label: "Absensi & Rekap Kehadiran Saya" }]
+            : [{ value: "admin", label: "Rekap Harian" }];
+  const activeAttendanceTab = canManageAttendance ? adminCategory : attendanceView;
   if (!isSelfService && !canViewAllAttendance) {
     return <div className="attendance-page">
       <div className="attendance-alert error">
@@ -2042,6 +2529,28 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
             ? "Catat dan lihat kehadiran yang terhubung dengan akun Anda."
             : "Absensi siswa serta guru dan tenaga kependidikan dalam Super App SMAN 7 Maros."}</p></div>
     </div>
+    <nav className="attendance-segment-tabs" aria-label="Kategori rekap kehadiran">
+            {attendanceTabs.map((tab) => (
+              <button
+                type="button"
+                key={tab.value}
+                className={activeAttendanceTab === tab.value ? "is-active" : ""}
+                aria-pressed={activeAttendanceTab === tab.value}
+                onClick={() => {
+                  setFilter("");
+                  if (canManageAttendance) {
+                    const nextCategory = tab.value as "all" | AttendanceUserCategory;
+                    setAdminCategory(nextCategory);
+                    setAttendanceView("admin");
+                  } else {
+                    setAttendanceView(tab.value as AttendanceView);
+                  }
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+    </nav>
     <div className="attendance-stats">
       {summary.map((s, index) => <div className={`attendance-stat stat-${s.value}`} style={{"--stat-delay": `${index * 70}ms`} as React.CSSProperties} key={s.value}>
         <div className="attendance-stat-icon">{s.value === "hadir" ? <UserCheck size={19}/> : s.value === "sakit" ? <Stethoscope size={19}/> : <CalendarDays size={19}/>}</div>
@@ -2255,7 +2764,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       </details>}
     </section>}
     <div className="attendance-columns">
-      {canRecordAttendance && <form className="attendance-panel" onSubmit={event=>{
+      {canRecordAttendance && attendanceView === "personal" && <form className="attendance-panel" onSubmit={event=>{
         if (role === "siswa") event.preventDefault();
         else void saveAttendance(event);
       }}>
@@ -2368,25 +2877,120 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         {message && <div className="attendance-alert success"><CheckCircle2 size={17}/>{message}</div>}
         {role !== "siswa" && <button className="attendance-primary" disabled={saving || identityLoading || (isSelfService && !identity) || (!isSelfService && (identityLookup !== "found" || verifiedIdentifier !== identifier.trim()))}>{saving ? "Menyimpan..." : "Simpan Absensi"}</button>}
       </form>}
-      <section className={`attendance-panel attendance-records${!canRecordAttendance ? " attendance-records-wide" : ""}`}>
+      <section className={`attendance-panel attendance-records${attendanceView !== "personal" ? " attendance-records-wide" : ""}`}>
           <header className="attendance-print-header">
             <SchoolLetterheadPreview letterhead={printHeader} />
-            <h1>{isTeacher ? "Rekap Kehadiran Mapel Saya" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Kehadiran"}</h1>
-            <p>{date} · {rows.length} catatan</p>
+            <h1>{attendanceView === "subjects" ? "Rekap Kehadiran Mapel Saya" : attendanceView === "monitor" || attendanceView === "homeroom" ? "Pantauan Kehadiran Siswa" : canManageAttendance ? "Rekap Kehadiran" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Kehadiran"}</h1>
+            <p>{date} · {visibleRows.length} catatan</p>
           </header>
-        <div className="attendance-panel-title"><div><h2>{isTeacher ? "Rekap Kehadiran Mapel Saya" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Harian"}</h2><p>{role === "siswa" ? "6×24 jam terakhir" : `${date} · ${rows.length} catatan`}</p></div><FileSpreadsheet size={22}/></div>
+        <div className="attendance-panel-title"><div><h2>{attendanceView === "subjects" ? "Rekap Kehadiran Mapel Saya" : attendanceView === "monitor" ? "Pantauan Kehadiran & Mapel Siswa" : attendanceView === "homeroom" ? "Pantauan Kehadiran Mapel di Kelas Perwalian" : canManageAttendance ? "Rekap Harian" : isSelfService ? "Riwayat Kehadiran Saya" : "Rekap Harian"}</h2><p>{attendanceView === "subjects" ? `${date} · ${filtered.length} catatan mapel` : attendanceView === "monitor" || attendanceView === "homeroom" ? `${date} · Hanya tampil, tidak dapat mengubah sesi guru lain` : role === "siswa" ? "6×24 jam terakhir" : `${date} · ${filtered.length} catatan`}</p></div><FileSpreadsheet size={22}/></div>
+        {attendanceView === "subjects" && <div className="attendance-report-filters">
+          <label>Tanggal<input type="date" value={date} onChange={event=>setDate(event.target.value)}/></label>
+          <label>Mata pelajaran<select value={subjectFilter} onChange={event=>setSubjectFilter(event.target.value)}>
+            <option value="all">Semua mata pelajaran</option>
+            {availableQrSubjects.map(subject=><option key={subject} value={subject}>{subject}</option>)}
+          </select></label>
+          <label>Kelas<select value={subjectClassFilter} onChange={event=>setSubjectClassFilter(event.target.value)}>
+            <option value="all">Semua kelas</option>
+            {availableQrClasses
+              .filter(assignment=>subjectFilter==="all" || assignment.subject===subjectFilter)
+              .map(assignment=><option key={assignment.class_id} value={assignment.class_name}>{assignment.class_name}</option>)}
+          </select></label>
+        </div>}
+        {(attendanceView === "admin" || canManageAttendance) && <div className="attendance-report-filters">
+          <label>Tanggal rekap<input type="date" value={date} onChange={event=>setDate(event.target.value)}/></label>
+          {adminCategory === "guru" && <label>Jenis guru<select value={adminTeacherFilter} onChange={event=>setAdminTeacherFilter(event.target.value as typeof adminTeacherFilter)}>
+            <option value="all">Guru & Guru BK</option><option value="guru">Guru Mapel</option><option value="guru_bk">Guru BK</option>
+          </select></label>}
+        </div>}
         <div className="attendance-tools"><div className="attendance-search"><Search size={16}/><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Cari nama, kode, kelas..."/></div>
-          {role !== "siswa" && <button className="attendance-secondary" onClick={()=>void exportRows(false)} disabled={exporting}><Download size={16}/> Excel</button>}
+          {role !== "siswa" && attendanceView !== "monitor" && attendanceView !== "homeroom" && <button className="attendance-secondary" onClick={()=>void exportRows(false)} disabled={exporting}><Download size={16}/> Excel</button>}
             {(!isSelfService || isTeacher) && <><SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot}/><button className="attendance-secondary" onClick={()=>window.print()}><Download size={16}/> PDF / Cetak</button></>}
         </div>
-        <div className="attendance-table-wrap"><table><thead><tr><th>Tanggal</th><th>Nama / ID</th><th>Jenis</th><th>Kelas</th><th>Status</th></tr></thead><tbody>
-        {filtered.map(r=><tr key={r.id}><td>{r.attendance_date}</td><td><strong>{r.person_name}</strong><small>{r.person_identifier}</small>{r.session_type === "subject" && <small className="attendance-row-subject">{r.subject || "Mapel"}{r.teacher_name ? ` · ${r.teacher_name}` : ""}</small>}</td><td>{r.person_type==="siswa"?"Siswa":"Guru/Tendik"}</td><td>{r.class_name || "—"}</td><td><span className={`attendance-status status-${r.status}`}>{r.session_type === "school_departure" ? "Pulang" : statusLabel(r.status)}</span></td></tr>)}
-        {!filtered.length && <tr><td colSpan={5} className="attendance-empty">{loading?"Memuat data...":"Belum ada data untuk tanggal/filter ini."}</td></tr>}
+        <div className="attendance-table-wrap"><table><thead>
+          {attendanceView === "subjects" || attendanceView === "monitor" || attendanceView === "homeroom"
+            ? <tr><th>Tanggal</th><th>Mata pelajaran / kegiatan</th><th>Guru pengampu</th><th>Kelas</th><th>Nama / NISN</th><th>Status</th></tr>
+            : <tr><th>Tanggal</th><th>Nama / ID</th><th>Jenis</th><th>Kelas</th><th>Status</th></tr>}
+        </thead><tbody>
+        {filtered.map(r=><tr key={r.id}>
+          <td>{r.attendance_date}</td>
+          {attendanceView === "subjects" || attendanceView === "monitor" || attendanceView === "homeroom"
+            ? <>
+              <td>{r.session_type === "subject"
+                ? r.subject || "Mata pelajaran"
+                : r.session_type === "school_departure" ? "Kepulangan sekolah" : "Kehadiran sekolah"}</td>
+              <td>{r.teacher_name || "—"}</td>
+              <td>{r.class_name || "—"}</td>
+              <td><strong>{r.person_name}</strong><small className="attendance-identifier">{r.person_identifier || "—"}</small></td>
+              <td><span className={`attendance-status status-${r.status}`}>{statusLabel(r.status)}</span></td>
+            </>
+            : <>
+              <td><strong>{r.person_name}</strong><small className="attendance-identifier">{r.person_identifier || "—"}</small>{r.session_type === "subject" && <small className="attendance-row-subject">{r.subject || "Mapel"}{r.teacher_name ? ` · ${r.teacher_name}` : ""}</small>}</td>
+              <td>{r.person_type==="siswa"?"Siswa":"Guru/Tendik"}</td><td>{r.class_name || "—"}</td><td><span className={`attendance-status status-${r.status}`}>{r.session_type === "school_departure" ? "Pulang" : statusLabel(r.status)}</span></td>
+            </>}
+        </tr>)}
+        {!filtered.length && <tr><td colSpan={attendanceView === "subjects" || attendanceView === "monitor" || attendanceView === "homeroom" ? 6 : 5} className="attendance-empty">{loading?"Memuat data...":attendanceView==="monitor"||attendanceView==="homeroom"?"Belum ada kehadiran mapel pada kelas perwalian untuk tanggal ini.":"Belum ada data untuk tanggal/filter ini."}</td></tr>}
         </tbody></table></div>
-        {role !== "siswa" && <div className="attendance-month-export"><label>{isSelfService ? "Riwayat bulanan" : "Rekap bulanan"}<input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><button className="attendance-primary" disabled={exporting} onClick={()=>void exportRows(true)}><Download size={16}/>{exporting ? "Menyiapkan..." : isSelfService ? "Ekspor Riwayat Saya" : "Ekspor Excel Bulanan"}</button></div>}
+        {role !== "siswa" && attendanceView !== "monitor" && attendanceView !== "homeroom" && <div className="attendance-month-export"><label>{isSelfService ? "Riwayat bulanan" : "Rekap bulanan"}<input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label><button className="attendance-primary" disabled={exporting} onClick={()=>void exportRows(true)}><Download size={16}/>{exporting ? "Menyiapkan..." : isSelfService ? "Ekspor Riwayat Saya" : "Ekspor Excel Bulanan"}</button></div>}
         <p className="attendance-hint"><ShieldCheck size={14}/> {role === "siswa" ? "Riwayat kehadiran dapat dilihat di halaman ini dan tidak menyediakan fitur unduh." : "Data ditampilkan sesuai hak akses Supabase yang diberikan ke akun login."}</p>
       </section>
     </div>
+    {canManageAttendance && <section className="attendance-panel attendance-monthly-report">
+      <div className="attendance-panel-title">
+        <div><h2>Rekap Bulanan HTML</h2><p>Pratinjau cetak/PDF dan HTML untuk Guru, Guru BK, Tendik, dan Siswa.</p></div>
+        <FileSpreadsheet size={22}/>
+      </div>
+      <div className="attendance-monthly-controls">
+        <label>Bulan rekap<input type="month" value={month} onChange={event=>setMonth(event.target.value)}/></label>
+        <SchoolLetterheadPicker value={letterheadSlot} onChange={setLetterheadSlot}/>
+        <button type="button" className="attendance-primary" onClick={()=>void loadMonthlyReport()} disabled={monthlyReportLoading}>
+          {monthlyReportLoading ? "Memuat rekap..." : "Tampilkan Rekap Bulanan"}
+        </button>
+      </div>
+      <SchoolLetterheadPreview letterhead={printHeader} />
+      {adminCategory === "guru" && <label className="attendance-monthly-teacher-filter">Kategori Guru
+        <select value={adminTeacherFilter} onChange={event=>setAdminTeacherFilter(event.target.value as typeof adminTeacherFilter)}>
+          <option value="all">Guru & Guru BK</option>
+          <option value="guru">Guru Mapel</option>
+          <option value="guru_bk">Guru BK</option>
+        </select>
+      </label>}
+      <input
+        ref={monthlyTemplateInputRef}
+        className="attendance-file-input"
+        type="file"
+        accept=".html,.htm"
+        onChange={event=>void handleMonthlyTemplateFile(event)}
+      />
+      <div className="attendance-weekly-template-tools">
+        <span>{monthlyTemplateFileName || "Template default siap pakai · dapat diedit atau diganti dengan HTML."}</span>
+        <button type="button" className="attendance-secondary" onClick={()=>monthlyTemplateInputRef.current?.click()}>
+          Unggah template HTML
+        </button>
+      </div>
+      <label className="attendance-template-editor">
+        Editor template HTML
+        <textarea value={monthlyTemplate} onChange={event=>setMonthlyTemplate(event.target.value)} rows={8} maxLength={200_000}/>
+      </label>
+      <p className="attendance-hint">Token tersedia: {"{{kop_surat}}"}, {"{{judul_rekap}}"}, {"{{kategori_pengguna}}"}, {"{{bulan_tahun}}"}, {"{{tabel_rekap_bulanan}}"}, {"{{ringkasan_rekap}}"}, {"{{tanggal_unduh}}"}, {"{{kepala_sekolah}}"}, {"{{nip_kepala_sekolah}}"}.</p>
+      {monthlyReportError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{monthlyReportError}</div>}
+      {monthlyTemplateError && <div className="attendance-alert error" role="alert"><XCircle size={17}/>{monthlyTemplateError}</div>}
+      <div className="attendance-monthly-actions">
+        <span>{monthlyLoadedMonth === month ? `${monthlyFilteredRows.length} catatan · ${monthlyReportCategoryLabel}` : "Muat rekap untuk periode yang dipilih sebelum mengunduh."}</span>
+        <button type="button" className="attendance-secondary" onClick={downloadMonthlyHtml} disabled={monthlyLoadedMonth !== month}>
+          <Download size={16}/> Unduh HTML
+        </button>
+        <button type="button" className="attendance-primary" onClick={printMonthlyReport} disabled={monthlyLoadedMonth !== month}>
+          <Download size={16}/> Unduh PDF / Cetak
+        </button>
+      </div>
+      <iframe
+        className="attendance-monthly-preview"
+        srcDoc={monthlyReportHtml}
+        title="Pratinjau langsung rekap bulanan"
+        sandbox="allow-same-origin"
+      />
+    </section>}
     {canManageAttendance && <section className="attendance-panel attendance-weekly-template">
       <div className="attendance-panel-title">
         <div><h2>Format Rekap Mingguan</h2><p>Unggah .docx/.html atau edit HTML. Placeholder kop dan tabel siswa: {"{{kop_surat}}"} dan {"{{baris_siswa}}"}.</p></div>
@@ -2415,7 +3019,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         {weeklyTemplateSaving ? "Menyimpan..." : "Simpan format rekap"}
       </button>
     </section>}
-    {isHomeroomTeacher && <section className="attendance-panel attendance-homeroom-weekly">
+    {isHomeroomTeacher && (attendanceView === "homeroom" || attendanceView === "monitor") && <section className="attendance-panel attendance-homeroom-weekly">
       <div className="attendance-panel-title">
         <div><h2>Rekapitulasi Kehadiran Mingguan</h2><p>Daftar kelas mengikuti relasi wali kelas, penugasan mata pelajaran, atau binaan Guru BK.</p></div>
         <FileSpreadsheet size={22}/>
@@ -2449,7 +3053,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
                 {["H", "T", "S", "I", "A"].map(code=><th key={code}>{code}</th>)}
               </tr></thead><tbody>
               {report.students.map((student,index)=><tr key={student.studentId}>
-                <td>{index+1}</td><td>{student.identifier || "—"}</td><td>{student.name}</td><td>{student.gender ?? "—"}</td>
+                <td>{index+1}</td><td className="attendance-identifier">{student.identifier || "—"}</td><td>{student.name}</td><td>{student.gender ?? "—"}</td>
                 {weeklyDays.map(day=>{
                   const record=student.days.get(day);
                   const code=record ? weeklyStatusCode[record.status] : undefined;

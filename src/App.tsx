@@ -67,6 +67,7 @@ import Perpustakaan from "./Perpustakaan";
 import Akademik from "./Akademik";
 import KesiswaanBK from "./KesiswaanBK";
 import LaporanAnalitik from "./LaporanAnalitik";
+import OfficialAnnouncementModal from "./OfficialAnnouncementModal";
 import PengaturanIntegrasi from "./PengaturanIntegrasi";
 import PemilihanOSISModule from "./PemilihanOSISModule";
 import SmavenLearn from "./SmavenLearn";
@@ -3071,6 +3072,13 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
   return (
     <div className={`app-shell ${moduleStatuses[activePage] === "active" && moduleEnabledOverrides[activePage] !== false ? "active-module-fullshell" : ""}`}>
         <MaintenanceBanner />
+      {isDashboard && (
+        <OfficialAnnouncementModal
+          key={`${currentUser.id}:${currentUser.role}`}
+          userId={currentUser.id}
+          role={currentUser.role}
+        />
+      )}
       <AnimatePresence>
         {mobileMenu && (
           <motion.div
