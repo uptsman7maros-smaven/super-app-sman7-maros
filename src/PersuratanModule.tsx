@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { Session } from '@supabase/supabase-js'
@@ -27,7 +27,13 @@ type LogoPosition = 'left' | 'top' | 'none'
 type PageMarginsMm = { top: number; right: number; bottom: number; left: number }
 type LetterDocumentMarkup = { html: string; header: string; paperSize: PaperSize; marginsMm: PageMarginsMm; isDraft: boolean; title: string }
 type PrincipalSignatureSlot = { id: number; page: number; context: string }
-type PrincipalSignatureOccurrence = PrincipalSignatureSlot & { element: Element; start: number; end: number }
+type PrincipalSignatureOccurrence = PrincipalSignatureSlot & {
+  element: Element
+  positionStart: number
+  positionEnd: number
+  start: number
+  end: number
+}
 type PrincipalSignatureLayout = { root: HTMLDivElement; occurrences: PrincipalSignatureOccurrence[] }
 type TemplateField = {
   name: string
@@ -146,6 +152,11 @@ type StudentLetterPrefill = {
 
 const TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}/g
 const KEPSEK_TTE_CODES = ['£', '§', 'ñ', 'µ', 'Ø', 'œ', 'Ð', '¶', 'ø', 'ð', 'ƒ'] as const
+const MAX_SIGNATURE_HTML_LENGTH = 250_000
+const MAX_SIGNATURE_CANDIDATES = 100
+const MAX_SIGNATURE_WALK_STEPS = 100_000
+const MAX_SIGNATURE_TEXT_LENGTH = 100_000
+const MAX_PAGE_BREAK_BOUNDARIES = 1_000
 const USER_TOKEN_NAMES = new Set(['nama', 'nip', 'jabatan'])
 const OFFICE_TOKEN_NAMES = new Set(['nomor_surat', 'tanggal_terbit', 'penandatangan', 'nip_penandatangan'])
 const SCHOOL_PROFILE_TOKEN_NAMES = new Set(['nama_kepala_sekolah', 'nip_kepala_sekolah'])
@@ -408,19 +419,37 @@ function getPageBreakPositions(element:HTMLElement):('before'|'after')[]{
 
 function getPageBreakBoundaries(root:HTMLElement):PageBreakBoundary[]{
   const documentRef=root.ownerDocument
-  return Array.from(root.querySelectorAll<HTMLElement>('*'))
-    .flatMap(element=>getPageBreakPositions(element).map(position=>({element,position})))
-    .sort((first,second)=>{
-      const firstRange=documentRef.createRange()
-      const secondRange=documentRef.createRange()
-      if(first.position==='before')firstRange.setStartBefore(first.element)
-      else firstRange.setStartAfter(first.element)
-      if(second.position==='before')secondRange.setStartBefore(second.element)
-      else secondRange.setStartAfter(second.element)
-      firstRange.collapse(true)
-      secondRange.collapse(true)
-      return firstRange.compareBoundaryPoints(Range.START_TO_START,secondRange)
-    })
+  const walker=documentRef.createTreeWalker(root,NodeFilter.SHOW_ELEMENT)
+  const boundaries:PageBreakBoundary[]=[]
+  let steps=0
+  let boundaryLimitReached=false
+  while(steps<MAX_SIGNATURE_WALK_STEPS){
+    const node=walker.nextNode()
+    if(!node)break
+    steps+=1
+    const element=node as HTMLElement
+    for(const position of getPageBreakPositions(element)){
+      if(boundaries.length>=MAX_PAGE_BREAK_BOUNDARIES){
+        boundaryLimitReached=true
+        break
+      }
+      boundaries.push({element,position})
+    }
+    if(boundaryLimitReached)break
+  }
+  if(steps>=MAX_SIGNATURE_WALK_STEPS)console.warn('Pemindaian batas halaman surat mencapai batas aman.')
+  if(boundaryLimitReached)console.warn('Jumlah batas halaman surat melebihi batas aman.')
+  return boundaries.sort((first,second)=>{
+    const firstRange=documentRef.createRange()
+    const secondRange=documentRef.createRange()
+    if(first.position==='before')firstRange.setStartBefore(first.element)
+    else firstRange.setStartAfter(first.element)
+    if(second.position==='before')secondRange.setStartBefore(second.element)
+    else secondRange.setStartAfter(second.element)
+    firstRange.collapse(true)
+    secondRange.collapse(true)
+    return firstRange.compareBoundaryPoints(Range.START_TO_START,secondRange)
+  })
 }
 
 function splitLetterElementAtPageBreaks(root:HTMLElement):HTMLElement[]{
@@ -524,35 +553,189 @@ function requestWantsPrincipalTte(request:LetterRequest) {
   return request.form_data?.request_tte_kepsek === true
 }
 
+type SignatureTextPoint = { node: Text; offset: number } | null
+type SignatureTextLayout = { text: string; points: SignatureTextPoint[] }
+type SignatureTextBudget = { remainingSteps: number; remainingText: number }
+
+function getSignatureTextLayout(element:Element,budget:SignatureTextBudget):SignatureTextLayout|null {
+  let text=''
+  const points:SignatureTextPoint[]=[]
+  const appendBreak=()=>{
+    if(!text||text.endsWith('\n'))return
+    if(budget.remainingText<=0)return
+    budget.remainingText-=1
+    text+='\n'
+    points.push(null)
+  }
+  const blockTags=new Set(['DIV','LI','P','TD','TH','TR'])
+  const stack:Array<Node|{lineBreak:true}>=[]
+  for(let index=element.childNodes.length-1;index>=0;index-=1)stack.push(element.childNodes[index])
+  while(stack.length){
+    if(budget.remainingSteps<=0||budget.remainingText<=0)return null
+    budget.remainingSteps-=1
+    const node=stack.pop()
+    if(!node)continue
+    if(!('nodeType'in node)){
+      appendBreak()
+      continue
+    }
+    if(node.nodeType===Node.TEXT_NODE){
+      const textNode=node as Text
+      for(let offset=0;offset<textNode.data.length;offset+=1){
+        if(budget.remainingText<=0)return null
+        budget.remainingText-=1
+        text+=textNode.data[offset]
+        points.push({node:textNode,offset})
+      }
+      continue
+    }
+    if(!(node instanceof Element))continue
+    if(node.tagName==='BR'){
+      if(budget.remainingText<=0)return null
+      budget.remainingText-=1
+      text+='\n'
+      points.push(null)
+      continue
+    }
+    const isBlock=blockTags.has(node.tagName)
+    if(isBlock)appendBreak()
+    if(isBlock)stack.push({lineBreak:true})
+    for(let index=node.childNodes.length-1;index>=0;index-=1)stack.push(node.childNodes[index])
+  }
+  return {text,points}
+}
+
+function signatureTextRange(element:Element,start:number,end:number) {
+  const layout=getSignatureTextLayout(element,{remainingSteps:MAX_SIGNATURE_WALK_STEPS,remainingText:MAX_SIGNATURE_TEXT_LENGTH})
+  if(!layout)return null
+  const {points}=layout
+  const first=points[start]
+  const last=points[end-1]
+  if(!first||!last)return null
+  const range=element.ownerDocument.createRange()
+  range.setStart(first.node,first.offset)
+  range.setEnd(last.node,last.offset+1)
+  return range
+}
+
+function wrapSignatureAnchor(element:Element,start:number,end:number,slotId:number,anchorType:'position'|'name') {
+  const range=signatureTextRange(element,start,end)
+  if(!range)return
+  const anchor=element.ownerDocument.createElement('span')
+  anchor.className=`letter-kepsek-tte-${anchorType}-anchor`
+  anchor.dataset.tteSlotId=String(slotId)
+  anchor.append(range.extractContents())
+  range.insertNode(anchor)
+}
+
+function followsTembusanSection(element:Element,root:Element) {
+  let current:Element|null=element
+  let steps=0
+  while(current&&current!==root&&steps<MAX_SIGNATURE_WALK_STEPS){
+    steps+=1
+    let sibling=current.previousSibling
+    while(sibling&&steps<MAX_SIGNATURE_WALK_STEPS){
+      steps+=1
+      if(/(?:^|\n)\s*tembusan\b/i.test(sibling.textContent||''))return true
+      sibling=sibling.previousSibling
+    }
+    current=current.parentElement
+  }
+  return Boolean(current&&current!==root)
+}
+
 function getPrincipalSignatureLayout(html:string,principalName:string):PrincipalSignatureLayout|null {
   const name=principalName.trim()
-  if(!name||typeof DOMParser==='undefined')return null
-  const parsed=new DOMParser().parseFromString(html,'text/html')
+  if(!name||html.length>MAX_SIGNATURE_HTML_LENGTH||typeof DOMParser==='undefined')return null
+  const parsed=new DOMParser().parseFromString('','text/html')
   const root=parsed.createElement('div')
   root.innerHTML=html
   const normalizedName=name.toLocaleLowerCase('id-ID')
-  const isSlotCandidate=(element:Element)=>{
-    const text=element.textContent?.replace(/\s+/g,' ').trim().toLocaleLowerCase('id-ID')||''
-    return text.includes(normalizedName)&&/(?:kepala\s+sekolah|kepala\s+sman\b|pejabat\s+yang\s+memberi\s+perintah)/i.test(text)
-  }
-  const candidateElements=Array.from(root.querySelectorAll('*')).filter(element=>
-    isSlotCandidate(element)
-    &&!Array.from(element.children).some(child=>isSlotCandidate(child)
-      ||Array.from(child.querySelectorAll('*')).some(isSlotCandidate)),
-  )
+  const titleLinePattern=/^(?:(?:mengetahui)\s*[,.:]?\s*)?(?:kepala\s+(?:sekolah|upt|sman(?:\s+[a-z0-9.-]+)*)|pejabat\s+yang\s+memberi\s+perintah)\s*[,.:]?\s*$/i
+  const candidates:PrincipalSignatureOccurrence[]=[]
+  const candidateElements=Array.from(root.querySelectorAll('p,td,th,div,li,table,tbody,tr'))
   const pageBreaks=getPageBreakBoundaries(root)
-  const occurrences:PrincipalSignatureOccurrence[]=[]
+  const budget:SignatureTextBudget={remainingSteps:MAX_SIGNATURE_WALK_STEPS,remainingText:MAX_SIGNATURE_TEXT_LENGTH}
+  const textNodeIds=new WeakMap<Text,number>()
+  let nextTextNodeId=1
+  const getTextNodeId=(node:Text)=>{
+    const existing=textNodeIds.get(node)
+    if(existing)return existing
+    const id=nextTextNodeId++
+    textNodeIds.set(node,id)
+    return id
+  }
+  const candidateKeys=new Set<string>()
+  let candidateCount=0
   for(const element of candidateElements){
-    const fullText=element.textContent||''
-    const lowerText=fullText.toLocaleLowerCase('id-ID')
+    if(budget.remainingSteps<=0)return null
+    budget.remainingSteps-=1
+    const layout=getSignatureTextLayout(element,budget)
+    if(!layout)return null
+    const lowerText=layout.text.toLocaleLowerCase('id-ID')
+    const titleLines:Array<{start:number;end:number;roleStart:number;roleEnd:number}>=[]
+    let lineStart=0
+    let lineCount=0
+    while(lineStart<=layout.text.length&&lineCount<MAX_SIGNATURE_TEXT_LENGTH){
+      lineCount+=1
+      const lineBreak=layout.text.indexOf('\n',lineStart)
+      const lineEnd=lineBreak<0?layout.text.length:lineBreak
+      const line=layout.text.slice(lineStart,lineEnd)
+      if(titleLinePattern.test(line.trim())){
+        const roleStart=line.search(/(?:kepala\s+(?:sekolah|upt|sman(?:\s+[a-z0-9.-]+)*)|pejabat\s+yang\s+memberi\s+perintah)/i)
+        if(roleStart>=0){
+          const role=line.slice(roleStart).trim()
+          titleLines.push({
+            start:lineStart+roleStart,
+            end:lineStart+roleStart+role.length,
+            roleStart:lineStart+roleStart,
+            roleEnd:lineStart+roleStart+role.length,
+          })
+        }
+      }
+      if(lineBreak<0)break
+      lineStart=lineBreak+1
+    }
+    if(!titleLines.length)continue
     let searchOffset=0
-    while(true){
+    let matchCount=0
+    while(matchCount<MAX_SIGNATURE_CANDIDATES&&candidateCount<MAX_SIGNATURE_CANDIDATES){
       const start=lowerText.indexOf(normalizedName,searchOffset)
       if(start<0)break
+      matchCount+=1
       const end=start+name.length
-      const compactContext=fullText.replace(/\s+/g,' ').trim()
-      const contextStart=Math.max(0,compactContext.toLocaleLowerCase('id-ID').indexOf(normalizedName)-55)
-      const context=compactContext.slice(contextStart,contextStart+Math.max(120,name.length+80)).trim()
+      searchOffset=end
+      const nameLineStart=layout.text.lastIndexOf('\n',start-1)+1
+      const nextLineBreak=layout.text.indexOf('\n',end)
+      const nameLineEnd=nextLineBreak<0?layout.text.length:nextLineBreak
+      const nameLine=layout.text.slice(nameLineStart,nameLineEnd)
+      const nameRemainder=nameLine.toLocaleLowerCase('id-ID').replace(normalizedName,'').replace(/[\s.,:;()-]/g,'')
+      if(nameRemainder)continue
+      const title=titleLines.filter(line=>line.end<=start).pop()
+      if(!title)continue
+      const between=layout.text.slice(title.end,start)
+      if(!between.includes('\n')||between.trim())continue
+      if(followsTembusanSection(element,root))continue
+      const beforeTitle=lowerText.slice(0,title.start)
+      if(/yang bertanda tangan di\s*bawah ini/i.test(beforeTitle))continue
+      if(/(?:^|\n)\s*tembusan\b/i.test(beforeTitle))continue
+      const point=layout.points[start]
+      const positionPoint=layout.points[title.roleStart]
+      const nameEndPoint=layout.points[end-1]
+      const positionEndPoint=layout.points[title.roleEnd-1]
+      if(!point||!positionPoint||!nameEndPoint||!positionEndPoint)continue
+      const candidateKey=[
+        `${getTextNodeId(positionPoint.node)}:${positionPoint.offset}`,
+        `${getTextNodeId(positionEndPoint.node)}:${positionEndPoint.offset+1}`,
+        `${getTextNodeId(point.node)}:${point.offset}`,
+        `${getTextNodeId(nameEndPoint.node)}:${nameEndPoint.offset+1}`,
+      ].join('|')
+      if(candidateKeys.has(candidateKey))continue
+      candidateKeys.add(candidateKey)
+      const compactText=layout.text.replace(/\s+/g,' ').trim()
+      const compactNameStart=compactText.toLocaleLowerCase('id-ID').indexOf(normalizedName)
+      const contextStart=Math.max(0,compactNameStart-55)
+      const context=compactText.slice(contextStart,contextStart+Math.max(120,name.length+80)).trim()
       const slotRange=parsed.createRange()
       slotRange.setStartBefore(element)
       slotRange.collapse(true)
@@ -563,10 +746,20 @@ function getPrincipalSignatureLayout(html:string,principalName:string):Principal
         boundaryRange.collapse(true)
         return boundaryRange.compareBoundaryPoints(Range.START_TO_START,slotRange)<=0
       }).length
-      occurrences.push({id:occurrences.length+1,page,context,element,start,end})
-      searchOffset=end
+      candidates.push({
+        id:0,page,context,element,
+        positionStart:title.roleStart,positionEnd:title.roleEnd,
+        start,end,
+      })
+      candidateCount+=1
     }
   }
+  const occurrences=candidates
+  occurrences.sort((first,second)=>{
+    if(first.element===second.element)return first.start-second.start
+    return first.element.compareDocumentPosition(second.element)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1
+  })
+  occurrences.forEach((occurrence,index)=>{occurrence.id=index+1})
   return {root,occurrences}
 }
 
@@ -596,61 +789,96 @@ function renderPrincipalTteCodes(html:string,principalName:string,selectedSlotId
       return first.element.compareDocumentPosition(second.element)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1
     })
   for(const occurrence of mappedOccurrences){
-    const walker=parsed.createTreeWalker(occurrence.element,NodeFilter.SHOW_TEXT)
-    const textNodes:Text[]=[]
-    let node:Node|null
-    let fullLength=0
-    while((node=walker.nextNode())){
-      if(!(node instanceof Text))continue
-      textNodes.push(node)
-      fullLength+=node.data.length
-    }
-    if(occurrence.end>fullLength)continue
-    const locateOffset=(offset:number,isEnd:boolean):{node:Text;offset:number}|null=>{
-      let remaining=offset
-      for(const textNode of textNodes){
-        if(remaining<textNode.data.length||isEnd&&remaining===textNode.data.length){
-          return {node:textNode,offset:remaining}
-        }
-        remaining-=textNode.data.length
-      }
-      const last=textNodes[textNodes.length-1]
-      return last&&offset===fullLength?{node:last,offset:last.data.length}:null
-    }
-    const start=locateOffset(occurrence.start,false)
-    const end=locateOffset(occurrence.end,true)
-    if(!start||!end)continue
-    const nameLine=start.node.parentElement?.closest('div,p,li')
-    let gapLineBreaks=0
-    let previousSibling=nameLine?.previousSibling||null
-    while(previousSibling){
-      if(previousSibling.nodeType===Node.TEXT_NODE&&!previousSibling.textContent?.trim()){
-        previousSibling=previousSibling.previousSibling
-        continue
-      }
-      if(previousSibling.nodeType===Node.ELEMENT_NODE&&(previousSibling as Element).tagName==='BR'){
-        gapLineBreaks+=1
-        previousSibling=previousSibling.previousSibling
-        continue
-      }
-      break
-    }
-    const range=parsed.createRange()
-    range.setStart(start.node,start.offset)
-    range.setEnd(end.node,end.offset)
-    const signature=parsed.createElement('span')
-    signature.className='letter-kepsek-tte-signature'
-    if(gapLineBreaks){
-      signature.classList.add('is-gap-positioned')
-      signature.style.setProperty('--tte-code-offset',`${-(gapLineBreaks/2+0.6)}lh`)
-    }
+    wrapSignatureAnchor(occurrence.element,occurrence.start,occurrence.end,occurrence.id,'name')
+    wrapSignatureAnchor(occurrence.element,occurrence.positionStart,occurrence.positionEnd,occurrence.id,'position')
+    occurrence.element.classList.add('letter-kepsek-tte-scope')
     const code=parsed.createElement('span')
     code.className='letter-kepsek-tte-code'
+    code.dataset.tteSlotId=String(occurrence.id)
     code.textContent=codeBySlot.get(occurrence.id)||''
-    signature.append(code,range.extractContents())
-    range.insertNode(signature)
+    occurrence.element.append(code)
   }
   return root.innerHTML
+}
+
+function hasPrincipalTteAnchors(html:string) {
+  if(typeof DOMParser==='undefined')return false
+  const parsed=new DOMParser().parseFromString(html,'text/html')
+  const codes=Array.from(parsed.querySelectorAll<HTMLElement>('.letter-kepsek-tte-code'))
+  return codes.length>0&&codes.every(code=>{
+    const slotId=code.dataset.tteSlotId
+    if(!slotId||!/^\d+$/.test(slotId))return false
+    return Boolean(
+      parsed.querySelector(`.letter-kepsek-tte-position-anchor[data-tte-slot-id="${slotId}"]`)
+      &&parsed.querySelector(`.letter-kepsek-tte-name-anchor[data-tte-slot-id="${slotId}"]`),
+    )
+  })
+}
+
+function stripPrincipalTteMarkup(html:string) {
+  if(typeof DOMParser==='undefined')return html
+  const parsed=new DOMParser().parseFromString(html,'text/html')
+  parsed.querySelectorAll('.letter-kepsek-tte-code').forEach(code=>code.remove())
+  parsed.querySelectorAll('.letter-kepsek-tte-position-anchor,.letter-kepsek-tte-name-anchor,.letter-kepsek-tte-signature').forEach(anchor=>{
+    const parent=anchor.parentNode
+    if(!parent)return
+    while(anchor.firstChild)parent.insertBefore(anchor.firstChild,anchor)
+    anchor.remove()
+  })
+  parsed.querySelectorAll('.letter-kepsek-tte-scope').forEach(scope=>scope.classList.remove('letter-kepsek-tte-scope'))
+  return parsed.body.innerHTML
+}
+
+function positionPrincipalTteCodes(root:ParentNode) {
+  root.querySelectorAll<HTMLElement>('.letter-kepsek-tte-code').forEach(code=>{
+    const slotId=code.dataset.tteSlotId
+    if(!slotId||!/^\d+$/.test(slotId))return
+    const positionAnchor=root.querySelector<HTMLElement>(`.letter-kepsek-tte-position-anchor[data-tte-slot-id="${slotId}"]`)
+    const nameAnchor=root.querySelector<HTMLElement>(`.letter-kepsek-tte-name-anchor[data-tte-slot-id="${slotId}"]`)
+    if(!positionAnchor||!nameAnchor)return
+    let scope=positionAnchor.closest<HTMLElement>('.letter-kepsek-tte-scope')
+    if(!scope||!scope.contains(nameAnchor)){
+      scope=positionAnchor
+      while(scope&&!scope.contains(nameAnchor))scope=scope.parentElement
+    }
+    if(!scope)return
+    if(code.parentElement!==scope)scope.append(code)
+    if(scope.ownerDocument.defaultView?.getComputedStyle(scope).position==='static')scope.style.position='relative'
+    const textLines=(anchor:HTMLElement)=>{
+      const range=anchor.ownerDocument.createRange()
+      range.selectNodeContents(anchor)
+      const lines:Array<{left:number;right:number;top:number;bottom:number}>=[]
+      for(const rect of Array.from(range.getClientRects())){
+        if(!rect.width||!rect.height)continue
+        const line=lines.find(candidate=>Math.abs(candidate.top-rect.top)<1)
+        if(line){
+          line.left=Math.min(line.left,rect.left)
+          line.right=Math.max(line.right,rect.right)
+          line.top=Math.min(line.top,rect.top)
+          line.bottom=Math.max(line.bottom,rect.bottom)
+        }else{
+          lines.push({left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom})
+        }
+      }
+      return lines.sort((first,second)=>first.top-second.top)
+    }
+    const positionLines=textLines(positionAnchor)
+    const nameLines=textLines(nameAnchor)
+    const positionLine=positionLines[positionLines.length-1]
+    const nameLine=nameLines[0]
+    if(!positionLine||!nameLine)return
+    const scopeRect=scope.getBoundingClientRect()
+    const scaleX=scope.offsetWidth?scopeRect.width/scope.offsetWidth:1
+    const scaleY=scope.offsetHeight?scopeRect.height/scope.offsetHeight:scaleX
+    if(!scopeRect.width||!scopeRect.height||!scaleX||!scaleY)return
+    const horizontalCenter=(positionLine.left+positionLine.right+nameLine.left+nameLine.right)/4
+    const verticalCenter=nameLine.top>positionLine.bottom
+      ?(positionLine.bottom+nameLine.top)/2
+      :(positionLine.top+positionLine.bottom+nameLine.top+nameLine.bottom)/4
+    code.style.left=`${(horizontalCenter-scopeRect.left-scope.clientLeft*scaleX)/scaleX}px`
+    code.style.top=`${(verticalCenter-scopeRect.top-scope.clientTop*scaleY)/scaleY}px`
+    code.dataset.positioned='true'
+  })
 }
 
 function normalizePaperSize(value: unknown): PaperSize {
@@ -1670,8 +1898,9 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const fields=activeTemplate?.fields_schema||request.letter_templates?.fields_schema||[]
     if(!html)return null
     const values=requestDocumentValues(request,schoolSettings,signatories)
+    const hasValidTteAnchors=Boolean(savedTteSnapshot&&hasPrincipalTteAnchors(savedTteSnapshot))
     const renderedHtml=savedTteSnapshot
-      ?savedTteSnapshot
+      ?hasValidTteAnchors?savedTteSnapshot:stripPrincipalTteMarkup(savedTteSnapshot)
       :renderTemplateContent(
         html,
         values,
@@ -1680,7 +1909,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       )
     const tteSlots=Array.isArray(request.tte_kepsek_slots)?request.tte_kepsek_slots:[]
     return {
-      html:applyPrincipalTte&&requestWantsPrincipalTte(request)&&!savedTteSnapshot
+      html:applyPrincipalTte&&requestWantsPrincipalTte(request)&&!hasValidTteAnchors
         ?renderPrincipalTteCodes(renderedHtml,String(values.nama_kepala_sekolah||''),tteSlots)
         :renderedHtml,
       header:makeLetterheadHtml(schoolSettings,letterheadSlot,activeTemplate?.page_settings?.logo_position||request.letter_templates?.page_settings?.logo_position||'top'),
@@ -1725,6 +1954,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
         await new Promise<void>(resolve=>window.setTimeout(resolve,150))
         if(cancelled)return
+        positionPrincipalTteCodes(content)
         window.addEventListener('afterprint',cleanup,{once:true})
         cleanupTimer=window.setTimeout(cleanup,60000)
         window.print()
@@ -1802,6 +2032,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
         }))
         await document.fonts.ready
         await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())))
+        positionPrincipalTteCodes(content)
         const canvas=await html2canvas(page,{
           scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',logging:false,
           width:page.offsetWidth,height:page.offsetHeight,windowWidth:page.offsetWidth,
@@ -2348,6 +2579,31 @@ function FitLetterPreview({paperSize,marginsMm:rawMargins,html,watermark,classNa
     :1
   const scale=fitScale*zoom
   const percent=Math.round(scale*100)
+  useLayoutEffect(()=>{
+    const stage=stageRef.current
+    if(!stage)return
+    let cancelled=false
+    const positionAfterLayout=()=>{
+      if(cancelled)return
+      requestAnimationFrame(()=>{
+        if(!cancelled)positionPrincipalTteCodes(stage)
+      })
+    }
+    const images=Array.from(stage.querySelectorAll('img'))
+    images.forEach(image=>{
+      image.addEventListener('load',positionAfterLayout)
+      image.addEventListener('error',positionAfterLayout)
+    })
+    positionAfterLayout()
+    void document.fonts.ready.then(positionAfterLayout)
+    return()=>{
+      cancelled=true
+      images.forEach(image=>{
+        image.removeEventListener('load',positionAfterLayout)
+        image.removeEventListener('error',positionAfterLayout)
+      })
+    }
+  },[html,scale])
   return <div className={`letter-preview-shell ${className}`}>
     <div className="letter-zoom-controls" role="group" aria-label="Kontrol zoom pratinjau surat">
       <button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom<=.5} onClick={()=>setZoomState(current=>({paperSize,value:Math.max(.5,Math.round(((current.paperSize===paperSize?current.value:1)-.1)*10)/10)}))}>-</button>

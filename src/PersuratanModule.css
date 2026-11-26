@@ -279,7 +279,7 @@
 @media screen and (max-width:700px){.letter-app .modal-card.template-modal,.letter-app .modal-card.letter-action-modal,.letter-app .modal-card.letter-preview-modal{width:100%;max-height:96vh;max-height:96dvh;padding:16px}.letter-app .template-modal>.modal-head{margin-bottom:10px;padding-bottom:10px}.letter-app .template-studio-fields{grid-template-columns:1fr}.letter-app .template-studio-fields>.template-source-path{grid-column:auto}.letter-app .template-custom-token{align-items:stretch;flex-direction:column}.letter-app .template-field-schema{grid-template-columns:minmax(65px,.6fr) minmax(90px,1fr);}.letter-app .template-field-schema>label{grid-column:span 2}.letter-app .template-preview-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.letter-app .letter-action-modal .modal-form{grid-template-columns:1fr}.letter-app .letter-action-modal .modal-form>label,.letter-app .letter-action-modal .modal-form>.hint,.letter-app .letter-action-modal .modal-form>button{grid-column:1}}
 @media screen and (max-width:700px){.letter-app .letter-issue-office-fields{grid-column:1;grid-template-columns:1fr}}
 @media screen{
-  #letter-print-portal{display:none!important}
+  #letter-print-portal{display:block!important;position:fixed!important;top:0!important;left:-10000px!important;z-index:-1!important;pointer-events:none!important;visibility:hidden!important}
 }
 @media print{
   @page{margin:0}
@@ -308,9 +308,9 @@
 .letter-app .tte-request-toggle span{font-size:11px;font-weight:800}
 .letter-app .tte-request-toggle small{grid-column:2;color:#7e7b9b;font-size:9px;font-weight:400;line-height:1.5}
 .letter-app .tte-request-badge{display:flex;width:max-content;margin-top:6px;background:#eeeaff!important;color:#5546b5!important;font-size:8px!important}
-.letter-app .letter-kepsek-tte-signature{position:relative;display:inline-block;text-align:center;vertical-align:baseline}
-.letter-app .letter-kepsek-tte-code{display:block;margin:0 0 .3mm;text-align:center;font-family:"Times New Roman",serif;font-size:11pt;font-weight:700;line-height:1}
-.letter-app .letter-kepsek-tte-signature.is-gap-positioned .letter-kepsek-tte-code{position:absolute;top:var(--tte-code-offset);right:0;left:0;margin:0;line-height:inherit}
+.letter-app .letter-kepsek-tte-scope{position:relative}
+.letter-app .letter-kepsek-tte-code{position:absolute;z-index:2;display:block;top:50%;left:50%;margin:0;transform:translate(-50%,-50%);white-space:nowrap;text-align:center;font-family:"Times New Roman",serif;font-size:11pt;font-weight:700;line-height:1;pointer-events:none;visibility:hidden}
+.letter-app .letter-kepsek-tte-code[data-positioned="true"]{visibility:visible}
 .letter-app .principal-tte-manager{margin:0 0 14px;padding:14px;border:1px solid #dedaf7;border-radius:11px;background:#faf9ff}
 .letter-app .principal-tte-manager-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .letter-app .principal-tte-manager-heading>div{display:flex;flex-direction:column;gap:4px}
