@@ -34,18 +34,20 @@ const audienceMatchesRole = (audience: string, role: string) => {
 export default function OfficialAnnouncementModal({
   userId,
   role,
+  loginSessionId,
 }: {
   userId: string;
   role: string;
+  loginSessionId: string;
 }) {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const previousIdsRef = useRef(new Set<string>());
   const loadRequestRef = useRef(0);
+  const announcementShownKey = `super-app:announcement-shown:${userId}:${loginSessionId}`;
 
-  const loadAnnouncements = useCallback(async () => {
+  const loadAnnouncements = useCallback(async (forceOpen = false) => {
     const requestId = ++loadRequestRef.current;
     const loaded: Announcement[] = [];
     let offset = 0;
@@ -73,18 +75,36 @@ export default function OfficialAnnouncementModal({
     const matching = loaded.filter((announcement) =>
       audienceMatchesRole(announcement.audience, role),
     );
-    if (matching.some((announcement) => !previousIdsRef.current.has(announcement.id))) {
+    setAnnouncements(matching);
+    setActiveIndex((index) => forceOpen ? 0 : Math.min(index, Math.max(0, matching.length - 1)));
+    setLoadError("");
+    if (!matching.length) {
+      setIsOpen(false);
+      return;
+    }
+
+    if (forceOpen) {
+      try {
+        window.sessionStorage.setItem(announcementShownKey, "true");
+      } catch (storageError) {
+        console.error("Status tampilan pengumuman sesi tidak dapat disimpan:", storageError);
+      }
+      setIsOpen(true);
+      return;
+    }
+
+    try {
+      if (!window.sessionStorage.getItem(announcementShownKey)) {
+        window.sessionStorage.setItem(announcementShownKey, "true");
+        setIsOpen(true);
+      }
+    } catch (storageError) {
+      console.error("Status tampilan pengumuman sesi tidak dapat disimpan:", storageError);
       setIsOpen(true);
     }
-    previousIdsRef.current = new Set(matching.map((announcement) => announcement.id));
-    setAnnouncements(matching);
-    setActiveIndex((index) => Math.min(index, Math.max(0, matching.length - 1)));
-    setLoadError("");
-    if (!matching.length) setIsOpen(false);
-  }, [role]);
+  }, [announcementShownKey, role]);
 
   useEffect(() => {
-    previousIdsRef.current = new Set();
     const initialLoad = window.setTimeout(() => void loadAnnouncements(), 0);
 
     const channel = supabase
@@ -113,6 +133,12 @@ export default function OfficialAnnouncementModal({
       void supabase.removeChannel(channel);
     };
   }, [loadAnnouncements, userId]);
+
+  useEffect(() => {
+    const reopen = () => void loadAnnouncements(true);
+    window.addEventListener("super-app:reopen-announcements", reopen);
+    return () => window.removeEventListener("super-app:reopen-announcements", reopen);
+  }, [loadAnnouncements]);
 
   const current = announcements[activeIndex];
   const publishedLabel = useMemo(() => current

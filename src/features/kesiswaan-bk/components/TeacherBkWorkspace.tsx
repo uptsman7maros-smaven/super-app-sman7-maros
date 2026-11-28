@@ -330,7 +330,7 @@ export default function TeacherBkWorkspace({
         } satisfies StudentOption;
         const existingFollowup = followups.find(item => item.student_id === row.student_id);
         return <tr key={row.student_id}>
-          <td><button className="kb-link-button" type="button" onClick={() => onOpenProfile(summaryStudent)}>{row.full_name}</button><small>{row.class_name} · {row.nisn}</small></td>
+          <td><button className="kb-link-button" type="button" onClick={() => onOpenProfile(summaryStudent)}>{row.full_name}</button></td>
           <td>{row.sakit_count}</td><td>{row.izin_count}</td><td>{row.alpa_count}</td><td>{row.terlambat_count}</td>
           <td><span className={`kb-teacher-status${row.early_warning !== "Stabil" ? " warning" : ""}`}>{row.early_warning}</span></td>
           <td>{row.latest_referral_status ?? "Belum dirujuk"}</td>
@@ -393,11 +393,13 @@ export default function TeacherBkWorkspace({
           {PRIORITIES.map(priority => <option key={priority}>{priority}</option>)}
         </select></label>
         <label className="kb-teacher-form-wide">Catatan pembinaan<textarea required minLength={5} maxLength={3000} rows={4} value={followupNote} onChange={event => setFollowupNote(event.target.value)} /></label>
-        <label className="kb-checkbox-label kb-teacher-toggle">
-          <input type="checkbox" checked={escalate} onChange={event => setEscalate(event.target.checked)} />
-          <span><strong>Rujuk ke Guru BK</strong><small>Sertakan ringkasan agregat kehadiran 30 hari terakhir. Isi privat tidak disertakan.</small></span>
-        </label>
-        <button className="kb-primary" disabled={saving}>{saving ? "Menyimpan..." : escalate ? "Simpan & Rujuk ke Guru BK" : "Simpan Pembinaan"}</button>
+        <div className="kb-teacher-form-actions">
+          <label className="kb-checkbox-label kb-teacher-toggle">
+            <input type="checkbox" checked={escalate} onChange={event => setEscalate(event.target.checked)} />
+            <span><strong>Rujuk ke Guru BK</strong><small>Sertakan ringkasan agregat kehadiran 30 hari terakhir. Isi privat tidak disertakan.</small></span>
+          </label>
+          <button className="kb-primary" disabled={saving}>{saving ? "Menyimpan..." : escalate ? "Simpan & Rujuk ke Guru BK" : "Simpan Pembinaan"}</button>
+        </div>
       </form>
       <div className="kb-teacher-card-list">{followups.map(item => <article className="kb-teacher-card" key={item.id}>
         <div className="kb-teacher-card-head"><div><strong>{studentById.get(item.student_id)?.full_name ?? "Siswa"}</strong><small>{item.intervention} · {formatDate(item.created_at)}</small></div><span className="kb-teacher-status">{item.outcome}</span></div>

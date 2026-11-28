@@ -14,15 +14,19 @@ type Props = {
 };
 
 function Rows({ title, rows, columns }: { title: string; rows: readonly object[]; columns: string[] }) {
+  const visibleRows = rows.slice(0, 5);
   return (
     <section className="kb-profile-section">
       <h3>{title} <span>{rows.length}</span></h3>
-      {rows.length === 0 ? <p className="kb-profile-empty">Belum ada data.</p> : rows.map((row, index) => {
+      {rows.length === 0 ? <p className="kb-profile-empty">Belum ada data.</p> : visibleRows.map((row, index) => {
         const record = row as Record<string, unknown>;
         return <article className="kb-profile-row" key={String(record.id ?? index)}>
           {columns.map(column => record[column] ? <p key={column}><strong>{column.replaceAll("_", " ")}:</strong> {String(record[column])}</p> : null)}
         </article>;
       })}
+      {rows.length > visibleRows.length && (
+        <p className="kb-profile-empty">Menampilkan {visibleRows.length} dari {rows.length} data terbaru.</p>
+      )}
     </section>
   );
 }
@@ -40,6 +44,8 @@ export default function StudentProfileDrawer({
   const [profile, setProfile] = useState<StudentProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [profileTab, setProfileTab] = useState<"overview" | "counseling" | "activity">("overview");
+  const canViewCounselingHistory = role === "guru_bk" || role === "super_admin";
 
   useEffect(() => {
     if (!studentId) return;
@@ -106,25 +112,48 @@ export default function StudentProfileDrawer({
             <Rows title="OSIS & kegiatan" rows={profile.organizations} columns={["nama_kegiatan", "organisasi", "tanggal"]} />
             <Rows title="Perizinan" rows={profile.permissions} columns={["tanggal", "alasan", "status_tindak_lanjut"]} />
           </> : <>
-            {profile.safeAttendanceSummary && <section className="kb-profile-section">
-              <h3>Ringkasan kehadiran perwalian <span>30 hari</span></h3>
-              <div className="kb-profile-summary">
-                <span>Sakit {String(profile.safeAttendanceSummary.sakit_count ?? 0)}</span>
-                <span>Izin {String(profile.safeAttendanceSummary.izin_count ?? 0)}</span>
-                <span>Alpa {String(profile.safeAttendanceSummary.alpa_count ?? 0)}</span>
-                <span>Terlambat {String(profile.safeAttendanceSummary.terlambat_count ?? 0)}</span>
-                <span>{String(profile.safeAttendanceSummary.early_warning ?? "Stabil")}</span>
-              </div>
-            </section>}
-            {(role === "guru_bk" || role === "super_admin") && <>
-              <Rows title="Riwayat kehadiran" rows={profile.attendance} columns={["attendance_date", "session_type", "subject", "status"]} />
-              <Rows title="Peringatan absensi" rows={profile.alerts} columns={["attendance_date", "title", "body"]} />
+            <nav className="kb-profile-tabs" aria-label="Bagian profil siswa">
+              <button type="button" className={profileTab === "overview" ? "is-active" : ""} onClick={() => setProfileTab("overview")}>
+                Ringkasan & Kehadiran
+              </button>
+              {canViewCounselingHistory && (
+                <button type="button" className={profileTab === "counseling" ? "is-active" : ""} onClick={() => setProfileTab("counseling")}>
+                  Konseling & Rujukan
+                </button>
+              )}
+              <button type="button" className={profileTab === "activity" ? "is-active" : ""} onClick={() => setProfileTab("activity")}>
+                Lainnya / Aktivitas
+              </button>
+            </nav>
+            {profileTab === "overview" && <>
+              {profile.safeAttendanceSummary && <section className="kb-profile-section">
+                <h3>Ringkasan kehadiran perwalian <span>30 hari</span></h3>
+                <div className="kb-profile-summary">
+                  <span>Sakit {String(profile.safeAttendanceSummary.sakit_count ?? 0)}</span>
+                  <span>Izin {String(profile.safeAttendanceSummary.izin_count ?? 0)}</span>
+                  <span>Alpa {String(profile.safeAttendanceSummary.alpa_count ?? 0)}</span>
+                  <span>Terlambat {String(profile.safeAttendanceSummary.terlambat_count ?? 0)}</span>
+                  <span>{String(profile.safeAttendanceSummary.early_warning ?? "Stabil")}</span>
+                </div>
+              </section>}
+              {canViewCounselingHistory && <>
+                <Rows title="Riwayat kehadiran" rows={profile.attendance} columns={["attendance_date", "session_type", "subject", "status"]} />
+                <Rows title="Peringatan absensi" rows={profile.alerts} columns={["attendance_date", "title", "body"]} />
+              </>}
+            </>}
+            {profileTab === "counseling" && canViewCounselingHistory && <>
               <Rows title="Rujukan asesmen" rows={profile.referrals} columns={["referral_type", "subject_name", "summary", "status"]} />
               <Rows title="Rencana karir / studi" rows={profile.careerPlans} columns={["post_graduation_plan", "study_major", "interests", "notes"]} />
               <Rows title="Histori catatan BK (rahasia)" rows={profile.counselingNotes} columns={["tanggal", "bidang_layanan", "jenis_layanan", "prioritas", "status_kasus", "ringkasan", "tindak_lanjut"]} />
+              <Rows title="Rujukan non-rahasia" rows={profile.teacherReferrals} columns={["category", "status", "non_confidential_feedback"]} />
             </>}
-            <Rows title="Rujukan non-rahasia" rows={profile.teacherReferrals} columns={["category", "status", "non_confidential_feedback"]} />
-            <Rows title="Apresiasi & perilaku positif" rows={profile.appreciations} columns={["category", "note", "created_at"]} />
+            {profileTab === "activity" && <>
+              <Rows title="Prestasi" rows={profile.achievements} columns={["nama_prestasi", "tingkat", "tanggal"]} />
+              <Rows title="Ekstrakurikuler" rows={profile.extracurriculars} columns={["nama_ekskul", "jadwal", "lokasi"]} />
+              <Rows title="OSIS & kegiatan" rows={profile.organizations} columns={["nama_kegiatan", "organisasi", "tanggal"]} />
+              <Rows title="Perizinan" rows={profile.permissions} columns={["tanggal", "alasan", "status_tindak_lanjut"]} />
+              <Rows title="Apresiasi & perilaku positif" rows={profile.appreciations} columns={["category", "note", "created_at"]} />
+            </>}
           </>}
         </>}
       </aside>

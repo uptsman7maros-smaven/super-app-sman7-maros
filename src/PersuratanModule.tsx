@@ -20,8 +20,9 @@ import type { PersonOption } from './services/masterDataService'
 import './PersuratanModule.css'
 
 type Page = 'dashboard' | 'create' | 'requests' | 'approvals' | 'issued' | 'archive' | 'incoming' | 'outgoing' | 'dispositions' | 'templates'
-type LetterRole = 'administrator' | 'operator' | 'guru_staf' | 'pemohon' | 'staf_tu' | 'kepala_tu' | 'kepala_sekolah'
+type LetterRole = 'administrator' | 'operator' | 'guru_staf' | 'pemohon' | 'staf_tu' | 'kepala_tu' | 'kepala_sekolah' | 'bendahara'
 type LetterStatus = 'draft' | 'submitted' | 'in_review' | 'revision' | 'resubmitted' | 'approved' | 'awaiting_number' | 'issued' | 'rejected' | 'archived'
+type DispositionStatus = 'assigned' | 'in_progress' | 'completed'
 type PaperSize = 'A4' | 'F4'
 type LogoPosition = 'left' | 'top' | 'none'
 type PageMarginsMm = { top: number; right: number; bottom: number; left: number }
@@ -124,6 +125,19 @@ type IncomingLetter = {
   received_date: string
   follow_up_status: string
 }
+type LetterDisposition = {
+  id: string
+  incoming_id: string
+  assigned_to: string
+  instruction: string
+  due_date: string | null
+  status: DispositionStatus
+  follow_up_note: string | null
+  created_by: string
+  completed_at: string | null
+  created_at: string
+}
+type DispositionAssignee = { user_id: string; full_name: string }
 type OutgoingLetter = {
   id: string
   issued_id: string | null
@@ -138,7 +152,7 @@ type LetterCategory = { id: string; name: string; code: string }
 type LetterSignatory = { full_name: string; nip: string | null; employment_status: string | null }
 type LetterNotification = { id: string; title: string; body: string; created_at: string; is_read: boolean; letter_request_id?: string | null }
 type CurrentUser = { id?: string; username?: string; role?: string; full_name?: string; nip_or_nisn?: string; jabatan?: string | null; class_name?: string | null }
-type LetterModal = null | { type: 'template' | 'incoming' | 'notifications' | 'review' | 'issue' | 'preview' }
+type LetterModal = null | { type: 'template' | 'incoming' | 'disposition' | 'notifications' | 'review' | 'issue' | 'preview' }
 type NavItem = { label: string; icon: LucideIcon; key: Page }
 type LetterForm = Record<string, string>
 type StudentLetterPrefill = {
@@ -152,6 +166,7 @@ type StudentLetterPrefill = {
 
 const TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}|\{\s*([a-zA-Z0-9_]+)\s*\}/g
 const KEPSEK_TTE_CODES = ['£', '§', 'ñ', 'µ', 'Ø', 'œ', 'Ð', '¶', 'ø', 'ð', 'ƒ'] as const
+const INDONESIAN_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'] as const
 const MAX_SIGNATURE_HTML_LENGTH = 250_000
 const MAX_SIGNATURE_CANDIDATES = 100
 const MAX_SIGNATURE_WALK_STEPS = 100_000
@@ -189,6 +204,54 @@ function escapeHtml(value: string) {
 
 function tokenNameFromMatch(match: RegExpExecArray) {
   return match[1] ?? match[2] ?? ''
+}
+
+function getLocalDateIso(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseIssueDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const input = value.trim()
+  let year: number
+  let month: number
+  let day: number
+  let match = input.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (match) {
+    year = Number(match[1])
+    month = Number(match[2])
+    day = Number(match[3])
+  } else {
+    match = input.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/)
+    if (match) {
+      day = Number(match[1])
+      month = Number(match[2])
+      year = Number(match[3])
+    } else {
+      match = input.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/)
+      if (!match) return null
+      day = Number(match[1])
+      const monthName=match[2].toLocaleLowerCase('id-ID')
+      month = INDONESIAN_MONTHS.findIndex(name => name.toLocaleLowerCase('id-ID') === monthName) + 1
+      year = Number(match[3])
+    }
+  }
+  if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return null
+  const date = new Date(0)
+  date.setUTCHours(0, 0, 0, 0)
+  date.setUTCFullYear(year, month - 1, day)
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function formatIssueDate(value: unknown) {
+  const isoDate = parseIssueDate(value)
+  if (!isoDate) return ''
+  const [year, month, day] = isoDate.split('-').map(Number)
+  return `${day} ${INDONESIAN_MONTHS[month - 1]} ${year}`
 }
 
 function normalizeTemplateField(field: TemplateField): TemplateField {
@@ -513,7 +576,7 @@ function makeLetterDocumentHtml(header:string,html:string){
 function requestDocumentValues(request:LetterRequest, schoolSettings:SchoolSettings|null, signatories:LetterSignatory[]) {
   const issued = Array.isArray(request.letter_issued) ? request.letter_issued[0] : request.letter_issued
   const letterNumber=issued?.letter_number??request.form_data?.nomor_surat
-  const issueDate=issued?.issue_date??request.form_data?.tanggal_terbit
+  const issueDate=formatIssueDate(issued?.issue_date??request.form_data?.tanggal_terbit)
   const signerName=issued?.signer_name??request.form_data?.penandatangan
   const signerPosition=issued?.signer_position??request.form_data?.jabatan_penandatangan
   const signerNip=issued?.signer_nip??request.form_data?.nip_penandatangan
@@ -1170,7 +1233,7 @@ const nav: NavItem[] = [
   { label: 'Disposisi', icon: BookOpen, key: 'dispositions' },
   { label: 'Format Surat', icon: FileText, key: 'templates' },
 ]
-const roleLabels: Record<LetterRole, string> = { administrator:'Administrator Super App', operator:'Operator Persuratan', guru_staf:'Guru / Tendik / Guru BK', pemohon:'Siswa', staf_tu:'Staf Tata Usaha', kepala_tu:'Kepala Tata Usaha', kepala_sekolah:'Kepala Sekolah' }
+const roleLabels: Record<LetterRole, string> = { administrator:'Administrator Super App', operator:'Operator Persuratan', guru_staf:'Guru / Tendik / Guru BK', pemohon:'Siswa', staf_tu:'Staf Tata Usaha', kepala_tu:'Kepala Tata Usaha', kepala_sekolah:'Kepala Sekolah', bendahara:'Bendahara' }
 const rolePageAccess: Record<LetterRole, Page[]> = {
   administrator:nav.map(item=>item.key),
   operator:['dashboard','create','requests','issued','archive','incoming','outgoing','dispositions','templates'],
@@ -1178,9 +1241,11 @@ const rolePageAccess: Record<LetterRole, Page[]> = {
   staf_tu:['dashboard','create','requests','approvals','issued','archive','incoming','outgoing','dispositions','templates'],
   kepala_sekolah:['dashboard','create','requests','approvals','issued','archive','dispositions'],
   guru_staf:['dashboard','create','requests','issued','archive'],
-  pemohon:['dashboard','requests','issued','archive']
+  pemohon:['dashboard','requests','issued','archive'],
+  bendahara:['dashboard','create','requests','issued','archive']
 }
 const statusLabels: Record<LetterStatus, string> = { draft:'Draft', submitted:'Diajukan', in_review:'Dalam Pemeriksaan', revision:'Perlu Revisi', resubmitted:'Diajukan Ulang', approved:'Disetujui', awaiting_number:'Menunggu Nomor', issued:'Diterbitkan', rejected:'Ditolak', archived:'Diarsipkan' }
+const dispositionStatusLabels: Record<DispositionStatus,string> = { assigned:'Ditugaskan', in_progress:'Sedang ditindaklanjuti', completed:'Selesai' }
 const pageDescriptions: Record<Page, string> = {
   dashboard:'Ringkasan proses surat dan aktivitas terbaru sekolah.',
   create:'Mulai pengajuan baru dengan format surat yang tersedia.',
@@ -1209,6 +1274,10 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [expiryClock,setExpiryClock]=useState(()=>Date.now())
   const [pdfBusy,setPdfBusy]=useState(false), [printing,setPrinting]=useState(false)
   const [requests,setRequests]=useState<LetterRequest[]>([]), [templates,setTemplates]=useState<LetterTemplate[]>([]), [incoming,setIncoming]=useState<IncomingLetter[]>([]), [outgoing,setOutgoing]=useState<OutgoingLetter[]>([])
+  const [dispositions,setDispositions]=useState<LetterDisposition[]>([])
+  const [dispositionAssignees,setDispositionAssignees]=useState<DispositionAssignee[]>([])
+  const [dispositionDraft,setDispositionDraft]=useState({incoming_id:'',assigned_to:'',instruction:'',due_date:''})
+  const [dispositionEdits,setDispositionEdits]=useState<Record<string,{status:DispositionStatus;follow_up_note:string}>>({})
   const [categories,setCategories]=useState<LetterCategory[]>([])
   const [signatories,setSignatories]=useState<LetterSignatory[]>([])
   const [notifications,setNotifications]=useState<LetterNotification[]>([]), [search,setSearch]=useState(''), [toast,setToast]=useState('')
@@ -1224,7 +1293,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const [reviewDecision,setReviewDecision]=useState<'approved'|'revision'|'rejected'>('revision')
   const [reviewNote,setReviewNote]=useState('')
   const [issueRequest,setIssueRequest]=useState<LetterRequest|null>(null)
-  const [issueForm,setIssueForm]=useState<IssueForm>({letter_number:'',issue_date:new Date().toISOString().slice(0,10),signer_name:'',signer_position:'Kepala Sekolah',signer_nip:'',ktu_fields:{}})
+  const [issueForm,setIssueForm]=useState<IssueForm>({letter_number:'',issue_date:formatIssueDate(getLocalDateIso()),signer_name:'',signer_position:'Kepala Sekolah',signer_nip:'',ktu_fields:{}})
   const [profileReady,setProfileReady]=useState(false)
   const templateHtmlRef=useRef<HTMLTextAreaElement>(null)
   const printPortalRef=useRef<HTMLDivElement>(null)
@@ -1244,6 +1313,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const isAdmin=role==='administrator'
   const isPrincipalTteManager=role==='kepala_tu'||isAdmin
   const canManageTemplates=isAdmin||role==='operator'
+  const canManageDispositions=isAdmin||role==='operator'||role==='kepala_tu'||role==='kepala_sekolah'
   const activeTemplates=templates.filter(template=>template.is_active!==false)
   const canUseAllTemplates=role==='administrator'||role==='operator'||role==='kepala_tu'||role==='staf_tu'
   const requestableTemplates=activeTemplates.filter(template=>canUseAllTemplates||template.available_to_teacher!==false)
@@ -1311,7 +1381,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     if(loadedUserIdRef.current!==nextUserId){
       loadedUserIdRef.current=nextUserId
       loadRequestRef.current={userId:nextUserId,generation:loadRequestRef.current.generation+1,promise:null}
-      setRole(null);setRequests([]);setTemplates([]);setCategories([]);setSignatories([]);setIncoming([]);setOutgoing([]);setNotifications([]);setError('')
+      setRole(null);setRequests([]);setTemplates([]);setCategories([]);setSignatories([]);setIncoming([]);setOutgoing([]);setDispositions([]);setDispositionAssignees([]);setDispositionEdits({});setNotifications([]);setError('')
       setProfileReady(false)
       setLoading(Boolean(nextUserId))
     }
@@ -1345,22 +1415,29 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       }
       const {data:roleData,error:roleErr}=await supabase.rpc('letter_current_role')
       const requestRole=!roleErr&&isLetterRole(roleData)?roleData:null
+      const canLoadIncoming=Boolean(requestRole&&['administrator','operator','kepala_tu','staf_tu','kepala_sekolah'].includes(requestRole))
+      const canLoadOutgoing=Boolean(requestRole&&['administrator','operator','kepala_tu','staf_tu'].includes(requestRole))
+      const canLoadDispositions=Boolean(requestRole&&rolePageAccess[requestRole].includes('dispositions'))
+      const canLoadDispositionAssignees=Boolean(requestRole&&['administrator','operator','kepala_tu','kepala_sekolah'].includes(requestRole))
+      const canLoadSignatories=Boolean(requestRole)
       let requestsQuery=supabase.from('letter_requests')
         .select('*, letter_templates(name, category_id, requires_principal_approval, requires_number, available_to_teacher, hide_requester_identity, html_content, fields_schema, page_settings), letter_issued(id,letter_number,issue_date,signer_name,signer_position,signer_nip,html_snapshot,tte_html_snapshot), letter_approvals(approver_role,decision)')
         .order('created_at',{ascending:false})
       if(!requestRole||!GLOBAL_REQUEST_ROLES.has(requestRole))requestsQuery=requestsQuery.eq('requester_id',uid)
-      const [{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:outData,error:outErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr}] = await Promise.all([
+      const [{data:reqData,error:reqErr},{data:tplData,error:tplErr},{data:inData,error:inErr},{data:outData,error:outErr},{data:notifData,error:notifErr},{data:categoryData,error:categoryErr},{data:identityData,error:identityErr},{data:signatoryData,error:signatoryErr},{data:dispositionData,error:dispositionErr},{data:assigneeData,error:assigneeErr}] = await Promise.all([
         requestsQuery,
         supabase.from('letter_templates').select('*, letter_categories(name,code)').order('name'),
-        supabase.from('letter_incoming').select('*').order('received_date',{ascending:false}),
-        supabase.from('letter_outgoing').select('*').order('letter_date',{ascending:false}),
+        canLoadIncoming ? supabase.from('letter_incoming').select('*').order('received_date',{ascending:false}) : Promise.resolve({data:null,error:null}),
+        canLoadOutgoing ? supabase.from('letter_outgoing').select('*').order('letter_date',{ascending:false}) : Promise.resolve({data:null,error:null}),
         supabase.from('letter_notifications').select('*').order('created_at',{ascending:false}).limit(30),
         supabase.from('letter_categories').select('id,name,code').eq('is_active',true).order('name'),
         supabase.rpc('letter_requester_identity').maybeSingle(),
-        supabase.rpc('letter_get_signatories')
+        canLoadSignatories ? supabase.rpc('letter_get_signatories') : Promise.resolve({data:null,error:null}),
+        canLoadDispositions ? supabase.from('letter_dispositions').select('*').order('created_at',{ascending:false}) : Promise.resolve({data:null,error:null}),
+        canLoadDispositionAssignees ? supabase.rpc('letter_disposition_assignees') : Promise.resolve({data:null,error:null})
       ])
       if(loadRequestRef.current.generation!==generation)return
-      const loadError=roleErr||reqErr||tplErr||inErr||outErr||notifErr||categoryErr||identityErr||signatoryErr
+      const loadError=roleErr||reqErr||tplErr||inErr||outErr||notifErr||categoryErr||identityErr||signatoryErr||dispositionErr||assigneeErr
       setError(loadError?(isSupabaseRateLimitError(loadError)?`HTTP 429: ${loadError.message}`:loadError.message):'')
       if(!roleErr)setRole(isLetterRole(roleData)?roleData:null)
       if(!reqErr)setRequests(reqData||[])
@@ -1371,6 +1448,8 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       })))
       if(!inErr)setIncoming(inData||[])
       if(!outErr)setOutgoing(outData||[])
+      if(!dispositionErr)setDispositions(dispositionData||[])
+      if(!assigneeErr)setDispositionAssignees(assigneeData||[])
       if(!notifErr)setNotifications(notifData||[])
       if(!categoryErr)setCategories(categoryData??[])
       if(!identityErr){
@@ -1577,7 +1656,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     setSelectedTteSlots(Array.isArray(request.tte_kepsek_slots)?request.tte_kepsek_slots:[])
     setIssueForm({
       letter_number:`421.03/001/UPT.SMA.07/MRS/DISDIK/${year}`,
-      issue_date:new Date().toISOString().slice(0,10),
+      issue_date:formatIssueDate(getLocalDateIso()),
       signer_name:defaultSigner?.full_name||schoolProfileTokenValue('nama_kepala_sekolah',schoolSettings),
       signer_position:defaultSigner?.employment_status||'Kepala Sekolah',
       signer_nip:defaultSigner?.nip||schoolProfileTokenValue('nip_kepala_sekolah',schoolSettings),
@@ -1589,6 +1668,11 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   async function submitIssue(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
     if(!issueRequest)return
+    const issueDate=parseIssueDate(issueForm.issue_date)
+    if(!issueDate){
+      notify('Tanggal terbit tidak valid. Gunakan format 26 November 2026 atau 26/11/2026.')
+      return
+    }
     const requestRequiresTte=requestWantsPrincipalTte(issueRequest)
     if(requestRequiresTte&&!previewDocument){
       notify('Pratinjau surat TTE tidak tersedia; nomor belum diterbitkan agar kode TTE tidak hilang.')
@@ -1603,7 +1687,7 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const issueParams={
       p_request_id:issueRequest.id,
       p_letter_number:issueForm.letter_number.trim(),
-      p_issue_date:issueForm.issue_date,
+      p_issue_date:issueDate,
       p_signer_name:issueForm.signer_name.trim(),
       p_signer_position:issueForm.signer_position.trim(),
       p_signer_nip:issueForm.signer_nip.trim()||null,
@@ -1875,6 +1959,70 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
     const {error}=await supabase.from('letter_incoming').insert({...form,created_by:session.user.id})
     if(error)notify(error.message);else{notify('Surat masuk berhasil dicatat');setModal(null);setForm({});await loadAll(true)}
     setBusy(false)
+  }
+  async function createDisposition(e:FormEvent<HTMLFormElement>){
+    e.preventDefault()
+    if(!dispositionDraft.incoming_id||!dispositionDraft.assigned_to||!dispositionDraft.instruction.trim()){
+      notify('Pilih surat masuk dan penerima, lalu isi instruksi disposisi.')
+      return
+    }
+    setBusy(true)
+    try{
+      const {error}=await supabase.rpc('letter_create_disposition',{
+        p_incoming_id:dispositionDraft.incoming_id,
+        p_assigned_to:dispositionDraft.assigned_to,
+        p_instruction:dispositionDraft.instruction.trim(),
+        p_due_date:dispositionDraft.due_date||null,
+      })
+      if(error){
+        notify(`Disposisi gagal dikirim: ${error.message}`)
+        return
+      }
+      const incomingLetter=incoming.find(item=>item.id===dispositionDraft.incoming_id)
+      setModal(null)
+      setDispositionDraft({incoming_id:'',assigned_to:'',instruction:'',due_date:''})
+      notify('Disposisi berhasil dikirim dan status surat masuk diperbarui.')
+      await loadAll(true,true)
+      if(incomingLetter)await auditLetter('Disposisi surat dikirim',`${incomingLetter.external_number} · ${incomingLetter.subject}`)
+    }catch(error){
+      notify(`Disposisi gagal dikirim: ${error instanceof Error?error.message:String(error)}`)
+    }finally{
+      setBusy(false)
+    }
+  }
+  async function updateDisposition(disposition:LetterDisposition){
+    const edit=dispositionEdits[disposition.id]??{
+      status:disposition.status,
+      follow_up_note:disposition.follow_up_note??'',
+    }
+    if(edit.status==='completed'&&!edit.follow_up_note.trim()){
+      notify('Catatan tindak lanjut wajib diisi sebelum disposisi diselesaikan.')
+      return
+    }
+    setBusy(true)
+    try{
+      const {error}=await supabase.rpc('letter_update_disposition',{
+        p_disposition_id:disposition.id,
+        p_status:edit.status,
+        p_follow_up_note:edit.follow_up_note.trim()||null,
+      })
+      if(error){
+        notify(`Tindak lanjut gagal disimpan: ${error.message}`)
+        return
+      }
+      setDispositionEdits(previous=>{
+        const next={...previous}
+        delete next[disposition.id]
+        return next
+      })
+      notify('Status dan tindak lanjut disposisi berhasil diperbarui.')
+      await loadAll(true,true)
+      await auditLetter('Tindak lanjut disposisi diperbarui',disposition.instruction)
+    }catch(error){
+      notify(`Tindak lanjut gagal disimpan: ${error instanceof Error?error.message:String(error)}`)
+    }finally{
+      setBusy(false)
+    }
   }
   async function downloadOutgoingAttachment(path:string){
     const {data,error}=await supabase.storage.from('letter-files').createSignedUrl(path,60)
@@ -2213,6 +2361,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
   const dashboardRequests=isAdmin?requests:ownRequests
   const pendingDownloadCount=dashboardRequests.filter(request=>isRequestExpiryEligible(request)&&!request.downloaded_at).length
   const roleScopedRequests=role==='pemohon'||role==='guru_staf'?ownVisibleRequests:visibleRequests
+  const filteredDispositions=dispositions.filter(disposition=>{
+    const linkedLetter=incoming.find(item=>item.id===disposition.incoming_id)
+    const assignee=disposition.assigned_to===session?.user.id
+      ?'anda'
+      :dispositionAssignees.find(item=>item.user_id===disposition.assigned_to)?.full_name||'staf tata usaha'
+    return !search||`${linkedLetter?.external_number||''} ${linkedLetter?.sender||''} ${linkedLetter?.subject||''} ${disposition.instruction} ${disposition.follow_up_note||''} ${assignee}`.toLocaleLowerCase('id-ID').includes(search.toLocaleLowerCase('id-ID'))
+  })
   if(!session) return <div className="letter-app"><div className="sso-state"><div className="sso-card"><div className="brand-mark">7</div><span className="eyebrow">SUPER APP · SMAN 7 MAROS</span><h1>{sessionReady?'Sesi masuk tidak ditemukan':'Memverifikasi sesi masuk'}</h1><p>{sessionReady?error||'Persuratan menggunakan sesi login dari Super App. Kembali ke halaman utama untuk masuk.':'Memeriksa sesi Super App…'}</p>{sessionReady&&onBack&&<button className="primary" onClick={onBack}><ChevronLeft size={17}/> Kembali ke Super App</button>}</div></div></div>
   return <><div className="letter-app"><div className="app-shell">
     <header className="portal-header">
@@ -2337,7 +2492,46 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           })}</div>
           {!outgoing.length&&<p className="muted">Belum ada pencatatan surat keluar terpisah.</p>}
         </DataPanel>}
-        {page==='dispositions'&&<div className="empty-state"><BookOpen size={36}/><h3>Disposisi surat</h3><p>Struktur data disposisi telah disiapkan. Antarmuka penugasan dan tindak lanjut perlu diaktifkan pada tahap integrasi lanjutan.</p></div>}
+        {page==='dispositions'&&<DataPanel title="Disposisi surat masuk" subtitle="Teruskan instruksi kepada petugas dan pantau tindak lanjut surat masuk." search={search} setSearch={setSearch} action={canManageDispositions&&incoming.length?()=>{setDispositionDraft({incoming_id:'',assigned_to:'',instruction:'',due_date:''});setModal({type:'disposition'})}:undefined} actionLabel="Buat Disposisi">
+          <div className="disposition-list">
+            {filteredDispositions.map(disposition=>{
+              const linkedLetter=incoming.find(item=>item.id===disposition.incoming_id)
+              const assignedName=disposition.assigned_to===session.user.id
+                ?'Anda'
+                :dispositionAssignees.find(item=>item.user_id===disposition.assigned_to)?.full_name||'Staf Tata Usaha'
+              const edit=dispositionEdits[disposition.id]??{
+                status:disposition.status,
+                follow_up_note:disposition.follow_up_note??'',
+              }
+              const canUpdate=canManageDispositions||(role==='staf_tu'&&disposition.assigned_to===session.user.id)
+              return <article className="disposition-card" key={disposition.id}>
+                <div className="disposition-card-heading">
+                  <div className="disposition-letter">
+                    <span className="template-icon"><Inbox size={18}/></span>
+                    <div><b>{linkedLetter?.subject||'Surat masuk tidak tersedia'}</b><small>{linkedLetter?`${linkedLetter.external_number} · ${linkedLetter.sender} · ${linkedLetter.received_date}`:'Detail surat masuk tidak dapat dimuat.'}</small></div>
+                  </div>
+                  <span className={`soft-tag disposition-status disposition-status-${disposition.status}`}>{dispositionStatusLabels[disposition.status]}</span>
+                </div>
+                <p className="disposition-instruction"><b>Instruksi:</b> {disposition.instruction}</p>
+                <p className="disposition-meta">Penerima: {assignedName}{disposition.due_date?` · Batas tindak lanjut: ${new Date(`${disposition.due_date}T00:00:00`).toLocaleDateString('id-ID')}`:''}</p>
+                {canUpdate&&<div className="disposition-follow-up">
+                  <label>Status disposisi
+                    <select value={edit.status} disabled={busy} onChange={event=>setDispositionEdits(previous=>({...previous,[disposition.id]:{...edit,status:event.target.value as DispositionStatus}}))}>
+                      {Object.entries(dispositionStatusLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+                    </select>
+                  </label>
+                  <label>Catatan tindak lanjut
+                    <textarea rows={2} value={edit.follow_up_note} disabled={busy} onChange={event=>setDispositionEdits(previous=>({...previous,[disposition.id]:{...edit,follow_up_note:event.target.value}}))} placeholder="Catat hasil atau langkah berikutnya"/>
+                  </label>
+                  <button type="button" className="secondary" disabled={busy||(edit.status==='completed'&&!edit.follow_up_note.trim())} onClick={()=>void updateDisposition(disposition)}>{busy?'Menyimpan...':'Simpan Tindak Lanjut'}</button>
+                </div>}
+                {!canUpdate&&disposition.follow_up_note&&<p className="disposition-meta"><b>Tindak lanjut:</b> {disposition.follow_up_note}</p>}
+              </article>
+            })}
+            {!filteredDispositions.length&&<div className="table-empty"><BookOpen size={25}/><b>{dispositions.length?'Tidak ada disposisi yang cocok':'Belum ada disposisi'}</b><span>{canManageDispositions&&incoming.length?'Pilih “Buat Disposisi” untuk meneruskan surat masuk.':'Disposisi yang dapat Anda akses akan muncul di sini.'}</span></div>}
+            {canManageDispositions&&!incoming.length&&<p className="muted">Belum ada surat masuk yang dapat didisposisikan. Catat surat masuk terlebih dahulu.</p>}
+          </div>
+        </DataPanel>}
         </>}
       </section>
     </main>
@@ -2401,6 +2595,14 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
       </form>
     </Modal>}
     {modal?.type==='incoming'&&<Modal title="Catat surat masuk" close={()=>setModal(null)}><form className="modal-form" onSubmit={createIncoming}><label>Nomor surat<input required value={form.external_number||''} onChange={e=>setForm({...form,external_number:e.target.value})}/></label><label>Asal surat<input required value={form.sender||''} onChange={e=>setForm({...form,sender:e.target.value})}/></label><label>Perihal<input required value={form.subject||''} onChange={e=>setForm({...form,subject:e.target.value})}/></label><label>Tanggal surat<input type="date" value={form.letter_date||''} onChange={e=>setForm({...form,letter_date:e.target.value})}/></label><label>Ringkasan<textarea rows={3} value={form.summary||''} onChange={e=>setForm({...form,summary:e.target.value})}/></label><button className="primary" disabled={busy}>Simpan surat masuk</button></form></Modal>}
+    {modal?.type==='disposition'&&<Modal title="Teruskan Disposisi" close={()=>setModal(null)}><form className="modal-form" onSubmit={createDisposition}>
+      <label>Surat masuk<select required value={dispositionDraft.incoming_id} onChange={event=>setDispositionDraft(previous=>({...previous,incoming_id:event.target.value}))}><option value="">Pilih surat masuk</option>{incoming.map(item=><option key={item.id} value={item.id}>{item.external_number} · {item.subject}</option>)}</select></label>
+      <label>Penerima disposisi<select required value={dispositionDraft.assigned_to} onChange={event=>setDispositionDraft(previous=>({...previous,assigned_to:event.target.value}))}><option value="">Pilih Staf Tata Usaha</option>{dispositionAssignees.map(item=><option key={item.user_id} value={item.user_id}>{item.full_name}</option>)}</select></label>
+      {!dispositionAssignees.length&&<p className="hint">Belum ada akun Staf Tata Usaha aktif yang dapat menerima disposisi.</p>}
+      <label>Instruksi<textarea required rows={4} value={dispositionDraft.instruction} onChange={event=>setDispositionDraft(previous=>({...previous,instruction:event.target.value}))} placeholder="Tuliskan instruksi atau tindak lanjut yang diperlukan"/></label>
+      <label>Batas tindak lanjut<input type="date" value={dispositionDraft.due_date} onChange={event=>setDispositionDraft(previous=>({...previous,due_date:event.target.value}))}/></label>
+      <button className="primary" disabled={busy||!dispositionAssignees.length}>{busy?'Mengirim...':'Kirim Disposisi'}</button>
+    </form></Modal>}
     {modal?.type==='review'&&reviewRequest&&<Modal title="Review & Tindakan Surat" className="letter-action-modal" close={()=>setModal(null)}>
       <div className="letter-action-preview">{previewDocument?<FitLetterPreview paperSize={previewDocument.paperSize} marginsMm={previewDocument.marginsMm} watermark={previewDocument.isDraft?'KONSEP / BELUM BERNOMOR':''} html={`${previewDocument.header}<article class="letter-template-body">${previewDocument.html}</article>`}/>:<p className="muted">Pratinjau format surat tidak tersedia.</p>}</div>
       {isPrincipalTteManager&&requestWantsPrincipalTte(reviewRequest)&&<PrincipalTteSlotManager
@@ -2438,7 +2640,13 @@ export default function LettersApp({onBack,currentUser,initialStudentPrefill,onS
           }}/></label>)}
         </div>}
         <label>Nomor surat<input required maxLength={160} value={issueForm.letter_number} onChange={event=>setIssueForm(previous=>({...previous,letter_number:event.target.value}))}/><small className="hint">Saran format: 421.03/001/UPT.SMA.07/MRS/DISDIK/{new Date().getFullYear()}</small></label>
-        <label>Tanggal terbit<input type="date" required value={issueForm.issue_date} onChange={event=>setIssueForm(previous=>({...previous,issue_date:event.target.value}))}/></label>
+        <label>Tanggal terbit
+          <div className="letter-issue-date-control">
+            <input aria-label="Tanggal terbit (format Indonesia)" autoComplete="off" placeholder="26 November 2026 atau 26/11/2026" required value={issueForm.issue_date} onChange={event=>setIssueForm(previous=>({...previous,issue_date:event.target.value}))}/>
+            <input aria-label="Pilih tanggal terbit lewat kalender" type="date" value={parseIssueDate(issueForm.issue_date)||''} onChange={event=>setIssueForm(previous=>({...previous,issue_date:formatIssueDate(event.target.value)}))}/>
+          </div>
+          <small className="hint">Format surat: tanggal angka, nama bulan Indonesia, dan tahun 4 digit.</small>
+        </label>
         {signatories.length>0&&<label>Pilih pejabat penandatangan<select value={`${issueForm.signer_name}::${issueForm.signer_nip}`} onChange={event=>{const selected=signatories.find(item=>`${item.full_name}::${item.nip??''}`===event.target.value);if(selected)setIssueForm(previous=>({...previous,signer_name:selected.full_name,signer_position:selected.employment_status||previous.signer_position,signer_nip:selected.nip||''}))}}>{signatories.map(signer=><option key={`${signer.full_name}-${signer.nip}`} value={`${signer.full_name}::${signer.nip??''}`}>{signer.full_name} · {signer.employment_status||'Pejabat'}</option>)}</select></label>}
         <label>Nama penandatangan<input required value={issueForm.signer_name} onChange={event=>setIssueForm(previous=>({...previous,signer_name:event.target.value}))}/></label>
         <label>Jabatan penandatangan<input required value={issueForm.signer_position} onChange={event=>setIssueForm(previous=>({...previous,signer_position:event.target.value}))}/></label>

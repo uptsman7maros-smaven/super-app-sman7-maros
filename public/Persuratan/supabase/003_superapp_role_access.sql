@@ -5,7 +5,7 @@ alter table public.letter_user_roles
   drop constraint if exists letter_user_roles_role_check;
 alter table public.letter_user_roles
   add constraint letter_user_roles_role_check
-  check (role in ('administrator','operator','guru_staf','pemohon','staf_tu','kepala_tu','kepala_sekolah'));
+  check (role in ('administrator','operator','guru_staf','pemohon','staf_tu','kepala_tu','kepala_sekolah','bendahara'));
 
 alter table public.letter_approvals
   drop constraint if exists letter_approvals_approver_role_check;
@@ -28,6 +28,7 @@ as $$
     when 'guru_bk' then 'guru_staf'
     when 'tendik' then 'guru_staf'
     when 'siswa' then 'pemohon'
+    when 'bendahara' then 'bendahara'
     else null
   end
   from public.profiles p
@@ -289,6 +290,10 @@ create policy letter_incoming_admin_tu on public.letter_incoming for all to auth
 using (public.letter_has_role(array['administrator','operator','kepala_tu','staf_tu']))
 with check (public.letter_has_role(array['administrator','operator','kepala_tu','staf_tu']));
 
+drop policy if exists letter_incoming_headteacher_read on public.letter_incoming;
+create policy letter_incoming_headteacher_read on public.letter_incoming for select to authenticated
+using (public.letter_has_role(array['kepala_sekolah']));
+
 drop policy if exists letter_outgoing_read on public.letter_outgoing;
 create policy letter_outgoing_read on public.letter_outgoing for select to authenticated
 using (public.letter_has_role(array['administrator','operator','kepala_tu','staf_tu']));
@@ -308,7 +313,12 @@ using (
 );
 
 drop policy if exists letter_dispositions_write on public.letter_dispositions;
-create policy letter_dispositions_write on public.letter_dispositions for all to authenticated
+drop policy if exists letter_dispositions_insert on public.letter_dispositions;
+create policy letter_dispositions_insert on public.letter_dispositions for insert to authenticated
+with check (public.letter_has_role(array['administrator','operator','kepala_tu','kepala_sekolah']));
+
+drop policy if exists letter_dispositions_manager_update on public.letter_dispositions;
+create policy letter_dispositions_manager_update on public.letter_dispositions for update to authenticated
 using (public.letter_has_role(array['administrator','operator','kepala_tu','kepala_sekolah']))
 with check (public.letter_has_role(array['administrator','operator','kepala_tu','kepala_sekolah']));
 

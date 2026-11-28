@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import jsQR from "jsqr";
 import {
   CalendarDays, Camera, CheckCircle2, ClipboardCopy, Download, FileSpreadsheet,
-  Search, ShieldCheck, Stethoscope, UserCheck, XCircle, BellRing, Settings2
+  Search, ShieldCheck, Stethoscope, UserCheck, X, XCircle, BellRing, Settings2
 } from "lucide-react";
 import "./AbsensiDigital.css";
 import "./AbsensiDigitalQr.css";
@@ -25,6 +25,7 @@ type AttendanceRow = {
   session_type?: AttendanceQrSessionType | null;
   subject?: string | null;
   teacher_name?: string | null;
+  created_by?: string;
 };
 type AttendanceQrSessionType = "school_arrival" | "school_departure" | "subject";
 type AttendanceQrSession = {
@@ -379,6 +380,8 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const [teacherSubjectAssignments, setTeacherSubjectAssignments] = useState<TeacherAttendanceAssignment[]>([]);
   const [teacherSubjectAssignmentsLoading, setTeacherSubjectAssignmentsLoading] = useState(false);
   const [qrSession, setQrSession] = useState<AttendanceQrSession | null>(null);
+  const [qrSessionDurationMinutes, setQrSessionDurationMinutes] = useState(90);
+  const [qrExpanded, setQrExpanded] = useState(false);
   const [qrBusy, setQrBusy] = useState(false);
   const [qrError, setQrError] = useState("");
   const [manualQrValue, setManualQrValue] = useState("");
@@ -409,6 +412,11 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   const [studentQrError, setStudentQrError] = useState("");
   const [clockNow, setClockNow] = useState(0);
   const [homeroomRows, setHomeroomRows] = useState<HomeroomWeeklyAttendanceRow[]>([]);
+  const [homeroomClassLink, setHomeroomClassLink] = useState<{
+    profileId: string;
+    classIds: string[];
+    error: string;
+  }>({ profileId: "", classIds: [], error: "" });
   const [homeroomLoading, setHomeroomLoading] = useState(false);
   const [homeroomError, setHomeroomError] = useState("");
   const [weeklyTemplate, setWeeklyTemplate] = useState(defaultWeeklyReportTemplate);
@@ -442,11 +450,22 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   }>({ attendance: () => undefined, identity: () => undefined });
   const loadRequestRef = useRef(0);
   const role = currentUser?.role ?? userRole;
+  const homeroomProfileId = currentUser?.id ?? null;
+  const homeroomClassIds = useMemo(() =>
+    homeroomClassLink.profileId === homeroomProfileId ? homeroomClassLink.classIds : [],
+  [homeroomClassLink.classIds, homeroomClassLink.profileId, homeroomProfileId]);
+  const homeroomClassLoading = role === "guru"
+    && Boolean(homeroomProfileId)
+    && homeroomClassLink.profileId !== homeroomProfileId;
+  const homeroomClassError = homeroomClassLink.profileId === homeroomProfileId
+    ? homeroomClassLink.error
+    : "";
   const isSelfService = [
     "siswa", "guru", "guru_bk", "tendik", "staff_tata_usaha", "kepala_tata_usaha",
   ].includes(role);
   const isTeacher = role === "guru";
-  const isHomeroomTeacher = role === "guru" || role === "guru_bk";
+  const isHomeroomTeacher = role === "guru" && homeroomClassIds.length > 0;
+  const canViewHomeroomWeekly = isHomeroomTeacher || role === "guru_bk";
   const isAdminMonitor = role === "super_admin";
   const canManageAttendance = ["super_admin", "operator"].includes(role);
   const canRecordAttendance = isSelfService || canManageAttendance;
@@ -463,7 +482,10 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           supabase.from("teachers").select("nip,profile_id,staff_category,primary_role"),
           supabase.from("profiles")
             .select("id,username,role")
-            .in("role", ["guru", "guru_bk", "tendik", "staff_tata_usaha", "kepala_tata_usaha"]),
+            .in("role", [
+              "guru", "guru_bk", "tata_usaha", "staff_tata_usaha", "kepala_tata_usaha",
+              "kepala_sekolah", "operator", "bendahara",
+            ]),
         ]);
         if (teachersResult.error) throw teachersResult.error;
         if (profilesResult.error) throw profilesResult.error;
@@ -477,6 +499,18 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           profile.role as string,
         ]));
         const classifications = new Map<string, EmployeeClassification>();
+        (profilesResult.data ?? []).forEach((profile) => {
+          const identifier = profile.username.trim();
+          if (!identifier) return;
+          if (profile.role === "guru" || profile.role === "guru_bk") {
+            classifications.set(identifier, {
+              category: "guru",
+              teacherRole: profile.role,
+            });
+          } else {
+            classifications.set(identifier, { category: "tendik", teacherRole: "tendik" });
+          }
+        });
         (teachersResult.data ?? []).forEach((teacher) => {
           if (!teacher.nip) return;
           const accountRole = (teacher.profile_id ? profilesById.get(teacher.profile_id) : undefined)
@@ -508,6 +542,46 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     void loadEmployeeClassifications();
     return () => { active = false; };
   }, [canManageAttendance]);
+
+  useEffect(() => {
+    if (role !== "guru" || !homeroomProfileId) return;
+
+    let active = true;
+    const loadOfficialHomeroomClasses = async () => {
+      try {
+        const { data, error: classesError } = await supabase
+          .from("classes")
+          .select("id")
+          .eq("homeroom_teacher_id", homeroomProfileId);
+        if (classesError) throw classesError;
+        if (active) {
+          const classIds = (data ?? []).map((row) => row.id);
+          if (!classIds.length) {
+            setAttendanceView((view) => view === "homeroom" ? "personal" : view);
+            setHomeroomRows([]);
+          }
+          setHomeroomClassLink({
+            profileId: homeroomProfileId,
+            classIds,
+            error: "",
+          });
+        }
+      } catch (loadError) {
+        if (active) {
+          setAttendanceView((view) => view === "homeroom" ? "personal" : view);
+          setHomeroomRows([]);
+          setHomeroomClassLink({
+            profileId: homeroomProfileId,
+            classIds: [],
+            error: `Kelas perwalian gagal dimuat dari Data Induk: ${errorMessage(loadError)}`,
+          });
+        }
+      }
+    };
+
+    void loadOfficialHomeroomClasses();
+    return () => { active = false; };
+  }, [homeroomProfileId, role]);
 
   useEffect(() => {
     if (!isSelfService) return;
@@ -648,7 +722,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         offset += attendancePageSize;
       }
 
-      if (isHomeroomTeacher) {
+      if (canViewHomeroomWeekly) {
         let studentOffset = 0;
         while (true) {
           const { data, error: studentAttendanceError } = await supabase
@@ -713,7 +787,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [date, identity, isHomeroomTeacher, isSelfService, role]);
+  }, [canViewHomeroomWeekly, date, identity, isSelfService, role]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadRows(); }, 0);
@@ -1086,7 +1160,16 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
   }, [adminArrivalQr, myStudentQrs.length, qrSession, serverClockOffsetMs]);
 
   useEffect(() => {
-    if (!isHomeroomTeacher || !currentUser) return;
+    if (!qrExpanded) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setQrExpanded(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [qrExpanded]);
+
+  useEffect(() => {
+    if (!canViewHomeroomWeekly || !currentUser) return;
     let active = true;
     const loadHomeroomAttendance = async () => {
       setHomeroomLoading(true);
@@ -1119,7 +1202,10 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         if (validRows.length !== data.length) {
           throw new Error("Sebagian data rekap wali kelas memiliki format yang tidak valid.");
         }
-        if (active) setHomeroomRows(validRows);
+        const scopedRows = role === "guru"
+          ? validRows.filter((row) => homeroomClassIds.includes(row.class_id))
+          : validRows;
+        if (active) setHomeroomRows(scopedRows);
       } catch (loadError) {
         if (active) setHomeroomError(`Rekap kelas perwalian gagal dimuat: ${errorMessage(loadError)}`);
       } finally {
@@ -1129,10 +1215,10 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
 
     void loadHomeroomAttendance();
     return () => { active = false; };
-  }, [currentUser, isHomeroomTeacher, weeklyStartDate]);
+  }, [canViewHomeroomWeekly, currentUser, homeroomClassIds, role, weeklyStartDate]);
 
   useEffect(() => {
-    if (!canManageAttendance && !isHomeroomTeacher) return;
+    if (!canManageAttendance && !canViewHomeroomWeekly) return;
     let active = true;
     const loadWeeklyTemplate = async () => {
       setWeeklyTemplateLoading(true);
@@ -1156,7 +1242,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     };
     void loadWeeklyTemplate();
     return () => { active = false; };
-  }, [canManageAttendance, isHomeroomTeacher]);
+  }, [canManageAttendance, canViewHomeroomWeekly]);
 
   useEffect(() => {
     if (isSelfService || !canManageAttendance) return;
@@ -1324,6 +1410,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     if (!isTeacher) return;
     setQrError("");
     setQrSession(null);
+    setQrExpanded(false);
     setManualQrValue("");
     setCopiedQrToken("");
     setQrBusy(true);
@@ -1333,6 +1420,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           p_session_type: "subject",
           p_subject: qrSubject,
           p_class_id: qrClassId,
+          p_duration_minutes: qrSessionDurationMinutes,
         })
         .maybeSingle();
       if (createError) throw createError;
@@ -1817,25 +1905,39 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
           : null;
         const notes = student.days;
         const remarks: string[] = [];
+        const noteGroups = (status: AttendanceRowStatus) => {
+          const grouped = new Map<string, string[]>();
+          for (const day of weeklyDays) {
+            const row = notes.get(day);
+            const text = row?.status === status ? row.note?.trim() : "";
+            if (!text) continue;
+            const dayLabel = new Intl.DateTimeFormat("id-ID", {
+              weekday: "long",
+              timeZone: "UTC",
+            }).format(new Date(`${day}T00:00:00Z`));
+            const days = grouped.get(text) ?? [];
+            days.push(dayLabel);
+            grouped.set(text, days);
+          }
+          return [...grouped.entries()].map(([text, days]) => `${text} (${days.join(", ")})`);
+        };
         const eventDays = (code: string) => events
           .filter((event) => event.startsWith(`${code}:`))
           .map((event) => event.slice(2))
           .join(", ");
         if (counts.T) remarks.push(`Terlambat ${counts.T}x (${eventDays("T")})`);
         if (counts.S) {
-          const noteText = [...notes.values()].filter((row) => row.status === "sakit" && row.note)
-            .map((row) => row.note).join("; ");
-          remarks.push(`Sakit ${counts.S}x (${eventDays("S")})${noteText ? ` / ${noteText}` : " / Surat dokter terlampir"}`);
+          const noteText = noteGroups("sakit");
+          remarks.push(`Sakit ${counts.S}x (${eventDays("S")})${noteText.length ? `: ${noteText.join("; ")}` : " / Surat dokter terlampir"}`);
         }
         if (counts.I) {
-          const noteText = [...notes.values()].filter((row) => row.status === "izin" && row.note)
-            .map((row) => row.note).join("; ");
-          remarks.push(`Izin ${counts.I}x (${eventDays("I")})${noteText ? ` / ${noteText}` : ""}`);
+          const noteText = noteGroups("izin");
+          remarks.push(`Izin ${counts.I}x (${eventDays("I")})${noteText.length ? `: ${noteText.join("; ")}` : ""}`);
         }
         if (counts.A || (percentage !== null && percentage < 80)) {
-          const noteText = [...notes.values()].filter((row) => row.status === "alpa" && row.note)
-            .map((row) => row.note).join("; ");
-          remarks.push(`Alpa ${counts.A}x${counts.A ? ` (${eventDays("A")})` : ""}${noteText ? ` / ${noteText}` : " / Perlu konfirmasi orang tua"}`);
+          const noteText = noteGroups("alpa")
+            .filter((note) => !/^alpa otomatis\s*:/i.test(note));
+          remarks.push(`Alpa ${counts.A}x${counts.A ? ` (${eventDays("A")})` : ""}${noteText.length ? `: ${noteText.join("; ")}` : counts.A ? "" : " / Perlu konfirmasi orang tua"}`);
         }
         if (remarks.length === 0 && effectiveDayCount > 0 && counts.H === effectiveDayCount) {
           remarks.push("Hadir penuh / Tertib");
@@ -1987,14 +2089,13 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
     const rangeLabel = `${formatDate(weeklyStartDate, { day: "numeric" })} s.d. ${formatDate(weeklyDays[4], { day: "numeric", month: "long" })} ${end.getUTCFullYear()} (Minggu ke-${Math.ceil(start.getUTCDate() / 7)})`;
     const dayNames = ["Senin", "Selasa", "Rabu", "Kamis", "Jum'at"];
     const dayHeaders = dayNames.map((day) => `<th class="day-heading">${day}</th>`).join("");
-    const subHeaders = `${weeklyDays.map((day) => `<th>(${escapeAttendanceHtml(formatDate(day))})</th>`).join("")}<th>H</th><th>T</th><th>S</th><th>I</th><th>A</th>`;
+    const subHeaders = `${weeklyDays.map((day) => `<th class="day-date-heading">(${escapeAttendanceHtml(formatDate(day))})</th>`).join("")}<th>H</th><th>T</th><th>S</th><th>I</th><th>A</th>`;
     const tableRows = report.students.map((student, index) => {
       const dayCells = weeklyDays.map((day) => {
         const row = student.days.get(day);
         const code = row ? weeklyStatusCode[row.status] : undefined;
         const time = row?.recorded_at ? `<small>${escapeAttendanceHtml(formatWitaTime(row.recorded_at))}</small>` : "";
-        const noteText = row?.note ? `<small>${escapeAttendanceHtml(row.note)}</small>` : "";
-        return `<td class="day-cell">${code ?? (day > today() ? "—" : row?.is_effective_day ? "—" : "Libur")}${time}${noteText}</td>`;
+        return `<td class="day-cell">${code ?? (day > today() ? "—" : row?.is_effective_day ? "—" : "Libur")}${time}</td>`;
       }).join("");
       return `<tr><td>${index + 1}</td><td class="report-identifier">${escapeAttendanceHtml(student.identifier || "—")}</td><td>${escapeAttendanceHtml(student.name)}</td><td>${student.gender ?? "—"}</td>${dayCells}<td>${student.counts.H}</td><td>${student.counts.T}</td><td>${student.counts.S}</td><td>${student.counts.I}</td><td>${student.counts.A}</td><td>${student.percentage === null ? "—" : `${student.percentage}%`}</td><td class="remarks">${escapeAttendanceHtml(student.remarks)}</td></tr>`;
     }).join("");
@@ -2051,11 +2152,13 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         .report-letterhead img{max-width:76px;max-height:76px;object-fit:contain}
         .letterhead-copy p{margin:1px 0;font-size:9px}.letterhead-copy h2{margin:2px 0;font-size:15px}
         .letterhead-rule{border-top:3px double #111;margin:4px 0 10px}
-        h1{text-align:center;font-size:14px;margin:6px 0 10px}
+        h1{text-align:center!important;font-size:14px;margin:6px 0 10px}
         .metadata{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:6px;margin:7px 0}
         .weekly-attendance{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:7px}
         .weekly-attendance th,.weekly-attendance td{border:1px solid #111;padding:3px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}
         .weekly-attendance th{background:#67d4f5;font-weight:700}
+        .weekly-attendance th.day-heading,.weekly-attendance th.day-date-heading,.weekly-attendance th:nth-child(n+5):nth-child(-n+9){text-align:center!important;vertical-align:middle!important}
+        .report-title,[class*="report-title"]{text-align:center!important}
         .weekly-attendance th:nth-child(3),.weekly-attendance td:nth-child(3){width:14%;text-align:left}
         .weekly-attendance th:nth-child(2),.weekly-attendance td:nth-child(2),.report-identifier{width:110px;white-space:nowrap;word-break:keep-all}
         .weekly-attendance th:last-child,.weekly-attendance td:last-child{width:16%}
@@ -2097,7 +2200,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         const code = weeklyStatusCode[row.status] ?? "—";
         const time = row.recorded_at ? ` ${formatWitaTime(row.recorded_at)}` : "";
         const dayLabel = row.is_effective_day || day > today() ? code : "Libur";
-        return `${dayLabel}${time}${row.note ? `\n${row.note}` : ""}`;
+        return `${dayLabel}${time}`;
       }),
       student.counts.H,
       student.counts.T,
@@ -2117,6 +2220,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       [],
       ["Keterangan Kode: H = Hadir, T = Terlambat, S = Sakit, I = Izin, A = Alpa"],
     ]);
+    sheet.A1.s = { alignment: { horizontal: "center", vertical: "center" } };
     report.students.forEach((student, index) => {
       const cell = sheet[XLSX.utils.encode_cell({ r: index + 5, c: 1 })];
       if (cell) {
@@ -2233,13 +2337,38 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         qrOffset += attendancePageSize;
       }
 
-      const output = loadedRows.map((r) => ({
+      const categorizedRows = canManageAttendance
+        ? loadedRows.filter((row) => {
+          const classification = row.person_type === "siswa"
+            ? { category: "siswa" as const, teacherRole: "tendik" as const }
+            : employeeClassifications.get(row.person_identifier);
+          if (!classification) {
+            throw new Error(`Kategori untuk ${row.person_name} (${row.person_identifier}) belum tertaut di Data Induk.`);
+          }
+          if (adminCategory !== "all" && classification.category !== adminCategory) return false;
+          return adminCategory !== "guru"
+            || adminTeacherFilter === "all"
+            || classification.teacherRole === adminTeacherFilter;
+        })
+        : loadedRows;
+      const output = categorizedRows.map((r) => ({
         Tanggal:r.attendance_date, Jenis:r.person_type === "siswa" ? "Siswa" : "Guru/Tendik",
         "NISN/NIP":r.person_identifier, Nama:r.person_name, Kelas:r.class_name ?? "",
         Status:statusLabel(r.status), Keterangan:r.note ?? ""
       }));
       const wb = XLSX.utils.book_new();
-      const sheet = XLSX.utils.json_to_sheet(output);
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ["Tanggal", "Jenis", "NISN/NIP", "Nama", "Kelas", "Status", "Keterangan"],
+        ...output.map((row) => [
+          row.Tanggal,
+          row.Jenis,
+          row["NISN/NIP"],
+          row.Nama,
+          row.Kelas,
+          row.Status,
+          row.Keterangan,
+        ]),
+      ]);
       output.forEach((row, index) => {
         const cell = sheet[XLSX.utils.encode_cell({ r: index + 1, c: 2 })];
         if (cell) {
@@ -2497,7 +2626,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         ? [
           { value: "personal", label: "Absensi & Rekap Saya" },
           { value: "subjects", label: "Rekap Mapel Saya" },
-          { value: "homeroom", label: "Kelas Perwalian" },
+          ...(isHomeroomTeacher ? [{ value: "homeroom" as const, label: "Kelas Perwalian" }] : []),
         ]
         : role === "guru_bk"
           ? [
@@ -2551,6 +2680,12 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
               </button>
             ))}
     </nav>
+    {isTeacher && homeroomClassLoading && (
+      <p className="attendance-hint">Memeriksa penugasan wali kelas dari Data Induk...</p>
+    )}
+    {isTeacher && homeroomClassError && (
+      <div className="attendance-alert error" role="alert"><XCircle size={17}/>{homeroomClassError}</div>
+    )}
     <div className="attendance-stats">
       {summary.map((s, index) => <div className={`attendance-stat stat-${s.value}`} style={{"--stat-delay": `${index * 70}ms`} as React.CSSProperties} key={s.value}>
         <div className="attendance-stat-icon">{s.value === "hadir" ? <UserCheck size={19}/> : s.value === "sakit" ? <Stethoscope size={19}/> : <CalendarDays size={19}/>}</div>
@@ -2568,7 +2703,15 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         <span className="attendance-qr-badge">QR TERBATAS WAKTU</span>
       </div>
       {isTeacher && (qrSession ? <div className="attendance-qr-active">
-        <div className="attendance-qr-code"><QRCodeSVG value={`SMAN7ABSENSI|${qrSession.token}`} size={220} level="M" includeMargin/></div>
+        <button
+          type="button"
+          className="attendance-qr-expand"
+          onClick={() => setQrExpanded(true)}
+          aria-label="Perbesar QR kehadiran mata pelajaran"
+        >
+          <QRCodeSVG value={`SMAN7ABSENSI|${qrSession.token}`} size={220} level="M" includeMargin/>
+          <span>Klik untuk perbesar</span>
+        </button>
         <div className="attendance-qr-session-info">
           <strong>{qrSession.session_type === "subject" ? qrSession.subject : qrSession.session_type === "school_departure" ? "Kepulangan sekolah" : "Kedatangan sekolah"}</strong>
           <span>Untuk tanggal {new Date(`${qrSession.attendance_date}T00:00:00`).toLocaleDateString("id-ID",{day:"2-digit",month:"long",year:"numeric"})}</span>
@@ -2636,13 +2779,29 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
               ))}
             </select>
           </label>
+          <label className="attendance-qr-field">
+            <span>Durasi sesi QR (menit)</span>
+            <input
+              className="attendance-qr-duration"
+              type="number"
+              min={15}
+              max={240}
+              step={15}
+              value={qrSessionDurationMinutes}
+              onChange={event => setQrSessionDurationMinutes(Number(event.target.value))}
+              required
+            />
+            <small>Pilih 15–240 menit. Sesi berlaku sampai durasi habis atau ditutup guru.</small>
+          </label>
         </>}
         <button type="button" className="attendance-primary" onClick={()=>void createQrSession()}
           disabled={qrBusy || (
             teacherSubjectAssignmentsLoading ||
             !availableQrSubjects.length ||
             !qrSubject.trim() ||
-            !qrClassId
+            !qrClassId ||
+            qrSessionDurationMinutes < 15 ||
+            qrSessionDurationMinutes > 240
           )}>
           {qrBusy ? "Menyiapkan..." : "Buat QR Kehadiran"}
         </button>
@@ -3019,9 +3178,9 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         {weeklyTemplateSaving ? "Menyimpan..." : "Simpan format rekap"}
       </button>
     </section>}
-    {isHomeroomTeacher && (attendanceView === "homeroom" || attendanceView === "monitor") && <section className="attendance-panel attendance-homeroom-weekly">
+    {canViewHomeroomWeekly && (attendanceView === "homeroom" || attendanceView === "monitor") && <section className="attendance-panel attendance-homeroom-weekly">
       <div className="attendance-panel-title">
-        <div><h2>Rekapitulasi Kehadiran Mingguan</h2><p>Daftar kelas mengikuti relasi wali kelas, penugasan mata pelajaran, atau binaan Guru BK.</p></div>
+        <div><h2>Rekapitulasi Kehadiran Mingguan</h2><p>{role === "guru" ? "Hanya kelas resmi yang terhubung sebagai kelas perwalian Anda di Data Induk." : "Pantauan rekap mingguan siswa yang menjadi cakupan layanan Guru BK."}</p></div>
         <FileSpreadsheet size={22}/>
       </div>
       <div className="attendance-weekly-controls">
@@ -3059,7 +3218,6 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
                   const code=record ? weeklyStatusCode[record.status] : undefined;
                   return <td key={day}>{code ?? (day > today() || record?.is_effective_day ? "—" : "Libur")}
                     {record?.recorded_at && <small>{formatWitaTime(record.recorded_at)}</small>}
-                    {record?.note && <small>{record.note}</small>}
                   </td>;
                 })}
                 <td>{student.counts.H}</td><td>{student.counts.T}</td><td>{student.counts.S}</td><td>{student.counts.I}</td><td>{student.counts.A}</td>
@@ -3085,5 +3243,32 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
       <p className="attendance-hint">Variabel: <code>{"{nama}"}</code>, <code>{"{status}"}</code>, <code>{"{tanggal}"}</code>, <code>{"{jam}"}</code>, <code>{"{kelas}"}</code>. Untuk QR: status otomatis menjadi “hadir di sekolah” atau “pulang dari sekolah”.</p>
       <button type="button" className="attendance-primary" disabled={waSaving} onClick={() => void saveWhatsappSettings()}>{waSaving ? "Menyimpan..." : "Simpan Pengaturan WhatsApp"}</button>
     </section>}
+    {qrExpanded && qrSession && <div
+      className="attendance-qr-modal-backdrop"
+      role="presentation"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) setQrExpanded(false);
+      }}
+    >
+      <section className="attendance-qr-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-qr-modal-title">
+        <button type="button" className="attendance-qr-modal-close" onClick={() => setQrExpanded(false)} aria-label="Tutup QR besar">
+          <X size={20}/>
+        </button>
+        <span className="attendance-qr-eyebrow">ABSENSI MATA PELAJARAN</span>
+        <h2 id="attendance-qr-modal-title">{qrSession.subject || "Mata pelajaran"}</h2>
+        <p>{qrSession.class_name ? `Kelas ${qrSession.class_name}` : "Kelas"} · {qrSession.teacher_name || currentUser?.full_name || "Guru"}</p>
+        <div className="attendance-qr-modal-code">
+          <QRCodeSVG value={`SMAN7ABSENSI|${qrSession.token}`} size={400} level="M" includeMargin/>
+        </div>
+        <strong className="attendance-qr-modal-countdown">
+          Sisa waktu: {remainingTimeLabel(qrSession.expires_at ?? qrSession.token_expires_at, clockNow)}
+        </strong>
+        <div className="attendance-qr-modal-token">
+          <span>KODE MANUAL</span>
+          <code>{qrSession.token}</code>
+        </div>
+        <button type="button" className="attendance-primary" onClick={() => setQrExpanded(false)}>Tutup</button>
+      </section>
+    </div>}
   </div>;
 }

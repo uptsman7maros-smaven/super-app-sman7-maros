@@ -170,7 +170,7 @@
 .attendance-weekly-controls>label { display:grid; min-width:190px; gap:6px; color:#475569; font-size:12px; font-weight:750; }
 .attendance-weekly-controls input { box-sizing:border-box; min-height:42px; padding:9px 10px; border:1px solid #dce3eb; border-radius:10px; font:inherit; }
 .attendance-weekly-report-table { min-width:1450px; table-layout:fixed; font-size:11px!important; }
-.attendance-weekly-report-table th { position:static!important; text-align:center!important; white-space:normal!important; background:#67d4f5!important; color:#111!important; }
+.attendance-weekly-report-table th { position:static!important; text-align:center!important; vertical-align:middle!important; white-space:normal!important; background:#67d4f5!important; color:#111!important; }
 .attendance-weekly-report-table td { text-align:center; white-space:normal!important; vertical-align:middle; }
 .attendance-weekly-report-table th,.attendance-weekly-report-table td { border:1px solid #111!important; }
 .attendance-weekly-report-table td:nth-child(3),.attendance-weekly-report-table td:last-child { text-align:left; }

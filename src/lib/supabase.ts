@@ -15,6 +15,7 @@ if (!url || !key) {
     "Konfigurasi Supabase belum lengkap. Set VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY pada environment aplikasi.",
   );
 }
+const authStorageKey = `sb-${new URL(url).hostname.split(".")[0]}-auth-token`;
 
 function retryableApiRateLimitResponse() {
   const retryAfterMs = Math.max(0, apiRetryAfter - Date.now());
@@ -375,6 +376,7 @@ async function authenticatedFetch(
 
 export const supabase = createClient(url, key, {
   auth: {
+    storageKey: authStorageKey,
     persistSession: true,
     autoRefreshToken: false,
     detectSessionInUrl: true,
@@ -403,6 +405,18 @@ function clearSessionRateLimit() {
   sessionRateLimitError = null;
   sessionRateLimitAttempts = 0;
   lastSessionRateLimitAt = 0;
+}
+
+export function clearSupabaseLocalSessionCache() {
+  cachedSession = null;
+  clearSessionRateLimit();
+  for (const storageName of ["localStorage", "sessionStorage"] as const) {
+    try {
+      window[storageName].removeItem(authStorageKey);
+    } catch (error) {
+      console.error(`Cache autentikasi Supabase di ${storageName} tidak dapat dihapus:`, error);
+    }
+  }
 }
 
 supabase.auth.onAuthStateChange((event, session) => {

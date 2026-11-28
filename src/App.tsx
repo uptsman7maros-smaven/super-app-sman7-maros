@@ -45,6 +45,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  clearSupabaseLocalSessionCache,
   getCachedSupabaseSession,
   getSupabaseSessionRetryDelayMs,
   getValidSupabaseSession,
@@ -69,6 +70,7 @@ import KesiswaanBK from "./KesiswaanBK";
 import LaporanAnalitik from "./LaporanAnalitik";
 import OfficialAnnouncementModal from "./OfficialAnnouncementModal";
 import PengaturanIntegrasi from "./PengaturanIntegrasi";
+import AccountSettings from "./AccountSettings";
 import PemilihanOSISModule from "./PemilihanOSISModule";
 import SmavenLearn from "./SmavenLearn";
 import Inventaris from "./InventarisDigital";
@@ -339,6 +341,164 @@ type CachedSessionUser = {
 
 function sessionProfileCacheKey(userId: string) {
   return `super-app:verified-profile:${userId}`;
+}
+
+const automaticLogoutDelayMs = 120_000;
+const visibleTabLeaseMs = 30_000;
+const visibleTabHeartbeatMs = 10_000;
+const loginSessionMarkers = new Map<string, string>();
+let fallbackTabId = "";
+
+function createSessionToken() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function loginSessionMarkerKey(userId: string) {
+  return `super-app:login-session:${userId}`;
+}
+
+function awayTimestampKey(userId: string, marker: string) {
+  return `super-app:away-since:${userId}:${marker}`;
+}
+
+function visibleTabsKey(userId: string, marker: string) {
+  return `super-app:visible-tabs:${userId}:${marker}`;
+}
+
+function announcementShownKey(userId: string, marker: string) {
+  return `super-app:announcement-shown:${userId}:${marker}`;
+}
+
+function clearLoginSessionTracking(userId: string) {
+  const markerKey = loginSessionMarkerKey(userId);
+  let marker = loginSessionMarkers.get(userId) ?? "";
+  try {
+    marker = window.localStorage.getItem(markerKey) ?? marker;
+    if (marker) {
+      window.localStorage.removeItem(awayTimestampKey(userId, marker));
+      window.localStorage.removeItem(visibleTabsKey(userId, marker));
+      window.sessionStorage.removeItem(announcementShownKey(userId, marker));
+    }
+    window.localStorage.removeItem(markerKey);
+  } catch (error) {
+    console.error("Cache status sesi tidak dapat dibersihkan:", error);
+  } finally {
+    loginSessionMarkers.delete(userId);
+  }
+}
+
+function getLoginSessionMarker(userId: string, startNew = false) {
+  const markerKey = loginSessionMarkerKey(userId);
+  try {
+    const previousMarker = window.localStorage.getItem(markerKey);
+    if (!startNew && previousMarker) {
+      loginSessionMarkers.set(userId, previousMarker);
+      return previousMarker;
+    }
+    if (previousMarker) {
+      window.localStorage.removeItem(awayTimestampKey(userId, previousMarker));
+      window.localStorage.removeItem(visibleTabsKey(userId, previousMarker));
+      window.sessionStorage.removeItem(announcementShownKey(userId, previousMarker));
+    }
+    const marker = createSessionToken();
+    window.localStorage.setItem(markerKey, marker);
+    loginSessionMarkers.set(userId, marker);
+    return marker;
+  } catch (error) {
+    console.error("Penanda sesi login tidak dapat disimpan:", error);
+    const previousMarker = loginSessionMarkers.get(userId);
+    if (!startNew && previousMarker) return previousMarker;
+    const marker = createSessionToken();
+    loginSessionMarkers.set(userId, marker);
+    return marker;
+  }
+}
+
+function getTabId() {
+  try {
+    const stored = window.sessionStorage.getItem("super-app:tab-id");
+    if (stored) return stored;
+    const tabId = createSessionToken();
+    window.sessionStorage.setItem("super-app:tab-id", tabId);
+    return tabId;
+  } catch (error) {
+    console.error("Penanda tab tidak dapat disimpan:", error);
+    if (!fallbackTabId) fallbackTabId = createSessionToken();
+    return fallbackTabId;
+  }
+}
+
+function readAwayTimestamp(key: string) {
+  try {
+    const stored = window.localStorage.getItem(key);
+    if (stored === null) return null;
+    const timestamp = Number(stored);
+    if (!Number.isFinite(timestamp)) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    return timestamp;
+  } catch (error) {
+    console.error("Waktu aplikasi ditinggalkan tidak dapat dibaca:", error);
+    return null;
+  }
+}
+
+function writeAwayTimestamp(key: string, timestamp: number) {
+  try {
+    window.localStorage.setItem(key, String(timestamp));
+  } catch (error) {
+    console.error("Waktu aplikasi ditinggalkan tidak dapat disimpan:", error);
+  }
+}
+
+function clearAwayTimestamp(key: string) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch (error) {
+    console.error("Waktu aplikasi ditinggalkan tidak dapat dibersihkan:", error);
+  }
+}
+
+function readVisibleTabLeases(key: string) {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, number] =>
+        typeof entry[1] === "number" && Number.isFinite(entry[1]),
+      ),
+    ) as Record<string, number>;
+  } catch (error) {
+    console.error("Status tab aktif tidak dapat dibaca:", error);
+    return {};
+  }
+}
+
+function writeVisibleTabLeases(key: string, leases: Record<string, number>) {
+  try {
+    if (Object.keys(leases).length) {
+      window.localStorage.setItem(key, JSON.stringify(leases));
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch (error) {
+    console.error("Status tab aktif tidak dapat disimpan:", error);
+  }
+}
+
+function hasVisibleTabLease(key: string, now = Date.now()) {
+  return Object.values(readVisibleTabLeases(key)).some((timestamp) =>
+    timestamp <= now + 5_000 && now - timestamp < visibleTabLeaseMs,
+  );
+}
+
+function isAwaySessionExpired(userId: string, marker: string, now = Date.now()) {
+  const awaySince = readAwayTimestamp(awayTimestampKey(userId, marker));
+  return awaySince !== null
+    && awaySince <= now
+    && now - awaySince >= automaticLogoutDelayMs
+    && !hasVisibleTabLease(visibleTabsKey(userId, marker), now);
 }
 
 function readCachedSessionUser(userId: string): CachedSessionUser | null {
@@ -816,8 +976,143 @@ function AppContent() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
+  const [loginSessionId, setLoginSessionId] = useState("");
+  const [automaticLogoutNotice, setAutomaticLogoutNotice] = useState("");
+  const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState("");
+  const automaticLogoutInProgressRef = useRef(false);
+  const loggedInUserId = currentUser?.id;
+  useEffect(() => {
+    if (!loggedInUserId) {
+      setLoginSessionId("");
+      return;
+    }
+    setLoginSessionId(getLoginSessionMarker(loggedInUserId));
+  }, [loggedInUserId]);
+
+  useEffect(() => {
+    if (!loggedInUserId || !loginSessionId) return;
+
+    automaticLogoutInProgressRef.current = false;
+    const userId = loggedInUserId;
+    const tabId = getTabId();
+    const awayKey = awayTimestampKey(userId, loginSessionId);
+    const leasesKey = visibleTabsKey(userId, loginSessionId);
+    let awayTimer = 0;
+
+    const expireSession = async () => {
+      if (automaticLogoutInProgressRef.current) return;
+      automaticLogoutInProgressRef.current = true;
+      let signOutError: unknown = null;
+      try {
+        const { error } = await supabase.auth.signOut({ scope: "local" });
+        if (error) throw error;
+      } catch (error) {
+        console.error("Logout otomatis karena aplikasi tidak dibuka gagal:", error);
+        signOutError = error;
+        clearSupabaseLocalSessionCache();
+      }
+      clearCachedSessionUser(userId);
+      clearLoginSessionTracking(userId);
+      setAutomaticLogoutNotice("Sesi otomatis keluar karena aplikasi tidak dibuka selama lebih dari 2 menit.");
+      setSessionRecoveryMessage(
+        signOutError
+          ? "Sesi lokal sudah dihapus, tetapi status sesi Supabase mungkin belum diperbarui karena koneksi dibatasi."
+          : "",
+      );
+      currentUserRef.current = null;
+      setCurrentUser(null);
+      setActivePage("Dashboard");
+    };
+
+    const clearAwayTimer = () => {
+      if (awayTimer) window.clearTimeout(awayTimer);
+      awayTimer = 0;
+    };
+
+    const activeLeases = (now: number) => {
+      const leases = readVisibleTabLeases(leasesKey);
+      return Object.entries(leases).filter(([, timestamp]) =>
+        timestamp <= now + 5_000 && now - timestamp < visibleTabLeaseMs,
+      );
+    };
+
+    const markTabHidden = () => {
+      const now = Date.now();
+      const leases = readVisibleTabLeases(leasesKey);
+      delete leases[tabId];
+      for (const [leaseId, timestamp] of Object.entries(leases)) {
+        if (timestamp > now + 5_000 || now - timestamp >= visibleTabLeaseMs) {
+          delete leases[leaseId];
+        }
+      }
+      writeVisibleTabLeases(leasesKey, leases);
+
+      if (!activeLeases(now).length) {
+        const awaySince = readAwayTimestamp(awayKey);
+        if (awaySince === null || awaySince > now) writeAwayTimestamp(awayKey, now);
+        const startedAt = readAwayTimestamp(awayKey) ?? now;
+        clearAwayTimer();
+        awayTimer = window.setTimeout(
+          () => void (isAwaySessionExpired(userId, loginSessionId) && expireSession()),
+          Math.max(0, automaticLogoutDelayMs - (now - startedAt)),
+        );
+      } else {
+        clearAwayTimestamp(awayKey);
+        clearAwayTimer();
+      }
+    };
+
+    const markTabVisible = () => {
+      const now = Date.now();
+      const otherVisibleTabs = activeLeases(now).filter(([leaseId]) => leaseId !== tabId);
+      if (isAwaySessionExpired(userId, loginSessionId, now) && !otherVisibleTabs.length) {
+        clearAwayTimer();
+        void expireSession();
+        return;
+      }
+
+      clearAwayTimestamp(awayKey);
+      const leases = readVisibleTabLeases(leasesKey);
+      for (const [leaseId, timestamp] of Object.entries(leases)) {
+        if (timestamp > now + 5_000 || now - timestamp >= visibleTabLeaseMs) {
+          delete leases[leaseId];
+        }
+      }
+      leases[tabId] = now;
+      writeVisibleTabLeases(leasesKey, leases);
+      clearAwayTimer();
+    };
+
+    const updateVisibility = () => {
+      if (document.visibilityState === "visible") markTabVisible();
+      else markTabHidden();
+    };
+
+    updateVisibility();
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState === "visible") markTabVisible();
+      else if (!awayTimer) markTabHidden();
+    }, visibleTabHeartbeatMs);
+    document.addEventListener("visibilitychange", updateVisibility);
+    window.addEventListener("pagehide", markTabHidden);
+
+    return () => {
+      window.clearInterval(heartbeat);
+      clearAwayTimer();
+      document.removeEventListener("visibilitychange", updateVisibility);
+      window.removeEventListener("pagehide", markTabHidden);
+      const leases = readVisibleTabLeases(leasesKey);
+      delete leases[tabId];
+      writeVisibleTabLeases(leasesKey, leases);
+      if (!activeLeases(Date.now()).length && document.visibilityState !== "visible") {
+        const now = Date.now();
+        if (readAwayTimestamp(awayKey) === null) writeAwayTimestamp(awayKey, now);
+      }
+    };
+  }, [loggedInUserId, loginSessionId, setCurrentUser]);
+
   const dashboardFeedRefreshState = useRef(new Map<string, { lastRequestedAt: number; promise: Promise<DashboardFeed> | null }>());
-  const dashboardStatsRefreshState = useRef(new Map<string, { lastRequestedAt: number; inFlight: boolean }>());
+  const dashboardStatsRefreshState = useRef(new Map<string, { lastRequestedAt: number; inFlight: boolean; requestId: number }>());
   const [activePage, setActivePage] = useState("Dashboard");
   const [parentLetterPrefill, setParentLetterPrefill] = useState<{
     id: string;
@@ -849,7 +1144,6 @@ function AppContent() {
   }, [activePage]);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
-  const [sessionRecoveryMessage, setSessionRecoveryMessage] = useState("");
   const [sessionRetry, setSessionRetry] = useState(0);
   const [maintenanceStatus, setMaintenanceStatus] = useState<MaintenanceStatus | null>(null);
   const [maintenanceStatusLoaded, setMaintenanceStatusLoaded] = useState(false);
@@ -1077,6 +1371,7 @@ useEffect(() => {
     window.clearInterval(intervalId);
     if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer);
     document.removeEventListener("visibilitychange", onVisibilityChange);
+    setDashboardFeedLoading(false);
     void supabase.removeChannel(channel);
   };
 }, [
@@ -2006,6 +2301,7 @@ useEffect(() => {
       if (!userId) {
         if (mounted && syncId === sessionSyncId) {
           recoveryAttempt = 0;
+          if (currentUserRef.current?.id) clearLoginSessionTracking(currentUserRef.current.id);
           clearCachedSessionUser(currentUserRef.current?.id);
           currentUserRef.current = null;
           setSessionRecoveryMessage("");
@@ -2139,7 +2435,7 @@ useEffect(() => {
     }
   }
 
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
     if (!mounted) return;
 
     if (event === "INITIAL_SESSION") return;
@@ -2147,10 +2443,12 @@ useEffect(() => {
     if (event === "SIGNED_OUT") {
       clearRecoveryTimer();
       recoveryAttempt = 0;
+      if (currentUserRef.current?.id) clearLoginSessionTracking(currentUserRef.current.id);
       clearCachedSessionUser(currentUserRef.current?.id);
       currentUserRef.current = null;
       sessionSyncId += 1;
       setCurrentUser(null);
+      setLoginSessionId("");
       setAuthError("");
       setSessionRecoveryMessage("");
       setActivePage("Dashboard");
@@ -2162,6 +2460,10 @@ useEffect(() => {
 
     clearRecoveryTimer();
     recoveryAttempt = 0;
+    if (session?.user.id) {
+      setLoginSessionId(getLoginSessionMarker(session.user.id));
+    }
+    setAutomaticLogoutNotice("");
     setAuthReady(false);
     setAuthError("");
     setSessionRecoveryMessage("");
@@ -2215,14 +2517,20 @@ useEffect(() => {
   const requestState = dashboardStatsRefreshState.current.get(dashboardUser.id) ?? {
     lastRequestedAt: 0,
     inFlight: false,
+    requestId: 0,
   };
   dashboardStatsRefreshState.current.set(dashboardUser.id, requestState);
   async function loadDashboardStats() {
     if (!active || requestState.inFlight) return;
-    if (Date.now() - requestState.lastRequestedAt < 120_000) return;
-    if (dashboardUser.role === "guru_bk") {
+    if (Date.now() - requestState.lastRequestedAt < 120_000) {
+      setDashboardRefreshing(false);
       return;
     }
+    if (dashboardUser.role === "guru_bk") {
+      setDashboardRefreshing(false);
+      return;
+    }
+    const requestId = ++requestState.requestId;
     requestState.inFlight = true;
     requestState.lastRequestedAt = Date.now();
     setDashboardRefreshing(true);
@@ -2308,6 +2616,11 @@ useEffect(() => {
           attendancePromise,
         ]);
         if (!active) return;
+        const restrictedMetric = {
+          value: "—",
+          note: "Akses data dibatasi untuk peran ini",
+          trend: "Perlu peran operator/admin",
+        };
         setDashboardStats((previous) => ({
           students: { value: "—", note: "Akses data dibatasi untuk peran ini", trend: "Perlu peran operator/admin" },
           staff: { value: "—", note: "Akses data dibatasi untuk peran ini", trend: "Perlu peran operator/admin" },
@@ -2318,7 +2631,7 @@ useEffect(() => {
                 attendanceResult.error,
                 previous.attendance,
               )
-            : previous.attendance,
+            : restrictedMetric,
           letters: dashboardMetric("surat diproses", lettersResult.count, lettersResult.error, previous.letters),
         }));
         if (
@@ -2351,16 +2664,18 @@ useEffect(() => {
               }
             : {
                 ...previous,
-                ...(canViewAttendanceToday
-                  ? {
-                      attendance: dashboardMetric(
-                        "kehadiran pribadi",
-                        null,
-                        error,
-                        previous.attendance,
-                      ),
-                    }
-                  : {}),
+                attendance: canViewAttendanceToday
+                  ? dashboardMetric(
+                      "kehadiran pribadi",
+                      null,
+                      error,
+                      previous.attendance,
+                    )
+                  : {
+                      value: "—",
+                      note: "Akses data dibatasi untuk peran ini",
+                      trend: "Perlu peran operator/admin",
+                    },
                 letters: dashboardMetric(
                   "surat diproses",
                   null,
@@ -2370,8 +2685,10 @@ useEffect(() => {
               });
         }
       } finally {
-        requestState.inFlight = false;
-        if (active) setDashboardRefreshing(false);
+        if (requestState.requestId === requestId) {
+          requestState.inFlight = false;
+          if (active) setDashboardRefreshing(false);
+        }
       }
       return;
     }
@@ -2489,8 +2806,10 @@ useEffect(() => {
         }
       }
     } finally {
-      requestState.inFlight = false;
-      if (active) setDashboardRefreshing(false);
+      if (requestState.requestId === requestId) {
+        requestState.inFlight = false;
+        if (active) setDashboardRefreshing(false);
+      }
     }
   }
 
@@ -2512,6 +2831,12 @@ useEffect(() => {
 
   return () => {
     active = false;
+    if (requestState.inFlight) {
+      requestState.inFlight = false;
+      requestState.lastRequestedAt = 0;
+      requestState.requestId += 1;
+    }
+    setDashboardRefreshing(false);
     window.clearInterval(intervalId);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
   };
@@ -2527,7 +2852,8 @@ useEffect(() => {
 
   
 function openPage(name: string) {
-  if (!allowedPages.includes(name)) {
+  const allowedAccountSettings = name === "Pengaturan" && Boolean(currentUser);
+  if (!allowedPages.includes(name) && !allowedAccountSettings) {
     setToast("Anda tidak memiliki hak akses ke halaman ini.");
     setProfileOpen(false);
     setNotificationsOpen(false);
@@ -2617,6 +2943,7 @@ const showAttendanceAndLettersDashboard = [
   "kepala_tata_usaha",
   "staff_tata_usaha",
   "tendik",
+  "bendahara",
 ].includes(currentUser?.role ?? "");
 const allowedPages = roleAllowedPages.filter((name) =>
   (name !== "Kesiswaan" || canAccessKesiswaan)
@@ -2626,7 +2953,8 @@ const allowedPages = roleAllowedPages.filter((name) =>
   && (name === "Dashboard" || name === "Pengaturan" || isSuperAdmin || moduleEnabledOverrides[name] !== false)
 );
 useEffect(() => {
-  if (activePage !== "Dashboard" && !allowedPages.includes(activePage)) {
+  const accountSettingsAllowed = activePage === "Pengaturan";
+  if (activePage !== "Dashboard" && !accountSettingsAllowed && !allowedPages.includes(activePage)) {
     setActivePage("Dashboard");
   }
 }, [activePage, allowedPages]);
@@ -2929,6 +3257,12 @@ if (!currentUser) {
   return (
     <div className={`login-portal-shell login-theme-${loginTheme}`}>
       <MaintenanceBanner />
+      {automaticLogoutNotice && (
+        <div className="session-recovery-banner" role="status">
+          <span>{automaticLogoutNotice}</span>
+          <button type="button" onClick={() => setAutomaticLogoutNotice("")}>Tutup</button>
+        </div>
+      )}
       {sessionRecoveryMessage && (
         <div className="session-recovery-banner" role="status">
           <span>{sessionRecoveryMessage}</span>
@@ -2966,6 +3300,8 @@ if (!currentUser) {
         onThemeChange={setLoginTheme}
         onLoginSuccess={(user) => {
           writeCachedSessionUser(user);
+          setLoginSessionId(getLoginSessionMarker(user.id));
+          setAutomaticLogoutNotice("");
           currentUserRef.current = user;
           setAuthError("");
           setCurrentUser(user);
@@ -3027,13 +3363,26 @@ const moduleFullscreenComponents: Partial<Record<string, ReactNode>> = {
   "Bimbingan dan Konseling": <KesiswaanBK key="bimbingan-konseling" currentUser={currentUser} userRole={currentUser.role} module="bimbingan-konseling" onOpenParentLetter={openParentLetter} />,
   "Pemilihan OSIS": <PemilihanOSISModule hasAuthenticatedUser={Boolean(currentUser)} userId={currentUser.id} />,
   "Laporan & Analitik": <LaporanAnalitik userRole={currentUser.role} />,
-  "Pengaturan": <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />,
+  "Pengaturan": currentUser.role === "super_admin"
+    ? <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />
+    : <AccountSettings
+      currentUser={currentUser}
+      onReopenAnnouncements={() => window.dispatchEvent(new Event("super-app:reopen-announcements"))}
+    />,
 };
 
 if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[activePage]) {
   return (
     <main className={`module-fullscreen${activePage === "SMAVEN Learn" ? " smaven-learn-fullscreen" : ""}${activePage === "Persuratan" ? " persuratan-module-fullscreen" : ""}`}>
       <MaintenanceBanner />
+      {loginSessionId && (
+        <OfficialAnnouncementModal
+          key={`${currentUser.id}:${currentUser.role}:${loginSessionId}`}
+          userId={currentUser.id}
+          role={currentUser.role}
+          loginSessionId={loginSessionId}
+        />
+      )}
       {activePage !== "Persuratan" && <button type="button" className="module-fullscreen-back" onClick={() => setActivePage("Dashboard")}>
         <ChevronLeft size={18} /> Kembali ke Dashboard
       </button>}
@@ -3072,11 +3421,12 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
   return (
     <div className={`app-shell ${moduleStatuses[activePage] === "active" && moduleEnabledOverrides[activePage] !== false ? "active-module-fullshell" : ""}`}>
         <MaintenanceBanner />
-      {isDashboard && (
+      {loginSessionId && (
         <OfficialAnnouncementModal
-          key={`${currentUser.id}:${currentUser.role}`}
+          key={`${currentUser.id}:${currentUser.role}:${loginSessionId}`}
           userId={currentUser.id}
           role={currentUser.role}
+          loginSessionId={loginSessionId}
         />
       )}
       <AnimatePresence>
@@ -3324,7 +3674,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
                   <button
                     type="button"
                     className="text-button"
-                    disabled={dashboardRefreshing}
+                    disabled={dashboardRefreshing || dashboardFeedLoading}
                     onClick={() => {
                       const feedState = dashboardFeedRefreshState.current.get(currentUser.id);
                       if (feedState) feedState.lastRequestedAt = 0;
@@ -3334,7 +3684,7 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
                       setDashboardFeedReload((reload) => reload + 1);
                     }}
                   >
-                    {dashboardRefreshing ? "Memperbarui kartu..." : "Perbarui ringkasan"}
+                    {dashboardRefreshing || dashboardFeedLoading ? "Memperbarui kartu..." : "Perbarui ringkasan"}
                   </button>
                 </div>
                 <section
@@ -3349,6 +3699,8 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
                     ? "Ringkasan kehadiran siswa"
                     : currentUser.role === "guru_bk"
                       ? "Ringkasan tindak lanjut BK"
+                      : currentUser.role === "bendahara"
+                        ? "Ringkasan persuratan"
                     : showAttendanceAndLettersDashboard
                       ? "Ringkasan kehadiran dan persuratan"
                       : "Ringkasan data sekolah"}
@@ -3374,6 +3726,8 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
                             color: "purple",
                           },
                         ]
+                    : currentUser.role === "bendahara"
+                      ? [{ label: "Surat Diproses", ...dashboardStats.letters, icon: FileText, color: "orange" }]
                     : showAttendanceAndLettersDashboard
                       ? [
                           { label: "Kehadiran Hari Ini", ...dashboardStats.attendance, icon: CalendarCheck, color: "green" },
@@ -3517,8 +3871,13 @@ if (moduleStatuses[activePage] === "active" && moduleFullscreenComponents[active
        <LaporanAnalitik userRole={currentUser.role} />
      </motion.div>
 ) : activePage === "Pengaturan" ? (
-      <motion.div key="pengaturan-integrasi" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
-        <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />
+      <motion.div key="pengaturan-akun" className="page-stack" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}>
+        {currentUser.role === "super_admin"
+          ? <PengaturanIntegrasi onModulesUpdated={refreshSettingsContext} moduleCatalog={appModuleCatalog} />
+          : <AccountSettings
+            currentUser={currentUser}
+            onReopenAnnouncements={() => window.dispatchEvent(new Event("super-app:reopen-announcements"))}
+          />}
       </motion.div>
 ) : activePage === "Pengguna" ? (
   <motion.div
