@@ -12,6 +12,8 @@ dist-ssr/
 .vendor/
 vendor/
 supabase/.temp/
+test-results/
+playwright-report/
 
 # Logs
 logs/
@@ -38,3 +40,4 @@ Thumbs.db
 *.bak
 *.old
 
+.vercel
