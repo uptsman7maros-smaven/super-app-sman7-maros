@@ -5,14 +5,26 @@ const password = process.env.E2E_PASSWORD;
 
 type BrowserErrors = {
   console: string[];
+  sandboxedSrcdoc: string[];
   page: string[];
   http: string[];
 };
 
+const sandboxedScriptBlockMessage =
+  "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.";
+
 function monitorBrowserErrors(page: Page): BrowserErrors {
-  const errors: BrowserErrors = { console: [], page: [], http: [] };
+  const errors: BrowserErrors = { console: [], sandboxedSrcdoc: [], page: [], http: [] };
   page.on("console", (message) => {
-    if (message.type() === "error") errors.console.push(message.text());
+    if (message.type() !== "error") return;
+    if (
+      message.text() === sandboxedScriptBlockMessage &&
+      message.location().url === "about:srcdoc"
+    ) {
+      errors.sandboxedSrcdoc.push(message.text());
+      return;
+    }
+    errors.console.push(message.text());
   });
   page.on("pageerror", (error) => errors.page.push(error.message));
   page.on("response", (response) => {
@@ -23,8 +35,18 @@ function monitorBrowserErrors(page: Page): BrowserErrors {
   return errors;
 }
 
-function expectNoBrowserErrors(errors: BrowserErrors) {
-  expect(errors.console, "browser console.error").toEqual([]);
+function expectNoBrowserErrors(
+  errors: BrowserErrors,
+  allowSandboxedSrcdocBlock = false,
+) {
+  const consoleErrors = allowSandboxedSrcdocBlock
+    ? errors.console
+    : [...errors.console, ...errors.sandboxedSrcdoc];
+  expect(consoleErrors, "browser console.error").toEqual([]);
+  expect(errors.sandboxedSrcdoc.length, "sandboxed srcdoc script blocks").toBeLessThanOrEqual(1);
+  if (allowSandboxedSrcdocBlock && errors.sandboxedSrcdoc.length > 0) {
+    console.warn("Expected sandbox protection blocked script execution in the scriptless srcdoc preview.");
+  }
   expect(errors.page, "uncaught page errors").toEqual([]);
   expect(errors.http, "HTTP responses with status >= 400").toEqual([]);
 }
@@ -108,6 +130,7 @@ test("authenticated dashboard and active modules load without browser errors", a
   ).toBeVisible();
   const monthlyPreview = page.getByTitle("Pratinjau langsung rekap bulanan");
   await expect(monthlyPreview).toHaveAttribute("sandbox", "allow-same-origin");
+  await expect(page.locator("iframe[srcdoc]")).toHaveCount(1);
   const monthlyPreviewHtml = await monthlyPreview.getAttribute("srcdoc");
   if (monthlyPreviewHtml === null) {
     throw new Error("Pratinjau rekap bulanan tidak memiliki dokumen srcdoc.");
@@ -116,5 +139,5 @@ test("authenticated dashboard and active modules load without browser errors", a
   expect(monthlyPreviewHtml).not.toMatch(/\son[a-z]+\s*=/i);
 
   await page.waitForTimeout(1_000);
-  expectNoBrowserErrors(errors);
+  expectNoBrowserErrors(errors, true);
 });
