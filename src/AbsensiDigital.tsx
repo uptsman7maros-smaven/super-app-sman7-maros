@@ -308,6 +308,16 @@ function sanitizeAttendanceTemplateHtml(value: string) {
   };
   return [...parsed.body.childNodes].map(sanitizeNode).join("");
 }
+function sanitizeGeneratedAttendanceReportHtml(value: string) {
+  const parsed = new DOMParser().parseFromString(value, "text/html");
+  parsed.querySelectorAll("script, iframe, object, embed, form, input, button").forEach((node) => node.remove());
+  for (const element of parsed.querySelectorAll("*")) {
+    for (const attribute of [...element.attributes]) {
+      if (attribute.name.toLowerCase().startsWith("on")) element.removeAttribute(attribute.name);
+    }
+  }
+  return `<!doctype html>${parsed.documentElement.outerHTML}`;
+}
 const remainingTimeLabel = (expiresAt: string, now: number) => {
   const seconds = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
   return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
@@ -2581,7 +2591,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         (_placeholder, key: string) => variables[key] ?? "")
       : template.trim() || defaultBody;
     const finalBody = hasTableToken ? body : `${body}${table}`;
-    return `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Rekap Kehadiran ${escapeAttendanceHtml(monthLabel)}</title>
+    const reportHtml = `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Rekap Kehadiran ${escapeAttendanceHtml(monthLabel)}</title>
       <style>
         *{box-sizing:border-box}body{margin:0;padding:24px;color:#182033;font:12px Arial,sans-serif}
         h1{text-align:center;font-size:17px;margin:18px 0}.report-letterhead{display:grid;grid-template-columns:78px 1fr 78px;align-items:center;gap:12px;text-align:center}
@@ -2592,6 +2602,7 @@ export default function AbsensiDigital({ userRole = "", currentUser }: AbsensiDi
         .report-summary{display:flex;flex-wrap:wrap;gap:16px;list-style:none;padding:0}.report-signature{margin:35px 5% 0 auto;width:230px;text-align:center}.report-date{text-align:right}
         @page{size:A4 landscape;margin:12mm}@media print{body{padding:0}}
       </style></head><body>${finalBody}</body></html>`;
+    return sanitizeGeneratedAttendanceReportHtml(reportHtml);
   }, [letterheadSlot, month, monthlyFilteredRows, monthlyLoadedMonth, monthlyReportCategoryLabel, monthlyTemplate, schoolSettings]);
   const printMonthlyReport = () => {
     const printWindow = window.open("", "_blank");

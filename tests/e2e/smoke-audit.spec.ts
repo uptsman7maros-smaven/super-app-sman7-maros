@@ -106,6 +106,14 @@ test("authenticated dashboard and active modules load without browser errors", a
   await expect(
     page.getByRole("heading", { name: "Absensi Digital" }),
   ).toBeVisible();
+  const monthlyPreview = page.getByTitle("Pratinjau langsung rekap bulanan");
+  await expect(monthlyPreview).toHaveAttribute("sandbox", "allow-same-origin");
+  const monthlyPreviewHtml = await monthlyPreview.getAttribute("srcdoc");
+  if (monthlyPreviewHtml === null) {
+    throw new Error("Pratinjau rekap bulanan tidak memiliki dokumen srcdoc.");
+  }
+  expect(monthlyPreviewHtml).not.toMatch(/<script\b/i);
+  expect(monthlyPreviewHtml).not.toMatch(/\son[a-z]+\s*=/i);
 
   await page.waitForTimeout(1_000);
   expectNoBrowserErrors(errors);
